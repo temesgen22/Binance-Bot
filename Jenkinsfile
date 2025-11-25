@@ -218,31 +218,35 @@ If Jenkins is on a host/server:
                     ]) {
                         sh """#!/bin/bash
                         set -e
-                        
+
                         SSH_HOST="${env.DEPLOY_SSH_HOST ?: ''}"
                         SSH_PORT="${env.DEPLOY_SSH_PORT ?: '22'}"
                         DEPLOY_PATH="${env.DEPLOY_PATH ?: '/opt/binance-bot'}"
                         COMPOSE_FILE="${env.DEPLOY_COMPOSE_FILE ?: 'docker-compose.yml'}"
-                        
+
                         if [ -z "\$SSH_HOST" ]; then
                             echo "❌ DEPLOY_SSH_HOST not set. Skipping deployment."
                             exit 0
                         fi
-                        
+
                         echo "🚀 Deploying to \$SSH_USER@\$SSH_HOST:\$SSH_PORT"
-                        
+
                         # Setup SSH options
-                        SSH_OPTS="-i \$SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p \$SSH_PORT"
-                        
+                        SSH_OPTS="-i \$SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+
+
                         # Create deployment directory
-                        ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "mkdir -p \$DEPLOY_PATH"
-                        
+                        ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "mkdir -p \$DEPLOY_PATH"
+
+
+
                         # Copy docker-compose file
                         if [ -f "\$COMPOSE_FILE" ]; then
                             echo "📦 Copying docker-compose file..."
                             scp \$SSH_OPTS -P \$SSH_PORT "\$COMPOSE_FILE" \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/
                         fi
-                        
+
                         # Copy .env.example if .env doesn't exist
                         if [ -f ".env.example" ]; then
                             ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
@@ -252,7 +256,7 @@ If Jenkins is on a host/server:
                                 fi
                             "
                         fi
-                        
+
                         # Pull latest image and restart
                         if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
                             IMAGE_TAG="${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
@@ -263,7 +267,7 @@ If Jenkins is on a host/server:
                                 docker tag \$IMAGE_TAG ${env.IMAGE_NAME}:latest || true
                             "
                         fi
-                        
+
                         # Restart services
                         echo "🔄 Restarting services..."
                         ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
@@ -277,7 +281,7 @@ If Jenkins is on a host/server:
                                 echo '⚠️  docker-compose.yml not found. Skipping restart.'
                             fi
                         "
-                        
+
                         echo "✅ Deployment completed!"
                         """
                     }
