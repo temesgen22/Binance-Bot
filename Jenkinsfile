@@ -8,6 +8,12 @@ pipeline {
         IMAGE_NAME = 'binance-bot'
         SSH_CRED_ID = 'cloud-server-ssh'   // same ID you set in Jenkins
         SERVER_HOST = '95.216.216.26'     // or DNS name
+                          // 🔰 Enable deployment and tell the deploy stage which creds/host to use
+        DEPLOY_ENABLED = 'true'
+        DEPLOY_SSH_CREDENTIALS_ID = 'cloud-server-ssh'
+        DEPLOY_SSH_HOST = '95.216.216.26'
+        DEPLOY_SSH_PORT = '22'
+        DEPLOY_PATH = '/home/jenkins-deploy/binance-bot'
         // Optionally set DOCKER_REGISTRY_URL and DOCKER_REGISTRY_CREDENTIALS_ID in Jenkins
         // Deployment settings (optional):
         // DEPLOY_ENABLED = 'true' to enable deployment
