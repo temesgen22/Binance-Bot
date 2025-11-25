@@ -102,29 +102,45 @@ docker compose up --build
 
 ## CI/CD with Jenkins
 
-1. **Create Jenkins Pipeline**
-   - Point the pipeline to this repository
-   - Choose “Pipeline script from SCM” and reference the provided `Jenkinsfile`
+The project includes a complete Jenkins CI/CD pipeline. **See [docs/JENKINS_SETUP.md](docs/JENKINS_SETUP.md) for detailed setup instructions.**
 
-2. **Configure Credentials (optional)**
-   - If you plan to push Docker images, create a Jenkins credential (Username/Password type) and record its ID
-   - Set pipeline/environment variables:
-     - `DOCKER_REGISTRY_URL` (e.g., `registry.hub.docker.com/username`)
-     - `DOCKER_REGISTRY_CREDENTIALS_ID` (the credential ID created above)
+### Quick Start
 
-3. **Pipeline Stages**
-   - Checkout
-   - Set up Python virtual environment and install dependencies
-   - Run tests (`pytest`)
-   - Build Docker image
-   - Push Docker image (only if `DOCKER_REGISTRY_URL` is set)
+1. **Prerequisites on Jenkins Agent** (see [setup guide](docs/JENKINS_SETUP.md)):
+   - Python 3.11+ installed
+   - Docker installed and running
+   - Jenkins user added to docker group
 
-4. **Required Jenkins Tools**
-   - Docker installed on the Jenkins agent
-   - Python 3.11+ (or compatible) available on the agent
+2. **Create Jenkins Pipeline**:
+   - Create new Pipeline job in Jenkins
+   - Choose "Pipeline script from SCM"
+   - Repository: `https://github.com/temesgen22/Binance-Bot.git`
+   - Script Path: `Jenkinsfile`
 
-5. **Environment Variables**
-   - Configure `.env` (if needed) via Jenkins credentials or environment variables for staging/production deployments
+3. **Pipeline Stages**:
+   - ✅ Check prerequisites (Python, Docker) - **NEW: detects missing tools**
+   - ✅ Checkout code from GitHub
+   - ✅ Set up Python virtual environment
+   - ✅ Run tests (71 tests)
+   - ✅ Build Docker image
+   - ✅ Push Docker image (optional, if registry configured)
+
+### Troubleshooting
+
+**If you see errors like:**
+- `python3: not found` → Install Python 3.11+ (see [setup guide](docs/JENKINS_SETUP.md))
+- `docker: not found` → Install Docker (see [setup guide](docs/JENKINS_SETUP.md))
+- `permission denied` → Add Jenkins user to docker group
+
+**For complete troubleshooting, see [docs/JENKINS_SETUP.md](docs/JENKINS_SETUP.md)**
+
+### Optional: Docker Registry Push
+
+To push images to a registry:
+1. Create Jenkins credential (Username/Password) for your Docker registry
+2. Set environment variables in Jenkins job:
+   - `DOCKER_REGISTRY_URL` (e.g., `registry.hub.docker.com/username`)
+   - `DOCKER_REGISTRY_CREDENTIALS_ID` (your credential ID)
 
 ## API Endpoints
 

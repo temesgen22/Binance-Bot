@@ -16,6 +16,10 @@ This directory contains all project documentation.
 - **[VIEW_LOGS.md](VIEW_LOGS.md)** - Logging guide
 - **[TEST_SUMMARY.md](TEST_SUMMARY.md)** - Test coverage summary
 
+## Deployment & CI/CD
+
+- **[JENKINS_SETUP.md](JENKINS_SETUP.md)** - Complete Jenkins CI/CD setup guide with troubleshooting
+
 ## Project Structure
 
 See [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md) in the root directory for the complete project structure.
