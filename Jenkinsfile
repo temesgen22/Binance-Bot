@@ -258,15 +258,15 @@ If Jenkins is on a host/server:
                         fi
 
                         # Pull latest image and restart
-                        if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
-                            IMAGE_TAG="${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
-                            echo "📥 Pulling image: \$IMAGE_TAG"
-                            ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
-                                cd \$DEPLOY_PATH
-                                docker pull \$IMAGE_TAG || true
-                                docker tag \$IMAGE_TAG ${env.IMAGE_NAME}:latest || true
-                            "
-                        fi
+                       # if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
+                         #   IMAGE_TAG="${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
+                         #   echo "📥 Pulling image: \$IMAGE_TAG"
+                         #   ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
+                            #    cd \$DEPLOY_PATH
+                            #    docker pull \$IMAGE_TAG || true
+                            #    docker tag \$IMAGE_TAG ${env.IMAGE_NAME}:latest || true
+                        #    "
+                        # fi
 
                         # Restart services
                         echo "🔄 Restarting services..."
