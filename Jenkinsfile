@@ -65,14 +65,12 @@ If Jenkins is running in Docker, you need to:
 1. Install Docker CLI in the container, OR
 2. Mount Docker socket and binary from host
 
-See docs/JENKINS_DOCKER_IN_DOCKER.md for detailed instructions.
-
 Quick fix (if Jenkins is in Docker):
   docker exec -u root jenkins bash -c "apt-get update && apt-get install -y docker.io"
   docker restart jenkins
 """)
                     }
-                    
+
                     // Verify Docker daemon is running
                     def dockerDaemonCheck = sh(
                         script: 'docker info > /dev/null 2>&1 || exit 1',
@@ -91,7 +89,6 @@ ${dockerError}
 
 If Jenkins is running in Docker:
   - Ensure Docker socket is mounted: -v /var/run/docker.sock:/var/run/docker.sock
-  - See docs/JENKINS_DOCKER_IN_DOCKER.md for complete setup
 
 If Jenkins is on a host/server:
   - Start Docker: sudo systemctl start docker
@@ -99,7 +96,7 @@ If Jenkins is on a host/server:
   - Restart Jenkins: sudo systemctl restart jenkins
 """)
                     }
-                    
+
                     echo "✓ Python found: ${env.PYTHON}"
                     echo "✓ Docker found and running"
                 }
@@ -108,65 +105,57 @@ If Jenkins is on a host/server:
 
         stage('Set up Python environment') {
             steps {
-                script {
-                    // Detect Python version
-                    def pythonCmd = sh(
-                        script: 'command -v python3 || command -v python',
-                        returnStdout: true
-                    ).trim()
-                    
-                    // Get Python version for package name
-                    def pythonVersion = sh(
-                        script: "${pythonCmd} --version | cut -d' ' -f2 | cut -d'.' -f1,2",
-                        returnStdout: true
-                    ).trim()
-                    
-                    sh """
-                    PYTHON_CMD="${pythonCmd}"
-                    VENV_PATH="${env.VENV}"
-                    PYTHON_VER="${pythonVersion}"
-                    \${PYTHON_CMD} --version
-                    # Try to create venv, if it fails, install python3-venv package
-                    if ! \${PYTHON_CMD} -m venv "\${VENV_PATH}" 2> /dev/null; then
-                        echo "python3-venv not available, installing..."
-                        # Check if we have root access
-                        if [ "\\$(id -u)" = "0" ]; then
-                            apt-get update -qq
-                            # Try version-specific package first, fallback to generic
-                            apt-get install -y python\${PYTHON_VER}-venv 2> /dev/null || apt-get install -y python3-venv
-                            # Retry venv creation
-                            \${PYTHON_CMD} -m venv "\${VENV_PATH}"
-                        else
-                            echo "⚠️  Not running as root. Cannot install python3-venv automatically."
-                            echo "   Please ensure python3-venv is pre-installed in the Jenkins container."
-                            echo "   Run: docker exec -u root jenkins apt-get update && apt-get install -y python3-venv"
-                            exit 1
-                        fi
+                // Pure bash, no Groovy interpolation needed
+                sh '''#!/bin/bash
+                set -e
+
+                PYTHON_CMD="$(command -v python3 || command -v python)"
+                PYTHON_VER="$($PYTHON_CMD --version | cut -d' ' -f2 | cut -d'.' -f1,2)"
+
+                echo "Using Python: $PYTHON_CMD (version $PYTHON_VER)"
+                echo "Virtualenv path: $VENV"
+
+                # Try to create venv, if it fails, install python3-venv package
+                if ! "$PYTHON_CMD" -m venv "$VENV" 2>/dev/null; then
+                    echo "python3-venv not available, trying to install..."
+
+                    if [ "$(id -u)" = "0" ]; then
+                        apt-get update -qq
+                        # Try version-specific package first, fallback to generic
+                        apt-get install -y "python${PYTHON_VER}-venv" 2>/dev/null || apt-get install -y python3-venv
+                        "$PYTHON_CMD" -m venv "$VENV"
+                    else
+                        echo "⚠️  Not running as root. Cannot install python3-venv automatically."
+                        echo "   Please ensure python3-venv is pre-installed in the Jenkins container."
+                        echo "   Example (from host): docker exec -u root jenkins apt-get update && docker exec -u root jenkins apt-get install -y python3-venv"
+                        exit 1
                     fi
-                    . "\${VENV_PATH}/bin/activate"
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    # Install dev dependencies for testing (includes pytest-asyncio)
-                    pip install pytest pytest-asyncio
-                    """
-                }
+                fi
+
+                . "$VENV/bin/activate"
+                pip install --upgrade pip
+                pip install -r requirements.txt
+                # Dev dependencies for tests (async support)
+                pip install pytest pytest-asyncio
+                '''
             }
         }
 
         stage('Run Tests') {
             steps {
-                sh """
-                VENV_PATH="${env.VENV}"
-                . "\${VENV_PATH}/bin/activate"
+                sh '''#!/bin/bash
+                set -e
+                . "$VENV/bin/activate"
                 pytest tests/ -v
-                """
+                '''
             }
         }
 
         stage('Build Docker image') {
             steps {
-                sh '''
-                docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                sh '''#!/bin/bash
+                set -e
+                docker build -t "$IMAGE_NAME:$BUILD_NUMBER" .
                 '''
             }
         }
@@ -186,10 +175,11 @@ If Jenkins is on a host/server:
                             passwordVariable: 'DOCKER_REGISTRY_PSW'
                         )
                     ]) {
-                        sh '''
-                        echo "${DOCKER_REGISTRY_PSW}" | docker login ${DOCKER_REGISTRY_URL} -u "${DOCKER_REGISTRY_USR}" --password-stdin
-                        docker tag ${IMAGE_NAME}:${BUILD_NUMBER} ${DOCKER_REGISTRY_URL}/${IMAGE_NAME}:${BUILD_NUMBER}
-                        docker push ${DOCKER_REGISTRY_URL}/${IMAGE_NAME}:${BUILD_NUMBER}
+                        sh '''#!/bin/bash
+                        set -e
+                        echo "$DOCKER_REGISTRY_PSW" | docker login "$DOCKER_REGISTRY_URL" -u "$DOCKER_REGISTRY_USR" --password-stdin
+                        docker tag "$IMAGE_NAME:$BUILD_NUMBER" "$DOCKER_REGISTRY_URL/$IMAGE_NAME:$BUILD_NUMBER"
+                        docker push "$DOCKER_REGISTRY_URL/$IMAGE_NAME:$BUILD_NUMBER"
                         '''
                     }
                 }
@@ -205,7 +195,7 @@ If Jenkins is on a host/server:
                     script: 'command -v docker > /dev/null 2>&1',
                     returnStatus: true
                 ) == 0
-                
+
                 if (dockerAvailable) {
                     sh 'docker system prune -f || true'
                 }
@@ -221,4 +211,3 @@ If Jenkins is on a host/server:
         }
     }
 }
-
