@@ -124,15 +124,16 @@ If Jenkins is on a host/server:
                     sh """
                     ${pythonCmd} --version
                     # Try to create venv, if it fails, install python3-venv package
-                    if ! ${pythonCmd} -m venv ${env.VENV} 2>/dev/null; then
+                    VENV_PATH="${env.VENV}"
+                    if ! ${pythonCmd} -m venv "\${VENV_PATH}" 2> /dev/null; then
                         echo "python3-venv not available, installing..."
                         # Check if we have root access
                         if [ "\\$(id -u)" = "0" ]; then
                             apt-get update -qq
                             # Try version-specific package first, fallback to generic
-                            apt-get install -y python${pythonVersion}-venv 2>/dev/null || apt-get install -y python3-venv
+                            apt-get install -y python${pythonVersion}-venv 2> /dev/null || apt-get install -y python3-venv
                             # Retry venv creation
-                            ${pythonCmd} -m venv ${env.VENV}
+                            ${pythonCmd} -m venv "\${VENV_PATH}"
                         else
                             echo "⚠️  Not running as root. Cannot install python3-venv automatically."
                             echo "   Please ensure python3-venv is pre-installed in the Jenkins container."
@@ -140,7 +141,7 @@ If Jenkins is on a host/server:
                             exit 1
                         fi
                     fi
-                    . ${env.VENV}/bin/activate
+                    . "\${VENV_PATH}/bin/activate"
                     pip install --upgrade pip
                     pip install -r requirements.txt
                     # Install dev dependencies for testing (includes pytest-asyncio)
@@ -153,7 +154,8 @@ If Jenkins is on a host/server:
         stage('Run Tests') {
             steps {
                 sh """
-                . ${env.VENV}/bin/activate
+                VENV_PATH="${env.VENV}"
+                . "\${VENV_PATH}/bin/activate"
                 pytest tests/ -v
                 """
             }
