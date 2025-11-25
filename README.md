@@ -130,7 +130,10 @@ The project includes a complete Jenkins CI/CD pipeline. **See [docs/JENKINS_SETU
 **If you see errors like:**
 - `python3: not found` → Install Python 3.11+ (see [setup guide](docs/JENKINS_SETUP.md))
 - `docker: not found` → Install Docker (see [setup guide](docs/JENKINS_SETUP.md))
-- `permission denied` → Add Jenkins user to docker group
+- `Docker daemon is not running` → **See [Docker Daemon Fix Guide](docs/JENKINS_DOCKER_FIX.md)**
+- `docker: command not found` in Jenkins container → **See [Docker-in-Docker Guide](docs/JENKINS_DOCKER_IN_DOCKER.md)**
+- `permission denied` accessing Docker socket → **See [Docker Permissions Fix](docs/JENKINS_DOCKER_PERMISSIONS.md)** or run `.\fix-jenkins-docker.ps1`
+- `permission denied` → Add Jenkins user to docker group (see [setup guide](docs/JENKINS_SETUP.md))
 
 **For complete troubleshooting, see [docs/JENKINS_SETUP.md](docs/JENKINS_SETUP.md)**
 

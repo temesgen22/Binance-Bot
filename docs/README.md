@@ -19,6 +19,9 @@ This directory contains all project documentation.
 ## Deployment & CI/CD
 
 - **[JENKINS_SETUP.md](JENKINS_SETUP.md)** - Complete Jenkins CI/CD setup guide with troubleshooting
+- **[JENKINS_DOCKER_FIX.md](JENKINS_DOCKER_FIX.md)** - Fix "Docker daemon not running" error
+- **[JENKINS_DOCKER_IN_DOCKER.md](JENKINS_DOCKER_IN_DOCKER.md)** - Fix "docker: command not found" in Jenkins container
+- **[JENKINS_DOCKER_PERMISSIONS.md](JENKINS_DOCKER_PERMISSIONS.md)** - Fix "permission denied" accessing Docker socket
 
 ## Project Structure
 
