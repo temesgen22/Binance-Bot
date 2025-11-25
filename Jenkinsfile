@@ -3,10 +3,18 @@ pipeline {
 
     environment {
         // Try python3 first, fallback to python
-        PYTHON = sh(script: 'command -v python3 || command -v python || echo "python3"', returnStdout: true).trim()
+        PYTHON = 'python3'
         VENV = '.venv'
         IMAGE_NAME = 'binance-bot'
+        SSH_CRED_ID = 'cloud-server-ssh'   // same ID you set in Jenkins
+        SERVER_HOST = '95.216.216.26'     // or DNS name
         // Optionally set DOCKER_REGISTRY_URL and DOCKER_REGISTRY_CREDENTIALS_ID in Jenkins
+        // Deployment settings (optional):
+        // DEPLOY_ENABLED = 'true' to enable deployment
+        // DEPLOY_SSH_CREDENTIALS_ID = Jenkins credential ID for SSH key
+        // DEPLOY_SSH_HOST = Cloud server hostname/IP
+        // DEPLOY_SSH_PORT = SSH port (default: 22)
+        // DEPLOY_PATH = Deployment path on server (default: /opt/binance-bot)
     }
 
     options {
@@ -180,7 +188,92 @@ If Jenkins is on a host/server:
                         echo "$DOCKER_REGISTRY_PSW" | docker login "$DOCKER_REGISTRY_URL" -u "$DOCKER_REGISTRY_USR" --password-stdin
                         docker tag "$IMAGE_NAME:$BUILD_NUMBER" "$DOCKER_REGISTRY_URL/$IMAGE_NAME:$BUILD_NUMBER"
                         docker push "$DOCKER_REGISTRY_URL/$IMAGE_NAME:$BUILD_NUMBER"
+                        echo "✅ Image pushed: $DOCKER_REGISTRY_URL/$IMAGE_NAME:$BUILD_NUMBER"
                         '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Cloud Server') {
+            when {
+                expression {
+                    return env.DEPLOY_ENABLED == 'true' && env.DEPLOY_SSH_CREDENTIALS_ID?.trim()
+                }
+            }
+            steps {
+                script {
+                    withCredentials([
+                        sshUserPrivateKey(
+                            credentialsId: env.DEPLOY_SSH_CREDENTIALS_ID,
+                            usernameVariable: 'SSH_USER',
+                            keyFileVariable: 'SSH_KEY'
+                        )
+                    ]) {
+                        sh """#!/bin/bash
+                        set -e
+                        
+                        SSH_HOST="${env.DEPLOY_SSH_HOST ?: ''}"
+                        SSH_PORT="${env.DEPLOY_SSH_PORT ?: '22'}"
+                        DEPLOY_PATH="${env.DEPLOY_PATH ?: '/opt/binance-bot'}"
+                        COMPOSE_FILE="${env.DEPLOY_COMPOSE_FILE ?: 'docker-compose.yml'}"
+                        
+                        if [ -z "\$SSH_HOST" ]; then
+                            echo "❌ DEPLOY_SSH_HOST not set. Skipping deployment."
+                            exit 0
+                        fi
+                        
+                        echo "🚀 Deploying to \$SSH_USER@\$SSH_HOST:\$SSH_PORT"
+                        
+                        # Setup SSH options
+                        SSH_OPTS="-i \$SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p \$SSH_PORT"
+                        
+                        # Create deployment directory
+                        ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "mkdir -p \$DEPLOY_PATH"
+                        
+                        # Copy docker-compose file
+                        if [ -f "\$COMPOSE_FILE" ]; then
+                            echo "📦 Copying docker-compose file..."
+                            scp \$SSH_OPTS -P \$SSH_PORT "\$COMPOSE_FILE" \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/
+                        fi
+                        
+                        # Copy .env.example if .env doesn't exist
+                        if [ -f ".env.example" ]; then
+                            ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
+                                if [ ! -f \$DEPLOY_PATH/.env ]; then
+                                    echo '📝 Creating .env from .env.example...'
+                                    cp \$DEPLOY_PATH/.env.example \$DEPLOY_PATH/.env 2>/dev/null || true
+                                fi
+                            "
+                        fi
+                        
+                        # Pull latest image and restart
+                        if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
+                            IMAGE_TAG="${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
+                            echo "📥 Pulling image: \$IMAGE_TAG"
+                            ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
+                                cd \$DEPLOY_PATH
+                                docker pull \$IMAGE_TAG || true
+                                docker tag \$IMAGE_TAG ${env.IMAGE_NAME}:latest || true
+                            "
+                        fi
+                        
+                        # Restart services
+                        echo "🔄 Restarting services..."
+                        ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
+                            cd \$DEPLOY_PATH
+                            if [ -f docker-compose.yml ]; then
+                                docker-compose down || true
+                                docker-compose pull || true
+                                docker-compose up -d
+                                docker-compose ps
+                            else
+                                echo '⚠️  docker-compose.yml not found. Skipping restart.'
+                            fi
+                        "
+                        
+                        echo "✅ Deployment completed!"
+                        """
                     }
                 }
             }

@@ -145,6 +145,20 @@ To push images to a registry:
    - `DOCKER_REGISTRY_URL` (e.g., `registry.hub.docker.com/username`)
    - `DOCKER_REGISTRY_CREDENTIALS_ID` (your credential ID)
 
+### Optional: Deploy to Cloud Server
+
+The pipeline includes automatic deployment to your cloud server via SSH. See [docs/JENKINS_DEPLOYMENT.md](docs/JENKINS_DEPLOYMENT.md) for complete setup instructions.
+
+**Quick setup:**
+1. Create SSH credentials in Jenkins
+2. Set environment variables:
+   - `DEPLOY_ENABLED = 'true'`
+   - `DEPLOY_SSH_CREDENTIALS_ID = 'your-ssh-credential-id'`
+   - `DEPLOY_SSH_HOST = 'your-server-ip'`
+   - `DEPLOY_SSH_PORT = '22'` (optional)
+   - `DEPLOY_PATH = '/opt/binance-bot'` (optional)
+3. Run pipeline - it will automatically deploy after successful build!
+
 ## API Endpoints
 
 ### Health Check
