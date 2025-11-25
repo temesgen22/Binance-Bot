@@ -122,18 +122,20 @@ If Jenkins is on a host/server:
                     ).trim()
                     
                     sh """
-                    ${pythonCmd} --version
-                    # Try to create venv, if it fails, install python3-venv package
+                    PYTHON_CMD="${pythonCmd}"
                     VENV_PATH="${env.VENV}"
-                    if ! ${pythonCmd} -m venv "\${VENV_PATH}" 2> /dev/null; then
+                    PYTHON_VER="${pythonVersion}"
+                    \${PYTHON_CMD} --version
+                    # Try to create venv, if it fails, install python3-venv package
+                    if ! \${PYTHON_CMD} -m venv "\${VENV_PATH}" 2> /dev/null; then
                         echo "python3-venv not available, installing..."
                         # Check if we have root access
                         if [ "\\$(id -u)" = "0" ]; then
                             apt-get update -qq
                             # Try version-specific package first, fallback to generic
-                            apt-get install -y python${pythonVersion}-venv 2> /dev/null || apt-get install -y python3-venv
+                            apt-get install -y python\${PYTHON_VER}-venv 2> /dev/null || apt-get install -y python3-venv
                             # Retry venv creation
-                            ${pythonCmd} -m venv "\${VENV_PATH}"
+                            \${PYTHON_CMD} -m venv "\${VENV_PATH}"
                         else
                             echo "⚠️  Not running as root. Cannot install python3-venv automatically."
                             echo "   Please ensure python3-venv is pre-installed in the Jenkins container."
