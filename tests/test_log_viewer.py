@@ -19,16 +19,15 @@ def setup_mock_file(mock_file_func, content: str):
     if not lines:  # Handle empty content
         lines = ['']
     
-    # Create a mock that acts like a file object with context manager support
+    # Create a mock that acts like a file object
     mock_file_obj = MagicMock()
-    
-    # Make it iterable - when iter() is called, return an iterator over lines
+    # Make it iterable - Python's for loop calls iter() which should return an iterator
+    # We'll make __iter__ return an iterator over the lines
     mock_file_obj.__iter__ = MagicMock(return_value=iter(lines))
-    # Support context manager protocol
     mock_file_obj.__enter__ = MagicMock(return_value=mock_file_obj)
-    mock_file_obj.__exit__ = MagicMock(return_value=False)
+    mock_file_obj.__exit__ = MagicMock(return_value=None)
     
-    # When open() is called, return our mock file object
+    # Set the mock_open to return our mock file object
     mock_file_func.return_value = mock_file_obj
     return mock_file_obj
 

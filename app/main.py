@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import health, strategies, logs
+from app.api.routes import health, strategies, logs, trades, strategy_performance
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -105,34 +105,132 @@ def create_app() -> FastAPI:
         for task in app.state.background_tasks:
             task.cancel()
 
-    # Serve static files (GUI) - must be before other routes
-    static_dir = Path(__file__).parent / "static"
-    static_dir.mkdir(exist_ok=True)
-    index_path = static_dir / "index.html"
-    
-    # Serve index.html at root
-    @app.get("/")
-    async def root():
-        if index_path.exists():
-            return FileResponse(
-                path=str(index_path),
-                media_type="text/html"
-            )
-        return {
-            "message": "Log Viewer GUI not found.",
-            "expected_path": str(index_path),
-            "static_dir": str(static_dir),
-            "static_dir_exists": static_dir.exists()
-        }
-    
-    # Mount static files for other assets (if needed in future)
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-    
     # Include API routers
     app.include_router(health.router)
     app.include_router(strategies.router)
     app.include_router(logs.router)
+    app.include_router(trades.router)
+    app.include_router(strategy_performance.router)
+    
+    # Serve static files (GUI)
+    static_dir = Path(__file__).parent / "static"
+    static_dir.mkdir(exist_ok=True)
+    index_path = static_dir / "index.html"
+    
+    # Mount static files
+    if static_dir.exists():
+        try:
+            app.mount("/static", StaticFiles(directory=str(static_dir.resolve())), name="static")
+        except Exception:
+            pass  # Ignore if mount fails
+    
+    # Serve index.html at root - register this route explicitly
+    @app.get("/", tags=["gui"])
+    async def root():
+        """Serve the Log Viewer GUI at the root URL."""
+        # Use absolute path to ensure it works in Docker containers
+        abs_index_path = index_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations in case of path resolution issues
+        possible_paths = [
+            abs_index_path,
+            index_path,
+            abs_static_dir / "index.html",
+            static_dir / "index.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Log Viewer GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+                "current_file": str(Path(__file__).resolve()),
+                "parent_dir": str(Path(__file__).parent.resolve()),
+                "hint": "Check if app/static/index.html exists in the Docker container"
+            }
+        )
+    
+    # Serve trades.html for Trade & PnL Viewer
+    @app.get("/trades", tags=["gui"])
+    async def trades_gui():
+        """Serve the Trade & PnL Viewer GUI."""
+        trades_path = static_dir / "trades.html"
+        abs_trades_path = trades_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_trades_path,
+            trades_path,
+            abs_static_dir / "trades.html",
+            static_dir / "trades.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Trade & PnL Viewer GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # Serve strategies.html for Strategy Performance Viewer
+    @app.get("/strategies", tags=["gui"])
+    async def strategies_gui():
+        """Serve the Strategy Performance & Ranking GUI."""
+        strategies_path = static_dir / "strategies.html"
+        abs_strategies_path = strategies_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_strategies_path,
+            strategies_path,
+            abs_static_dir / "strategies.html",
+            static_dir / "strategies.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Strategy Performance GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
     
     return app
 
