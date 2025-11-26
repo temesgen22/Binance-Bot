@@ -31,6 +31,14 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.models.order import OrderResponse
+from app.core.exceptions import (
+    BinanceAPIError,
+    BinanceRateLimitError,
+    BinanceNetworkError,
+    BinanceAuthenticationError,
+    OrderExecutionError,
+    OrderNotFilledError,
+)
 
 
 class BinanceClient:
@@ -48,8 +56,10 @@ class BinanceClient:
 
     def _ensure(self):
         if self._rest is None:
-            raise RuntimeError(
-                "python-binance package is required for live trading. Install via pip."
+            from app.core.exceptions import ConfigurationError
+            raise ConfigurationError(
+                "python-binance package is required for live trading. Install with: pip install python-binance",
+                config_key="binance_client"
             )
         return self._rest
 
@@ -71,22 +81,83 @@ class BinanceClient:
                 leverage = int(float(positions[0].get("leverage", "0")))
                 return leverage if leverage > 0 else None
             return None
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            if error_code == -1121:  # Invalid symbol
+                logger.warning(f"Invalid symbol for leverage check: {symbol}")
+            else:
+                logger.warning(f"Could not get current leverage for {symbol}: {exc}")
+            return None
         except Exception as exc:
-            logger.warning(f"Could not get current leverage for {symbol}: {exc}")
+            logger.warning(f"Unexpected error getting leverage for {symbol}: {exc}")
             return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def adjust_leverage(self, symbol: str, leverage: int) -> Dict[str, Any]:
-        """Set leverage for a symbol. Always sets even if already at target (since leverage is per-symbol)."""
+        """Set leverage for a symbol. Always sets even if already at target (since leverage is per-symbol).
+        
+        Raises:
+            BinanceAPIError: If leverage adjustment fails
+            InvalidLeverageError: If leverage value is invalid
+        """
+        from app.core.exceptions import InvalidLeverageError
+        
+        if not (1 <= leverage <= 50):
+            raise InvalidLeverageError(
+                leverage=leverage,
+                reason=f"Leverage must be between 1 and 50 for {symbol}"
+            )
+        
         logger.info(f"Setting leverage={leverage}x for {symbol}")
         rest = self._ensure()
-        return rest.futures_change_leverage(symbol=symbol, leverage=leverage)
+        try:
+            return rest.futures_change_leverage(symbol=symbol, leverage=leverage)
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to set leverage {leverage}x for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(error_msg, retry_after=10, details={"symbol": symbol, "leverage": leverage}) from exc
+            elif error_code == -4174:  # Invalid leverage
+                raise InvalidLeverageError(
+                    leverage=leverage,
+                    reason=f"Binance rejected leverage {leverage}x for {symbol}: {exc}"
+                ) from exc
+            else:
+                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol, "leverage": leverage}) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(f"Network error setting leverage for {symbol}: {exc}", details={"symbol": symbol}) from exc
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_price(self, symbol: str) -> float:
+        """Get current market price for a symbol.
+        
+        Raises:
+            BinanceAPIError: If API call fails
+            BinanceNetworkError: If network error occurs
+        """
         rest = self._ensure()
-        ticker = rest.futures_symbol_ticker(symbol=symbol)
-        return float(ticker["price"])
+        try:
+            ticker = rest.futures_symbol_ticker(symbol=symbol)
+            price = float(ticker["price"])
+            if price <= 0:
+                raise BinanceAPIError(
+                    f"Invalid price returned for {symbol}: {price}",
+                    details={"symbol": symbol}
+                )
+            return price
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to get price for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(error_msg, retry_after=10, details={"symbol": symbol}) from exc
+            elif error_code == -1121:  # Invalid symbol
+                raise BinanceAPIError(f"Invalid symbol: {symbol}", error_code=error_code, details={"symbol": symbol}) from exc
+            else:
+                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol}) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(f"Network error getting price for {symbol}: {exc}", details={"symbol": symbol}) from exc
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_klines(self, symbol: str, interval: str = "1m", limit: int = 100) -> list[list[Any]]:
@@ -99,10 +170,29 @@ class BinanceClient:
             
         Returns:
             List of klines where each kline is [open_time, open, high, low, close, volume, ...]
+            
+        Raises:
+            BinanceAPIError: If API call fails
+            BinanceNetworkError: If network error occurs
         """
         rest = self._ensure()
-        klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
-        return klines
+        try:
+            klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
+            if not klines:
+                logger.warning(f"No klines returned for {symbol} with interval {interval}")
+            return klines
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to get klines for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(error_msg, retry_after=10, details={"symbol": symbol, "interval": interval}) from exc
+            elif error_code == -1121:  # Invalid symbol
+                raise BinanceAPIError(f"Invalid symbol: {symbol}", error_code=error_code, details={"symbol": symbol}) from exc
+            else:
+                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol, "interval": interval}) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(f"Network error getting klines for {symbol}: {exc}", details={"symbol": symbol}) from exc
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_quantity_precision(self, symbol: str) -> int:
@@ -198,13 +288,38 @@ class BinanceClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def futures_account_balance(self) -> float:
+        """Get USDT balance from futures account.
+        
+        Raises:
+            BinanceAPIError: If API call fails
+            ValueError: If USDT balance not found
+        """
         rest = self._ensure()
-        account = rest.futures_account()
-        assets = account.get("assets", [])
-        usdt = next((bal for bal in assets if bal["asset"] == "USDT"), None)
-        if not usdt:
-            raise ValueError("USDT balance not found in futures account")
-        return float(usdt["walletBalance"])
+        try:
+            account = rest.futures_account()
+            assets = account.get("assets", [])
+            usdt = next((bal for bal in assets if bal["asset"] == "USDT"), None)
+            if not usdt:
+                raise ValueError("USDT balance not found in futures account")
+            balance = float(usdt["walletBalance"])
+            if balance < 0:
+                logger.warning(f"Negative USDT balance detected: {balance}")
+            return balance
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to get account balance: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(error_msg, retry_after=10) from exc
+            elif status_code == 401:
+                raise BinanceAuthenticationError(error_msg, error_code=error_code) from exc
+            else:
+                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(f"Network error getting account balance: {exc}") from exc
+        except ValueError:
+            # Re-raise ValueError as-is (USDT not found)
+            raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_order_status(self, symbol: str, order_id: int) -> Dict[str, Any]:
@@ -245,7 +360,11 @@ class BinanceClient:
         }
         if order_type == "LIMIT":
             if price is None:
-                raise ValueError("Price required for limit order")
+                raise OrderExecutionError(
+                    "Price is required for LIMIT orders",
+                    symbol=symbol,
+                    details={"order_type": order_type, "side": side}
+                )
             params["price"] = price
             params["timeInForce"] = "GTC"
         rest = self._ensure()
@@ -254,8 +373,69 @@ class BinanceClient:
             response = rest.futures_create_order(**params)
             logger.debug(f"Binance order response keys: {list(response.keys())}, status: {response.get('status')}")
         except ClientError as exc:
-            logger.error(f"Binance order failed: {exc}")
-            raise
+            error_msg = str(exc)
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            
+            # Handle specific Binance error codes
+            if status_code == 429:
+                retry_after = getattr(exc, 'retry_after', None) or 10
+                logger.error(f"Binance rate limit exceeded: {error_msg}. Retry after {retry_after}s")
+                raise BinanceRateLimitError(
+                    f"Binance API rate limit exceeded: {error_msg}",
+                    retry_after=retry_after,
+                    details={"symbol": symbol, "side": side, "error_code": error_code}
+                ) from exc
+            elif status_code == 401 or error_code == -2015:
+                logger.error(f"Binance authentication failed: {error_msg}")
+                raise BinanceAuthenticationError(
+                    f"Binance API authentication failed: {error_msg}",
+                    error_code=error_code,
+                    details={"symbol": symbol, "error_code": error_code}
+                ) from exc
+            elif error_code == -1013:  # Invalid quantity
+                logger.error(f"Binance invalid quantity: {error_msg}")
+                raise OrderExecutionError(
+                    f"Invalid order quantity: {error_msg}. Check order size and symbol precision.",
+                    symbol=symbol,
+                    details={"error_code": error_code, "quantity": rounded_quantity}
+                ) from exc
+            elif error_code == -1121:  # Invalid symbol
+                logger.error(f"Binance invalid symbol: {error_msg}")
+                raise OrderExecutionError(
+                    f"Invalid trading symbol: {symbol}. {error_msg}",
+                    symbol=symbol,
+                    details={"error_code": error_code}
+                ) from exc
+            elif error_code == -4164:  # Reduce-only order rejected
+                logger.error(f"Binance reduce-only order rejected: {error_msg}")
+                raise OrderExecutionError(
+                    f"Reduce-only order rejected: {error_msg}. No position to reduce.",
+                    symbol=symbol,
+                    details={"error_code": error_code, "reduce_only": reduce_only}
+                ) from exc
+            else:
+                # Generic API error
+                logger.error(f"Binance API error: {error_msg} (code: {error_code}, status: {status_code})")
+                raise BinanceAPIError(
+                    f"Binance API error: {error_msg}",
+                    status_code=status_code,
+                    error_code=error_code,
+                    details={"symbol": symbol, "side": side, "error_code": error_code}
+                ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            logger.error(f"Network error connecting to Binance: {exc}")
+            raise BinanceNetworkError(
+                f"Network error: {exc}",
+                details={"symbol": symbol, "side": side}
+            ) from exc
+        except Exception as exc:
+            logger.exception(f"Unexpected error placing order: {exc}")
+            raise OrderExecutionError(
+                f"Unexpected error placing order: {exc}",
+                symbol=symbol,
+                details={"error": str(exc)}
+            ) from exc
 
         # Parse response - handle different field name variations
         # Binance may return price/avgPrice/executedQty in different formats

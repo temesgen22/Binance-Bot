@@ -20,8 +20,9 @@ A customizable trading bot built with Python and FastAPI, designed to support mu
 - **Background Execution**: Strategy runner with graceful start/stop and concurrent strategy support
 - **Trade Tracking**: Redis-based trade storage with comprehensive statistics
 - **Structured Logging**: Comprehensive logging with Loguru for debugging and monitoring
+- **Web-Based Log Viewer**: Interactive GUI for viewing and filtering bot logs with real-time updates
 - **Type Safety**: Full type hints and Pydantic models for validation
-- **Comprehensive Testing**: 38+ tests covering critical functions, strategy behavior, and integration scenarios
+- **Comprehensive Testing**: 70+ tests covering critical functions, strategy behavior, log viewer GUI, and integration scenarios
 
 ## Prerequisites
 
@@ -78,6 +79,21 @@ A customizable trading bot built with Python and FastAPI, designed to support mu
    - Swagger UI: `http://127.0.0.1:8000/docs`
    - ReDoc: `http://127.0.0.1:8000/redoc`
 
+   Access the Log Viewer GUI at:
+   - Log Viewer: `http://127.0.0.1:8000/` or `http://127.0.0.1:8000/static/index.html`
+
+## Log Viewer GUI
+
+The bot includes a web-based GUI for viewing and filtering logs in real-time. The interface provides:
+
+- **Multi-Filter Support**: Filter by cryptocurrency symbol, log level, date range, module, function, and custom search text
+- **Real-Time Updates**: Auto-refresh option to monitor logs as they're generated
+- **Color-Coded Logs**: Visual distinction between DEBUG, INFO, WARNING, ERROR, and CRITICAL logs
+- **Export Functionality**: Export filtered logs as text files
+- **Interactive Features**: Click any log entry to copy it to clipboard
+
+For detailed documentation, see [docs/LOG_VIEWER.md](docs/LOG_VIEWER.md).
+
 ## Docker Deployment
 
 ### 1. Build the image
@@ -96,6 +112,14 @@ docker run --env-file .env -p 8000:8000 binance-bot
 
 ```bash
 docker compose up --build
+```
+
+The service will start automatically. Once running, access:
+- **Log Viewer GUI**: `http://localhost:8000/`
+- **API Documentation**: `http://localhost:8000/docs`
+- **Health Check**: `http://localhost:8000/health`
+
+**Note**: The service starts automatically when the container starts - no manual command needed!
 ```
 
 > **Note:** When running with Docker Compose, ensure `REDIS_URL` in `.env` points to the internal service, e.g. `REDIS_URL=redis://redis:6379/0`.

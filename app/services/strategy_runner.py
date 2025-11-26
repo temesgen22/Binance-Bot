@@ -10,6 +10,16 @@ from loguru import logger
 from app.core.my_binance_client import BinanceClient
 from app.models.order import OrderResponse
 from app.core.redis_storage import RedisStorage
+from app.core.exceptions import (
+    StrategyNotFoundError,
+    StrategyAlreadyRunningError,
+    StrategyNotRunningError,
+    MaxConcurrentStrategiesError,
+    InvalidLeverageError,
+    PositionSizingError,
+    OrderExecutionError,
+    BinanceAPIError,
+)
 from app.risk.manager import RiskManager, PositionSizingResult
 from app.models.strategy import CreateStrategyRequest, StrategyState, StrategySummary, StrategyType, StrategyStats, OverallStats
 from app.services.order_executor import OrderExecutor
@@ -27,11 +37,24 @@ class StrategyRegistry:
         }
 
     def build(self, strategy_type: StrategyType, context: StrategyContext, client: BinanceClient) -> Strategy:
+        """Build a strategy instance from type.
+        
+        Raises:
+            ValueError: If strategy type is not supported or initialization fails
+        """
         try:
             implementation = self._registry[strategy_type.value]
         except KeyError as exc:
-            raise ValueError(f"Unsupported strategy type: {strategy_type}") from exc
-        return implementation(context, client)
+            available = list(self._registry.keys())
+            raise ValueError(
+                f"Unsupported strategy type: {strategy_type}. "
+                f"Available types: {', '.join(available)}"
+            ) from exc
+        try:
+            return implementation(context, client)
+        except Exception as exc:
+            logger.exception(f"Failed to build strategy {strategy_type}: {exc}")
+            raise ValueError(f"Failed to initialize strategy {strategy_type}: {exc}") from exc
 
 
 class StrategyRunner:
@@ -60,14 +83,14 @@ class StrategyRunner:
     def register(self, payload: CreateStrategyRequest) -> StrategySummary:
         # Validate leverage is explicitly provided (Pydantic should catch this, but double-check)
         if payload.leverage is None:
-            raise ValueError(
-                "leverage is REQUIRED and must be explicitly provided (1-50). "
-                "Cannot register strategy without explicit leverage to prevent Binance default 20x."
+            raise InvalidLeverageError(
+                leverage=0,
+                reason="leverage is REQUIRED and must be explicitly provided to prevent Binance default 20x"
             )
         if not (1 <= payload.leverage <= 50):
-            raise ValueError(
-                f"Invalid leverage: {payload.leverage}. Must be between 1 and 50. "
-                "Binance futures default is 20x - ensure you explicitly set your desired leverage."
+            raise InvalidLeverageError(
+                leverage=payload.leverage,
+                reason="Must be between 1 and 50. Binance futures default is 20x - ensure you explicitly set your desired leverage."
             )
         
         strategy_id = str(uuid.uuid4())
@@ -100,11 +123,14 @@ class StrategyRunner:
 
     async def start(self, strategy_id: str) -> StrategySummary:
         if strategy_id not in self._strategies:
-            raise KeyError(f"Strategy {strategy_id} not found")
+            raise StrategyNotFoundError(strategy_id)
         if len(self._tasks) >= self.max_concurrent:
-            raise RuntimeError("Maximum concurrent strategies running")
+            raise MaxConcurrentStrategiesError(
+                current=len(self._tasks),
+                max_allowed=self.max_concurrent
+            )
         if strategy_id in self._tasks:
-            raise RuntimeError("Strategy already running")
+            raise StrategyAlreadyRunningError(strategy_id)
 
         summary = self._strategies[strategy_id]
         
@@ -140,7 +166,7 @@ class StrategyRunner:
 
     async def stop(self, strategy_id: str) -> StrategySummary:
         if strategy_id not in self._strategies:
-            raise KeyError(f"Strategy {strategy_id} not found")
+            raise StrategyNotFoundError(strategy_id)
         summary = self._strategies[strategy_id]
         
         # Check for open positions and close them
@@ -182,9 +208,13 @@ class StrategyRunner:
         return self._trades.get(strategy_id, [])
 
     def calculate_strategy_stats(self, strategy_id: str) -> StrategyStats:
-        """Calculate statistics for a specific strategy."""
+        """Calculate statistics for a specific strategy.
+        
+        Raises:
+            StrategyNotFoundError: If strategy does not exist
+        """
         if strategy_id not in self._strategies:
-            raise KeyError(f"Strategy {strategy_id} not found")
+            raise StrategyNotFoundError(strategy_id)
         
         strategy = self._strategies[strategy_id]
         
@@ -528,12 +558,13 @@ class StrategyRunner:
         
         # Validate leverage is present and valid (should never be None due to model validation)
         if summary.leverage is None or not (1 <= summary.leverage <= 50):
-            error_msg = (
-                f"[{summary.id}] CRITICAL: Invalid or missing leverage for {summary.symbol}: {summary.leverage}. "
-                "Leverage must be explicitly set (1-50) to avoid Binance's default 20x leverage."
+            logger.error(
+                f"[{summary.id}] CRITICAL: Invalid or missing leverage for {summary.symbol}: {summary.leverage}"
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise InvalidLeverageError(
+                leverage=summary.leverage or 0,
+                reason=f"Leverage must be explicitly set (1-50) to avoid Binance's default 20x leverage for {summary.symbol}"
+            )
         
         try:
             current_leverage = self.client.get_current_leverage(summary.symbol)
@@ -555,13 +586,19 @@ class StrategyRunner:
                 logger.debug(
                     f"[{summary.id}] Leverage already correct: {current_leverage}x for {summary.symbol}"
                 )
+        except BinanceAPIError as exc:
+            # Re-raise Binance API errors as-is
+            raise
         except Exception as exc:
             error_msg = (
                 f"[{summary.id}] CRITICAL: Failed to verify/set leverage {summary.leverage}x for {summary.symbol}: {exc}. "
                 "Order execution aborted to prevent accidental 20x leverage."
             )
             logger.error(error_msg)
-            raise RuntimeError(error_msg) from exc
+            raise BinanceAPIError(
+                error_msg,
+                details={"strategy_id": summary.id, "symbol": summary.symbol, "leverage": summary.leverage}
+            ) from exc
         
         # Get current position from Binance to ensure accurate size for closing
         current_position = self.client.get_open_position(summary.symbol)
@@ -609,17 +646,41 @@ class StrategyRunner:
                 logger.info(
                     f"[{summary.id}] Position sizing result: qty={sizing.quantity}, notional={sizing.notional:.2f} USDT"
                 )
-        except ValueError as exc:
-            # Handle minimum notional errors gracefully
-            logger.error(f"[{summary.id}] Position sizing failed: {exc}")
+        except (ValueError, PositionSizingError) as exc:
+            # Handle position sizing errors gracefully
+            error_msg = f"[{summary.id}] Position sizing failed: {exc}"
+            logger.error(error_msg)
             logger.error(f"[{summary.id}] Strategy will skip this signal. Please update strategy configuration.")
-            return
+            # Convert ValueError to PositionSizingError if not already
+            if isinstance(exc, ValueError):
+                raise PositionSizingError(
+                    str(exc),
+                    symbol=signal.symbol,
+                    details={"strategy_id": summary.id, "fixed_amount": summary.fixed_amount, "risk_per_trade": summary.risk_per_trade}
+                ) from exc
+            raise
         
-        order_response = self.executor.execute(
-            signal=signal,
-            sizing=sizing,
-            reduce_only_override=reduce_only_override,
-        )
+        try:
+            order_response = self.executor.execute(
+                signal=signal,
+                sizing=sizing,
+                reduce_only_override=reduce_only_override,
+            )
+        except (OrderExecutionError, BinanceAPIError) as exc:
+            # Log and re-raise API errors - they should be handled by exception handlers
+            logger.error(
+                f"[{summary.id}] Order execution failed: {exc.message if hasattr(exc, 'message') else exc}"
+            )
+            raise
+        except Exception as exc:
+            # Wrap unexpected errors
+            logger.exception(f"[{summary.id}] Unexpected error during order execution: {exc}")
+            raise OrderExecutionError(
+                f"Unexpected error executing order: {exc}",
+                symbol=signal.symbol,
+                details={"strategy_id": summary.id, "signal_action": signal.action}
+            ) from exc
+        
         if order_response:
             # Only track filled orders (or orders with execution data)
             # Orders with status "NEW" and zero execution data shouldn't be tracked

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from app.core.my_binance_client import BinanceClient
+from app.core.exceptions import PositionSizingError
 
 
 @dataclass
@@ -56,9 +57,11 @@ class RiskManager:
             
             # Check if fixed amount meets minimum notional
             if at_risk < min_notional:
-                raise ValueError(
+                raise PositionSizingError(
                     f"Fixed amount {at_risk} USDT is below Binance minimum notional of {min_notional} USDT "
-                    f"for {symbol}. Please increase fixed_amount to at least {min_notional} USDT."
+                    f"for {symbol}. Please increase fixed_amount to at least {min_notional} USDT.",
+                    symbol=symbol,
+                    details={"fixed_amount": fixed_amount, "min_notional": min_notional}
                 )
             
             # Calculate quantity based on fixed amount
