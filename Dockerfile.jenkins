@@ -1,0 +1,18 @@
+# Custom Jenkins image with Docker CLI installed
+FROM jenkins/jenkins:lts
+
+# Switch to root to install Docker
+USER root
+
+# Install Docker CLI
+RUN apt-get update && \
+    apt-get install -y \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Jenkins user to docker group (if docker group exists)
+RUN groupadd -f docker && usermod -aG docker jenkins
+
+# Switch back to Jenkins user
+USER jenkins
+

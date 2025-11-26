@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Log Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .filters {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .filters h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .filter-group input,
+        .filter-group select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .filter-group input:focus,
+        .filter-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .stats-bar {
+            padding: 15px 25px;
+            background: #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-item strong {
+            color: #667eea;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin: 20px;
+            border-radius: 6px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .logs-container {
+            padding: 25px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #ddd;
+            border-radius: 6px;
+            background: #f8f9fa;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .log-entry:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+
+        .log-entry.level-DEBUG {
+            border-left-color: #6c757d;
+        }
+
+        .log-entry.level-INFO {
+            border-left-color: #17a2b8;
+        }
+
+        .log-entry.level-WARNING {
+            border-left-color: #ffc107;
+        }
+
+        .log-entry.level-ERROR {
+            border-left-color: #dc3545;
+            background: #fff5f5;
+        }
+
+        .log-entry.level-CRITICAL {
+            border-left-color: #721c24;
+            background: #fff5f5;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .log-timestamp {
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .log-level {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .log-level.level-DEBUG {
+            background: #6c757d;
+            color: white;
+        }
+
+        .log-level.level-INFO {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .log-level.level-WARNING {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .log-level.level-ERROR {
+            background: #dc3545;
+            color: white;
+        }
+
+        .log-level.level-CRITICAL {
+            background: #721c24;
+            color: white;
+        }
+
+        .log-meta {
+            font-size: 0.85em;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .log-message {
+            color: #333;
+            line-height: 1.6;
+            word-break: break-word;
+        }
+
+        .no-logs {
+            text-align: center;
+            padding: 60px;
+            color: #888;
+            font-size: 1.2em;
+        }
+
+        .refresh-indicator {
+            display: inline-block;
+            margin-left: 10px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .auto-refresh-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 768px) {
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .filter-actions {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Binance Bot Log Viewer</h1>
+            <p>Real-time log monitoring and filtering</p>
+        </div>
+
+        <div class="filters">
+            <h2>🔍 Filters</h2>
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label for="symbol">Cryptocurrency Symbol</label>
+                    <input type="text" id="symbol" placeholder="e.g., BTCUSDT, ETHUSDT">
+                </div>
+
+                <div class="filter-group">
+                    <label for="level">Log Level</label>
+                    <select id="level">
+                        <option value="">All Levels</option>
+                        <option value="DEBUG">DEBUG</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARNING">WARNING</option>
+                        <option value="ERROR">ERROR</option>
+                        <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label for="dateFrom">From Date</label>
+                    <input type="date" id="dateFrom">
+                </div>
+
+                <div class="filter-group">
+                    <label for="dateTo">To Date</label>
+                    <input type="date" id="dateTo">
+                </div>
+
+                <div class="filter-group">
+                    <label for="module">Module</label>
+                    <input type="text" id="module" placeholder="e.g., strategy_runner">
+                </div>
+
+                <div class="filter-group">
+                    <label for="function">Function</label>
+                    <input type="text" id="function" placeholder="e.g., _execute">
+                </div>
+
+                <div class="filter-group">
+                    <label for="searchText">Search Text</label>
+                    <input type="text" id="searchText" placeholder="Search in messages...">
+                </div>
+
+                <div class="filter-group">
+                    <label for="limit">Max Results</label>
+                    <input type="number" id="limit" value="1000" min="1" max="10000">
+                </div>
+            </div>
+
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadLogs()">
+                    🔄 Load Logs
+                </button>
+                <button class="btn btn-secondary" onclick="clearFilters()">
+                    🗑️ Clear Filters
+                </button>
+                <button class="btn btn-success" onclick="exportLogs()">
+                    💾 Export Logs
+                </button>
+                <div class="auto-refresh-controls">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                        <label for="autoRefresh">Auto Refresh (5s)</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-item">
+                <strong>Total Entries:</strong>
+                <span id="totalCount">0</span>
+            </div>
+            <div class="stat-item">
+                <strong>Filtered:</strong>
+                <span id="filteredCount">0</span>
+            </div>
+            <div class="stat-item">
+                <strong>Status:</strong>
+                <span id="status">Ready</span>
+            </div>
+        </div>
+
+        <div class="logs-container" id="logsContainer">
+            <div class="loading">Loading logs...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let autoRefreshInterval = null;
+        let currentLogs = [];
+
+        // Load available symbols for autocomplete
+        async function loadSymbols() {
+            try {
+                const response = await fetch(`${API_BASE}/logs/symbols`);
+                const symbols = await response.json();
+                
+                // Create datalist for autocomplete
+                const datalist = document.createElement('datalist');
+                datalist.id = 'symbolsList';
+                symbols.forEach(symbol => {
+                    const option = document.createElement('option');
+                    option.value = symbol;
+                    datalist.appendChild(option);
+                });
+                document.body.appendChild(datalist);
+                document.getElementById('symbol').setAttribute('list', 'symbolsList');
+            } catch (error) {
+                console.error('Failed to load symbols:', error);
+            }
+        }
+
+        // Load logs with current filters
+        async function loadLogs() {
+            const container = document.getElementById('logsContainer');
+            const statusEl = document.getElementById('status');
+            
+            container.innerHTML = '<div class="loading">🔄 Loading logs...</div>';
+            statusEl.textContent = 'Loading...';
+
+            try {
+                const params = new URLSearchParams();
+                
+                const symbol = document.getElementById('symbol').value.trim();
+                if (symbol) params.append('symbol', symbol);
+                
+                const level = document.getElementById('level').value;
+                if (level) params.append('level', level);
+                
+                const dateFrom = document.getElementById('dateFrom').value;
+                if (dateFrom) params.append('date_from', dateFrom);
+                
+                const dateTo = document.getElementById('dateTo').value;
+                if (dateTo) params.append('date_to', dateTo);
+                
+                const module = document.getElementById('module').value.trim();
+                if (module) params.append('module', module);
+                
+                const functionName = document.getElementById('function').value.trim();
+                if (functionName) params.append('function', functionName);
+                
+                const searchText = document.getElementById('searchText').value.trim();
+                if (searchText) params.append('search_text', searchText);
+                
+                const limit = document.getElementById('limit').value;
+                params.append('limit', limit);
+
+                const response = await fetch(`${API_BASE}/logs/?${params.toString()}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                currentLogs = data.entries;
+                
+                document.getElementById('totalCount').textContent = data.total_count.toLocaleString();
+                document.getElementById('filteredCount').textContent = data.filtered_count.toLocaleString();
+                statusEl.textContent = 'Loaded successfully';
+                
+                renderLogs(data.entries);
+            } catch (error) {
+                container.innerHTML = `<div class="error">❌ Error loading logs: ${error.message}</div>`;
+                statusEl.textContent = 'Error';
+                console.error('Error loading logs:', error);
+            }
+        }
+
+        // Render log entries
+        function renderLogs(entries) {
+            const container = document.getElementById('logsContainer');
+            
+            if (entries.length === 0) {
+                container.innerHTML = '<div class="no-logs">📭 No log entries found matching your filters.</div>';
+                return;
+            }
+
+            container.innerHTML = entries.map(entry => {
+                const levelClass = `level-${entry.level}`;
+                return `
+                    <div class="log-entry ${levelClass}" onclick="copyToClipboard('${escapeHtml(entry.raw_line)}')" title="Click to copy">
+                        <div class="log-header">
+                            <span class="log-timestamp">📅 ${entry.timestamp}</span>
+                            <span class="log-level ${levelClass}">${entry.level}</span>
+                        </div>
+                        <div class="log-meta">
+                            📦 ${entry.module} → ${entry.function}() [Line ${entry.line}]
+                        </div>
+                        <div class="log-message">${escapeHtml(entry.message)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Copy log line to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                // Show temporary notification
+                const notification = document.createElement('div');
+                notification.textContent = '✓ Copied to clipboard!';
+                notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #28a745; color: white; padding: 15px 20px; border-radius: 6px; z-index: 10000; box-shadow: 0 5px 15px rgba(0,0,0,0.3);';
+                document.body.appendChild(notification);
+                setTimeout(() => notification.remove(), 2000);
+            });
+        }
+
+        // Clear all filters
+        function clearFilters() {
+            document.getElementById('symbol').value = '';
+            document.getElementById('level').value = '';
+            document.getElementById('dateFrom').value = '';
+            document.getElementById('dateTo').value = '';
+            document.getElementById('module').value = '';
+            document.getElementById('function').value = '';
+            document.getElementById('searchText').value = '';
+            document.getElementById('limit').value = '1000';
+            loadLogs();
+        }
+
+        // Export logs to text file
+        function exportLogs() {
+            if (currentLogs.length === 0) {
+                alert('No logs to export. Please load logs first.');
+                return;
+            }
+
+            const content = currentLogs.map(entry => entry.raw_line).join('\n');
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bot_logs_${new Date().toISOString().split('T')[0]}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Toggle auto-refresh
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            
+            if (checkbox.checked) {
+                autoRefreshInterval = setInterval(() => {
+                    loadLogs();
+                }, 5000); // Refresh every 5 seconds
+            } else {
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        // Set default date to today
+        function setDefaultDates() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('dateTo').value = today;
+            
+            // Set dateFrom to 7 days ago
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            document.getElementById('dateFrom').value = weekAgo.toISOString().split('T')[0];
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            setDefaultDates();
+            loadSymbols();
+            loadLogs();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>
+
