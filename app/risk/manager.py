@@ -43,9 +43,16 @@ class RiskManager:
         # Get minimum notional from Binance
         min_notional = self.client.get_min_notional(symbol)
         
-        if fixed_amount is not None:
-            # Use fixed amount
+        # Determine which sizing method to use
+        use_fixed_amount = fixed_amount is not None and fixed_amount > 0
+        
+        if use_fixed_amount:
+            # Use FIXED AMOUNT - completely ignore risk_per_trade
             at_risk = fixed_amount
+            logger.info(
+                f"Using FIXED AMOUNT sizing for {symbol}: {fixed_amount} USDT "
+                f"(risk_per_trade={risk_per_trade} is COMPLETELY IGNORED)"
+            )
             
             # Check if fixed amount meets minimum notional
             if at_risk < min_notional:
@@ -54,24 +61,50 @@ class RiskManager:
                     f"for {symbol}. Please increase fixed_amount to at least {min_notional} USDT."
                 )
             
-            quantity = max(at_risk / price, 0.001)
+            # Calculate quantity based on fixed amount
+            quantity = at_risk / price
             rounded_quantity = self.client.round_quantity(symbol, quantity)
-            notional = rounded_quantity * price
+            # Recalculate notional from rounded quantity (may differ slightly due to rounding)
+            actual_notional = rounded_quantity * price
             
-            # Double-check notional meets minimum (after rounding)
-            if notional < min_notional:
+            # Double-check actual notional meets minimum (after rounding)
+            if actual_notional < min_notional:
                 # Adjust quantity to meet minimum
                 adjusted_quantity = min_notional / price
                 rounded_quantity = self.client.round_quantity(symbol, adjusted_quantity)
-                notional = rounded_quantity * price
+                actual_notional = rounded_quantity * price
                 logger.warning(
                     f"Adjusted quantity for {symbol} to meet minimum notional: "
-                    f"qty={rounded_quantity} notional={notional:.2f} USDT (min={min_notional} USDT)"
+                    f"qty={rounded_quantity} notional={actual_notional:.2f} USDT (min={min_notional} USDT, requested={fixed_amount} USDT)"
                 )
             
-            logger.info(f"Fixed amount sizing for {symbol}: fixed={fixed_amount} USDT qty={rounded_quantity} notional={notional:.2f} USDT")
+            # Log the actual values being used (may differ from fixed_amount due to rounding)
+            if abs(actual_notional - fixed_amount) > 0.01:  # More than 1 cent difference
+                logger.warning(
+                    f"Actual notional ({actual_notional:.2f} USDT) differs from requested fixed_amount "
+                    f"({fixed_amount} USDT) due to quantity rounding for {symbol}"
+                )
+            
+            logger.info(
+                f"Fixed amount sizing RESULT for {symbol}: "
+                f"requested={fixed_amount} USDT, actual={actual_notional:.2f} USDT, "
+                f"qty={rounded_quantity}"
+            )
+            
+            return PositionSizingResult(quantity=rounded_quantity, notional=actual_notional)
+        
         else:
-            # Use percentage of balance
+            # Use RISK PER TRADE (percentage of balance) - fixed_amount is None or <= 0
+            if fixed_amount is not None and fixed_amount <= 0:
+                logger.warning(
+                    f"Fixed amount is set but invalid ({fixed_amount}), using risk_per_trade={risk_per_trade} for {symbol}"
+                )
+            
+            logger.info(
+                f"Using RISK PER TRADE sizing for {symbol}: {risk_per_trade} ({risk_per_trade*100:.2f}% of balance) "
+                f"(fixed_amount={fixed_amount} is NOT used)"
+            )
+            
             balance = self.client.futures_account_balance()
             at_risk = balance * risk_per_trade
             
@@ -85,20 +118,24 @@ class RiskManager:
             
             quantity = max(at_risk / price, 0.001)
             rounded_quantity = self.client.round_quantity(symbol, quantity)
-            notional = rounded_quantity * price
+            actual_notional = rounded_quantity * price
             
             # Double-check notional meets minimum (after rounding)
-            if notional < min_notional:
+            if actual_notional < min_notional:
                 # Adjust quantity to meet minimum
                 adjusted_quantity = min_notional / price
                 rounded_quantity = self.client.round_quantity(symbol, adjusted_quantity)
-                notional = rounded_quantity * price
+                actual_notional = rounded_quantity * price
                 logger.warning(
                     f"Adjusted quantity for {symbol} to meet minimum notional: "
-                    f"qty={rounded_quantity} notional={notional:.2f} USDT (min={min_notional} USDT)"
+                    f"qty={rounded_quantity} notional={actual_notional:.2f} USDT (min={min_notional} USDT)"
                 )
             
-            logger.info(f"Risk sizing for {symbol}: balance={balance} risk={at_risk:.2f} qty={rounded_quantity} notional={notional:.2f} USDT")
-        
-        return PositionSizingResult(quantity=rounded_quantity, notional=notional)
+            logger.info(
+                f"Risk sizing RESULT for {symbol}: balance={balance:.2f} USDT, "
+                f"risk_pct={risk_per_trade*100:.2f}%, calculated={at_risk:.2f} USDT, "
+                f"actual={actual_notional:.2f} USDT, qty={rounded_quantity}"
+            )
+            
+            return PositionSizingResult(quantity=rounded_quantity, notional=actual_notional)
 

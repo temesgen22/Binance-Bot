@@ -37,7 +37,7 @@ class CreateStrategyRequest(BaseModel):
     name: str
     symbol: str
     strategy_type: StrategyType
-    leverage: int = Field(default=5, ge=1, le=50)
+    leverage: int = Field(..., ge=1, le=50, description="Leverage multiplier (1-50). REQUIRED - no default. Must be explicitly set to avoid accidental 20x Binance default.")
     risk_per_trade: float = Field(default=0.01, gt=0, lt=1)
     fixed_amount: Optional[float] = Field(default=None, gt=0, description="Fixed USDT amount to trade per order (overrides risk_per_trade if set)")
     max_positions: int = Field(default=1, ge=1, le=5)
@@ -48,6 +48,22 @@ class CreateStrategyRequest(BaseModel):
     @classmethod
     def uppercase_symbol(cls, value: str) -> str:
         return value.upper()
+    
+    @field_validator("leverage")
+    @classmethod
+    def validate_leverage(cls, value: int) -> int:
+        """Ensure leverage is explicitly provided and within valid range."""
+        if value is None:
+            raise ValueError(
+                "leverage is REQUIRED and must be explicitly provided (1-50). "
+                "Do not rely on defaults to avoid Binance's 20x default leverage."
+            )
+        if not (1 <= value <= 50):
+            raise ValueError(
+                f"leverage must be between 1 and 50, got {value}. "
+                "Binance futures default is 20x - ensure you explicitly set your desired leverage."
+            )
+        return value
 
 
 class StrategyState(str, Enum):

@@ -417,9 +417,9 @@ class TestStrategyRunnerOrderExecution:
         strategy_summary,
         mock_order_response
     ):
-        """Ensure leverage configuration is applied before first trade."""
-        # Reset meta to ensure leverage not yet applied
-        strategy_summary.meta = {}
+        """Ensure leverage configuration is checked and applied before first trade."""
+        # Mock get_current_leverage to return None (no position yet)
+        mock_binance_client.get_current_leverage.return_value = None
         with patch.object(
             risk_manager,
             "size_position",
@@ -443,8 +443,9 @@ class TestStrategyRunnerOrderExecution:
 
             await runner._execute(signal, strategy_summary)
 
+            # Should check current leverage and set it to target
+            mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
             mock_binance_client.adjust_leverage.assert_called_once_with("BTCUSDT", 5)
-            assert strategy_summary.meta.get("leverage_applied") is True
 
     @pytest.mark.asyncio
     async def test_leverage_applied_when_closing_position(
@@ -455,11 +456,12 @@ class TestStrategyRunnerOrderExecution:
         strategy_summary,
         mock_order_response
     ):
-        """Ensure leverage is applied even when closing a position (not just opening)."""
-        # Reset meta to ensure leverage not yet applied
-        strategy_summary.meta = {}
+        """Ensure leverage is checked and applied even when closing a position (not just opening)."""
         strategy_summary.position_size = 0.5
         strategy_summary.position_side = "LONG"
+        
+        # Mock current leverage as different (20x instead of 5x)
+        mock_binance_client.get_current_leverage.return_value = 20
         
         # Mock Binance position
         mock_binance_client.get_open_position.return_value = {
@@ -487,9 +489,9 @@ class TestStrategyRunnerOrderExecution:
 
         await runner._execute(signal, strategy_summary)
 
-        # Leverage should be applied even when closing
+        # Leverage should be checked and reset to target even when closing
+        mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
         mock_binance_client.adjust_leverage.assert_called_once_with("BTCUSDT", 5)
-        assert strategy_summary.meta.get("leverage_applied") is True
         # Verify order was placed with reduce_only
         mock_binance_client.place_order.assert_called_once()
         call_args = mock_binance_client.place_order.call_args
@@ -505,8 +507,9 @@ class TestStrategyRunnerOrderExecution:
         strategy_summary,
         mock_order_response
     ):
-        """Ensure leverage is only applied once per strategy."""
-        strategy_summary.meta = {"leverage_applied": True}
+        """Ensure leverage is checked but not reset if already at target."""
+        # Mock current leverage as already correct (5x)
+        mock_binance_client.get_current_leverage.return_value = 5
         with patch.object(
             risk_manager,
             "size_position",
@@ -530,6 +533,8 @@ class TestStrategyRunnerOrderExecution:
 
             await runner._execute(signal, strategy_summary)
 
+            # Should check leverage but not adjust since it's already correct
+            mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
             mock_binance_client.adjust_leverage.assert_not_called()
 
 
@@ -634,6 +639,342 @@ class TestOrderExecutionIntegration:
             # Verify trade was tracked
             assert strategy_summary.id in runner._trades
             assert len(runner._trades[strategy_summary.id]) == 1
+
+
+class TestTradeTrackingAndPersistence:
+    """Test that trade values are properly tracked and saved with all parameters."""
+    
+    @pytest.fixture
+    def mock_binance_client(self):
+        """Create a mock BinanceClient that returns proper order responses."""
+        client = MagicMock(spec=BinanceClient)
+        client.get_price = MagicMock(return_value=40000.0)
+        client.get_klines = MagicMock(return_value=[])
+        client.get_open_position = MagicMock(return_value=None)
+        client.adjust_leverage = MagicMock(return_value={"leverage": 5})
+        client.get_current_leverage = MagicMock(return_value=5)
+        return client
+    
+    @pytest.fixture
+    def risk_manager(self, mock_binance_client):
+        """Create a RiskManager instance."""
+        return RiskManager(client=mock_binance_client)
+    
+    @pytest.fixture
+    def order_executor(self, mock_binance_client):
+        """Create an OrderExecutor instance."""
+        return OrderExecutor(client=mock_binance_client)
+    
+    @pytest.fixture
+    def strategy_summary(self):
+        """Create a strategy summary for testing."""
+        return StrategySummary(
+            id="test-trade-tracking",
+            name="Test Trade Tracking",
+            symbol="BTCUSDT",
+            strategy_type=StrategyType.scalping,
+            status=StrategyState.running,
+            leverage=5,
+            risk_per_trade=0.01,
+            fixed_amount=1000.0,
+            params=StrategyParams(
+                ema_fast=8,
+                ema_slow=21,
+                take_profit_pct=0.004,
+                stop_loss_pct=0.002,
+                interval_seconds=10,
+            ),
+            created_at=datetime.utcnow(),
+            last_signal=None,
+            entry_price=None,
+            current_price=None,
+            position_size=None,
+            unrealized_pnl=None,
+            meta={},
+        )
+    
+    def test_trade_values_properly_tracked_in_memory(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+    ):
+        """Test that all trade parameters are correctly tracked when saved to memory."""
+        # Mock order response with all values
+        order_response = OrderResponse(
+            symbol="BTCUSDT",
+            order_id=123456789,
+            status="FILLED",
+            side="BUY",
+            price=40000.0,
+            avg_price=40001.5,
+            executed_qty=0.025,
+        )
+        mock_binance_client.place_order.return_value = order_response
+        
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+        
+        # Mock position sizing
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.025, notional=1000.0),
+        ):
+            signal = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+            
+            # Execute order
+            import asyncio
+            asyncio.run(runner._execute(signal, strategy_summary))
+        
+        # Verify trade is tracked in memory
+        assert strategy_summary.id in runner._trades
+        trades = runner._trades[strategy_summary.id]
+        assert len(trades) == 1
+        
+        # Verify ALL parameters are correctly saved
+        tracked_trade = trades[0]
+        assert tracked_trade.symbol == "BTCUSDT"
+        assert tracked_trade.order_id == 123456789
+        assert tracked_trade.status == "FILLED"
+        assert tracked_trade.side == "BUY"
+        assert tracked_trade.price == 40000.0
+        assert tracked_trade.avg_price == 40001.5
+        assert tracked_trade.executed_qty == 0.025
+    
+    def test_multiple_trades_values_tracked_correctly(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+    ):
+        """Test that multiple trades are tracked with correct values."""
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+        
+        # Create multiple trades with different values
+        trade1 = OrderResponse(
+            symbol="BTCUSDT",
+            order_id=111111,
+            status="FILLED",
+            side="BUY",
+            price=40000.0,
+            avg_price=40001.0,
+            executed_qty=0.01,
+        )
+        trade2 = OrderResponse(
+            symbol="BTCUSDT",
+            order_id=222222,
+            status="FILLED",
+            side="SELL",
+            price=41000.0,
+            avg_price=41001.5,
+            executed_qty=0.01,
+        )
+        
+        mock_binance_client.place_order.side_effect = [trade1, trade2]
+        
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.01, notional=400.0),
+        ):
+            # Execute BUY order
+            signal1 = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+            import asyncio
+            asyncio.run(runner._execute(signal1, strategy_summary))
+            
+            # Update position for SELL
+            strategy_summary.position_size = 0.01
+            strategy_summary.position_side = "LONG"
+            
+            # Execute SELL order
+            signal2 = StrategySignal(
+                action="SELL",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=41000.0,
+            )
+            asyncio.run(runner._execute(signal2, strategy_summary))
+        
+        # Verify both trades are tracked
+        trades = runner._trades[strategy_summary.id]
+        assert len(trades) == 2
+        
+        # Verify first trade values
+        assert trades[0].order_id == 111111
+        assert trades[0].side == "BUY"
+        assert trades[0].avg_price == 40001.0
+        assert trades[0].executed_qty == 0.01
+        
+        # Verify second trade values
+        assert trades[1].order_id == 222222
+        assert trades[1].side == "SELL"
+        assert trades[1].avg_price == 41001.5
+        assert trades[1].executed_qty == 0.01
+    
+    def test_invalid_trade_filtered_out(self, mock_binance_client, risk_manager, order_executor, strategy_summary):
+        """Test that trades with status NEW and zero execution are not tracked."""
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+        
+        # Mock invalid order (status NEW with zero execution)
+        invalid_order = OrderResponse(
+            symbol="BTCUSDT",
+            order_id=999999,
+            status="NEW",
+            side="BUY",
+            price=0.0,
+            avg_price=None,
+            executed_qty=0.0,
+        )
+        mock_binance_client.place_order.return_value = invalid_order
+        
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.01, notional=400.0),
+        ):
+            signal = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+            
+            import asyncio
+            asyncio.run(runner._execute(signal, strategy_summary))
+        
+        # Verify invalid trade was NOT tracked
+        assert strategy_summary.id not in runner._trades or len(runner._trades[strategy_summary.id]) == 0
+    
+    def test_trades_can_be_retrieved_after_tracking(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+    ):
+        """Test that tracked trades can be retrieved via get_trades()."""
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+        
+        order_response = OrderResponse(
+            symbol="ETHUSDT",
+            order_id=987654321,
+            status="FILLED",
+            side="SELL",
+            price=3000.0,
+            avg_price=3001.25,
+            executed_qty=0.5,
+        )
+        mock_binance_client.place_order.return_value = order_response
+        
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.5, notional=1500.0),
+        ):
+            signal = StrategySignal(
+                action="SELL",
+                symbol="ETHUSDT",
+                confidence=0.8,
+                price=3000.0,
+            )
+            
+            import asyncio
+            asyncio.run(runner._execute(signal, strategy_summary))
+        
+        # Retrieve trades via get_trades()
+        retrieved_trades = runner.get_trades(strategy_summary.id)
+        
+        # Verify trade was retrieved with all values
+        assert len(retrieved_trades) == 1
+        trade = retrieved_trades[0]
+        assert trade.symbol == "ETHUSDT"
+        assert trade.order_id == 987654321
+        assert trade.status == "FILLED"
+        assert trade.side == "SELL"
+        assert trade.price == 3000.0
+        assert trade.avg_price == 3001.25
+        assert trade.executed_qty == 0.5
+    
+    def test_trade_with_none_avg_price_handled_correctly(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+    ):
+        """Test that trades with None avg_price are handled correctly."""
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+        
+        # Order with None avg_price (should use price instead)
+        order_response = OrderResponse(
+            symbol="BTCUSDT",
+            order_id=555555,
+            status="FILLED",
+            side="BUY",
+            price=40000.0,
+            avg_price=None,
+            executed_qty=0.001,
+        )
+        mock_binance_client.place_order.return_value = order_response
+        
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.001, notional=40.0),
+        ):
+            signal = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+            
+            import asyncio
+            asyncio.run(runner._execute(signal, strategy_summary))
+        
+        # Verify trade tracked with None avg_price
+        trades = runner._trades[strategy_summary.id]
+        assert len(trades) == 1
+        assert trades[0].avg_price is None
+        assert trades[0].price == 40000.0
+        assert trades[0].executed_qty == 0.001
 
 
 if __name__ == "__main__":

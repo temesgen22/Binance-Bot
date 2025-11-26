@@ -54,8 +54,31 @@ class BinanceClient:
         return self._rest
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_current_leverage(self, symbol: str) -> int | None:
+        """Get current leverage setting for a symbol from Binance.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            
+        Returns:
+            Current leverage as integer, or None if not found
+        """
+        rest = self._ensure()
+        try:
+            positions = rest.futures_position_information(symbol=symbol)
+            if positions and len(positions) > 0:
+                # Position information includes leverage
+                leverage = int(float(positions[0].get("leverage", "0")))
+                return leverage if leverage > 0 else None
+            return None
+        except Exception as exc:
+            logger.warning(f"Could not get current leverage for {symbol}: {exc}")
+            return None
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def adjust_leverage(self, symbol: str, leverage: int) -> Dict[str, Any]:
-        logger.info(f"Setting leverage={leverage} for {symbol}")
+        """Set leverage for a symbol. Always sets even if already at target (since leverage is per-symbol)."""
+        logger.info(f"Setting leverage={leverage}x for {symbol}")
         rest = self._ensure()
         return rest.futures_change_leverage(symbol=symbol, leverage=leverage)
 
@@ -184,6 +207,20 @@ class BinanceClient:
         return float(usdt["walletBalance"])
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_order_status(self, symbol: str, order_id: int) -> Dict[str, Any]:
+        """Get current status of an order from Binance.
+        
+        Args:
+            symbol: Trading symbol
+            order_id: Order ID from Binance
+            
+        Returns:
+            Order status dict with filled price, quantity, etc.
+        """
+        rest = self._ensure()
+        return rest.futures_get_order(symbol=symbol, orderId=order_id)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def place_order(
         self,
         *,
@@ -215,19 +252,92 @@ class BinanceClient:
         try:
             # python-binance uses futures_create_order
             response = rest.futures_create_order(**params)
+            logger.debug(f"Binance order response keys: {list(response.keys())}, status: {response.get('status')}")
         except ClientError as exc:
             logger.error(f"Binance order failed: {exc}")
             raise
 
-        return OrderResponse(
+        # Parse response - handle different field name variations
+        # Binance may return price/avgPrice/executedQty in different formats
+        price_str = response.get("price", "0") or response.get("price", "0") or "0"
+        avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
+        executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
+        status = response.get("status", "UNKNOWN")
+        
+        # Convert to float, handling various formats
+        try:
+            price = float(price_str) if price_str and str(price_str).strip() and str(price_str) != "0" else 0.0
+        except (ValueError, TypeError):
+            price = 0.0
+        
+        try:
+            # avgPrice can be "0", "", None, or a valid number
+            if avg_price_str and str(avg_price_str).strip() and str(avg_price_str).strip() != "0":
+                avg_price = float(avg_price_str)
+            else:
+                avg_price = None
+        except (ValueError, TypeError):
+            avg_price = None
+        
+        try:
+            executed_qty = float(executed_qty_str) if executed_qty_str and str(executed_qty_str).strip() else 0.0
+        except (ValueError, TypeError):
+            executed_qty = 0.0
+        
+        # For market orders that return immediately with "NEW" status but are actually filled,
+        # query the order status to get actual fill data
+        order_id = response.get("orderId")
+        if status == "NEW" and order_type == "MARKET" and executed_qty == 0.0:
+            logger.debug(f"Order {order_id} returned as NEW, querying status to get fill data...")
+            try:
+                # Wait a moment and query order status
+                import time
+                time.sleep(0.1)  # Brief delay for order to process
+                status_response = self.get_order_status(symbol, order_id)
+                logger.debug(f"Order status query response: {status_response}")
+                
+                # Update with actual fill data
+                status = status_response.get("status", status)
+                if status_response.get("avgPrice"):
+                    avg_price_str = status_response.get("avgPrice")
+                    try:
+                        avg_price = float(avg_price_str) if avg_price_str and str(avg_price_str).strip() != "0" else None
+                    except (ValueError, TypeError):
+                        pass
+                
+                if status_response.get("executedQty"):
+                    executed_qty_str = status_response.get("executedQty")
+                    try:
+                        executed_qty = float(executed_qty_str) if executed_qty_str else 0.0
+                    except (ValueError, TypeError):
+                        pass
+            except Exception as exc:
+                logger.warning(f"Failed to query order status for {order_id}: {exc}")
+        
+        # Log warning if order still doesn't have execution data
+        if status != "FILLED" and executed_qty == 0.0:
+            logger.warning(
+                f"Order {order_id} status is '{status}', executed_qty={executed_qty}, "
+                f"avg_price={avg_price}. Order may not be filled yet or response format unexpected."
+            )
+        
+        order_response = OrderResponse(
             symbol=response["symbol"],
-            order_id=response["orderId"],
-            status=response["status"],
+            order_id=order_id,
+            status=status,
             side=response["side"],
-            price=float(response.get("price") or 0.0),
-            avg_price=float(response.get("avgPrice")) if response.get("avgPrice") else None,
-            executed_qty=float(response.get("executedQty") or 0.0),
+            price=price,
+            avg_price=avg_price,
+            executed_qty=executed_qty,
         )
+        
+        logger.info(
+            f"Order response: {order_response.side} {order_response.symbol} "
+            f"order_id={order_response.order_id} status={order_response.status} "
+            f"executed_qty={order_response.executed_qty} avg_price={order_response.avg_price}"
+        )
+        
+        return order_response
 
     def cancel_open_orders(self, symbol: str) -> list[dict[str, Any]]:
         rest = self._ensure()

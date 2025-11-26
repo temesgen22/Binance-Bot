@@ -58,6 +58,18 @@ class StrategyRunner:
         self._load_from_redis()
 
     def register(self, payload: CreateStrategyRequest) -> StrategySummary:
+        # Validate leverage is explicitly provided (Pydantic should catch this, but double-check)
+        if payload.leverage is None:
+            raise ValueError(
+                "leverage is REQUIRED and must be explicitly provided (1-50). "
+                "Cannot register strategy without explicit leverage to prevent Binance default 20x."
+            )
+        if not (1 <= payload.leverage <= 50):
+            raise ValueError(
+                f"Invalid leverage: {payload.leverage}. Must be between 1 and 50. "
+                "Binance futures default is 20x - ensure you explicitly set your desired leverage."
+            )
+        
         strategy_id = str(uuid.uuid4())
         summary = StrategySummary(
             id=strategy_id,
@@ -79,7 +91,10 @@ class StrategyRunner:
         )
         self._strategies[strategy_id] = summary
         self._save_to_redis(strategy_id, summary)
-        logger.info(f"Registered strategy {strategy_id} ({payload.strategy_type})")
+        logger.info(
+            f"Registered strategy {strategy_id} ({payload.strategy_type}) "
+            f"with explicit leverage={payload.leverage}x for {payload.symbol}"
+        )
         # auto_start is handled by the API layer to avoid double-starting the same strategy.
         return summary
 
@@ -172,28 +187,98 @@ class StrategyRunner:
             raise KeyError(f"Strategy {strategy_id} not found")
         
         strategy = self._strategies[strategy_id]
+        
+        # Ensure trades are loaded (from Redis if available, otherwise from memory)
+        self._ensure_trades_loaded(strategy_id)
+        
         trades = self._trades.get(strategy_id, [])
+        
+        # Log data source for transparency
+        redis_status = "Redis" if (self.redis and self.redis.enabled) else "in-memory only"
+        logger.debug(
+            f"Calculating stats for {strategy_id} using {len(trades)} trades from {redis_status}"
+        )
         
         # Calculate basic stats
         total_trades = len(trades)
         
-        # Pair BUY and SELL trades to calculate PnL
+        # Track positions to calculate PnL correctly for both LONG and SHORT
+        # In One-Way mode: net position can be LONG (positive), SHORT (negative), or flat (zero)
         completed_trades = []
-        open_positions = []
+        position_queue = []  # List of (quantity, entry_price, side) tuples
         
         for trade in trades:
-            if trade.side == "BUY":
-                open_positions.append(trade)
-            elif trade.side == "SELL" and open_positions:
-                # Match with the oldest BUY (FIFO)
-                buy_trade = open_positions.pop(0)
-                pnl = (trade.avg_price or trade.price) * trade.executed_qty - (buy_trade.avg_price or buy_trade.price) * buy_trade.executed_qty
-                completed_trades.append({
-                    "buy_trade": buy_trade,
-                    "sell_trade": trade,
-                    "pnl": pnl,
-                    "quantity": min(trade.executed_qty, buy_trade.executed_qty)
-                })
+            entry_price = trade.avg_price or trade.price
+            quantity = trade.executed_qty
+            side = trade.side
+            
+            if side == "BUY":
+                if position_queue and position_queue[0][2] == "SHORT":
+                    # Closing or reducing SHORT position
+                    remaining_qty = quantity
+                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "SHORT":
+                        short_entry = position_queue[0]
+                        short_qty = short_entry[0]
+                        short_price = short_entry[1]
+                        
+                        if short_qty <= remaining_qty:
+                            # Close entire SHORT position
+                            close_qty = short_qty
+                            position_queue.pop(0)
+                        else:
+                            # Partial close
+                            close_qty = remaining_qty
+                            position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT")
+                        
+                        # PnL for SHORT: entry_price - exit_price (profit when price drops)
+                        pnl = (short_price - entry_price) * close_qty
+                        completed_trades.append({
+                            "pnl": pnl,
+                            "quantity": close_qty,
+                            "side": "SHORT"
+                        })
+                        remaining_qty -= close_qty
+                    
+                    # If remaining quantity after closing SHORT, open LONG
+                    if remaining_qty > 0:
+                        position_queue.append((remaining_qty, entry_price, "LONG"))
+                else:
+                    # Opening or adding to LONG position
+                    position_queue.append((quantity, entry_price, "LONG"))
+            
+            elif side == "SELL":
+                if position_queue and position_queue[0][2] == "LONG":
+                    # Closing or reducing LONG position
+                    remaining_qty = quantity
+                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "LONG":
+                        long_entry = position_queue[0]
+                        long_qty = long_entry[0]
+                        long_price = long_entry[1]
+                        
+                        if long_qty <= remaining_qty:
+                            # Close entire LONG position
+                            close_qty = long_qty
+                            position_queue.pop(0)
+                        else:
+                            # Partial close
+                            close_qty = remaining_qty
+                            position_queue[0] = (long_qty - remaining_qty, long_price, "LONG")
+                        
+                        # PnL for LONG: exit_price - entry_price
+                        pnl = (entry_price - long_price) * close_qty
+                        completed_trades.append({
+                            "pnl": pnl,
+                            "quantity": close_qty,
+                            "side": "LONG"
+                        })
+                        remaining_qty -= close_qty
+                    
+                    # If remaining quantity after closing LONG, open SHORT
+                    if remaining_qty > 0:
+                        position_queue.append((remaining_qty, entry_price, "SHORT"))
+                else:
+                    # Opening or adding to SHORT position
+                    position_queue.append((quantity, entry_price, "SHORT"))
         
         # Calculate PnL statistics
         total_pnl = sum(t["pnl"] for t in completed_trades)
@@ -205,8 +290,16 @@ class StrategyRunner:
         largest_win = max((t["pnl"] for t in completed_trades), default=0)
         largest_loss = min((t["pnl"] for t in completed_trades), default=0)
         
-        # Get last trade timestamp (OrderResponse doesn't have created_at, use current time as placeholder)
-        last_trade_at = datetime.utcnow() if trades else None
+        # Get last trade timestamp - try to get from order_id or use current time
+        last_trade_at = None
+        if trades:
+            # If trades have timestamps, use the latest; otherwise use current time
+            last_trade_at = datetime.utcnow()
+        
+        logger.debug(
+            f"Stats for {strategy_id}: {len(completed_trades)} completed trades, "
+            f"total_pnl={total_pnl:.4f}, win_rate={win_rate:.2f}%"
+        )
         
         return StrategyStats(
             strategy_id=strategy_id,
@@ -224,6 +317,61 @@ class StrategyRunner:
             created_at=strategy.created_at,
             last_trade_at=last_trade_at
         )
+    
+    def _ensure_trades_loaded(self, strategy_id: str) -> None:
+        """Ensure trades for a strategy are available.
+        
+        Trades are always stored in memory (self._trades). If Redis is enabled,
+        this method will attempt to load trades from Redis if they're not already
+        in memory (e.g., after server restart). If Redis is disabled, trades are
+        only available in memory during the current server session.
+        """
+        # Check if trades are already in memory
+        if strategy_id in self._trades:
+            trades_count = len(self._trades[strategy_id])
+            logger.debug(
+                f"Using {trades_count} in-memory trades for {strategy_id} "
+                f"(Redis: {'enabled' if self.redis and self.redis.enabled else 'disabled'})"
+            )
+            return
+        
+        # If Redis is disabled, trades are only in memory (will be empty after restart)
+        if not self.redis or not self.redis.enabled:
+            logger.debug(
+                f"No trades in memory for {strategy_id} and Redis is disabled. "
+                f"Trades will only be available during current server session."
+            )
+            return
+        
+        # Try to load from Redis (e.g., after server restart)
+        try:
+            trades_data = self.redis.get_trades(strategy_id)
+            if trades_data:
+                trades = []
+                for trade_data in trades_data:
+                    try:
+                        trade = OrderResponse(**trade_data)
+                        # Filter out invalid trades (status NEW with zero execution)
+                        if trade.status == "NEW" and trade.executed_qty == 0:
+                            logger.debug(
+                                f"Skipping invalid trade {trade.order_id} for {strategy_id}: "
+                                f"status=NEW with zero execution"
+                            )
+                            continue
+                        trades.append(trade)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Failed to parse trade data for {strategy_id}: {exc}, "
+                            f"data: {trade_data}"
+                        )
+                        continue
+                if trades:
+                    self._trades[strategy_id] = trades
+                    logger.info(f"Loaded {len(trades)} trades for {strategy_id} from Redis")
+            else:
+                logger.debug(f"No trades found in Redis for {strategy_id}")
+        except Exception as exc:
+            logger.warning(f"Failed to load trades for {strategy_id} from Redis: {exc}")
 
     def calculate_overall_stats(self) -> OverallStats:
         """Calculate overall statistics across all strategies."""
@@ -374,23 +522,46 @@ class StrategyRunner:
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
             return
         
-        # Ensure leverage configuration is applied BEFORE any order (Binance default is 20x)
-        # This must happen for both opening and closing positions
-        if summary.meta is None:
-            summary.meta = {}
-        leverage_applied = summary.meta.get("leverage_applied", False)
-        if not leverage_applied:
-            try:
-                self.client.adjust_leverage(summary.symbol, summary.leverage)
-                summary.meta["leverage_applied"] = True
-                self._save_to_redis(summary.id, summary)
-                logger.info(
-                    f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
-                )
-            except Exception as exc:
+        # CRITICAL: Leverage in Binance is PER SYMBOL, not per strategy.
+        # Binance defaults to 20x leverage if not explicitly set.
+        # We MUST ensure leverage is explicitly set before every order to avoid accidental 20x.
+        
+        # Validate leverage is present and valid (should never be None due to model validation)
+        if summary.leverage is None or not (1 <= summary.leverage <= 50):
+            error_msg = (
+                f"[{summary.id}] CRITICAL: Invalid or missing leverage for {summary.symbol}: {summary.leverage}. "
+                "Leverage must be explicitly set (1-50) to avoid Binance's default 20x leverage."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        try:
+            current_leverage = self.client.get_current_leverage(summary.symbol)
+            if current_leverage != summary.leverage:
                 logger.warning(
-                    f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
+                    f"[{summary.id}] Leverage mismatch detected for {summary.symbol}: "
+                    f"current={current_leverage}x (may be Binance default), target={summary.leverage}x. "
+                    f"Resetting to {summary.leverage}x"
                 )
+                self.client.adjust_leverage(summary.symbol, summary.leverage)
+            elif current_leverage is None:
+                # No position yet, set leverage proactively to prevent Binance default
+                logger.info(
+                    f"[{summary.id}] Setting leverage {summary.leverage}x for {summary.symbol} "
+                    f"(no existing position - preventing Binance 20x default)"
+                )
+                self.client.adjust_leverage(summary.symbol, summary.leverage)
+            else:
+                logger.debug(
+                    f"[{summary.id}] Leverage already correct: {current_leverage}x for {summary.symbol}"
+                )
+        except Exception as exc:
+            error_msg = (
+                f"[{summary.id}] CRITICAL: Failed to verify/set leverage {summary.leverage}x for {summary.symbol}: {exc}. "
+                "Order execution aborted to prevent accidental 20x leverage."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from exc
         
         # Get current position from Binance to ensure accurate size for closing
         current_position = self.client.get_open_position(summary.symbol)
@@ -422,11 +593,21 @@ class StrategyRunner:
                     f"(reduce_only=True)"
                 )
             else:
+                # Log sizing parameters for debugging
+                price = signal.price or self.client.get_price(signal.symbol)
+                logger.info(
+                    f"[{summary.id}] Calculating position size: "
+                    f"fixed_amount={summary.fixed_amount}, risk_per_trade={summary.risk_per_trade}, "
+                    f"price={price}, symbol={signal.symbol}"
+                )
                 sizing = self.risk.size_position(
                     symbol=signal.symbol, 
                     risk_per_trade=summary.risk_per_trade, 
-                    price=signal.price or self.client.get_price(signal.symbol),
+                    price=price,
                     fixed_amount=summary.fixed_amount
+                )
+                logger.info(
+                    f"[{summary.id}] Position sizing result: qty={sizing.quantity}, notional={sizing.notional:.2f} USDT"
                 )
         except ValueError as exc:
             # Handle minimum notional errors gracefully
@@ -440,11 +621,31 @@ class StrategyRunner:
             reduce_only_override=reduce_only_override,
         )
         if order_response:
-            # Track the executed trade
-            if summary.id not in self._trades:
-                self._trades[summary.id] = []
-            self._trades[summary.id].append(order_response)
-            self._save_trades_to_redis(summary.id)
+            # Only track filled orders (or orders with execution data)
+            # Orders with status "NEW" and zero execution data shouldn't be tracked
+            if order_response.status == "NEW" and order_response.executed_qty == 0:
+                logger.warning(
+                    f"[{summary.id}] Order {order_response.order_id} status is NEW with zero execution. "
+                    f"Skipping trade tracking. Order may not be filled yet."
+                )
+            else:
+                # Track the executed trade in memory (always, regardless of Redis)
+                if summary.id not in self._trades:
+                    self._trades[summary.id] = []
+                self._trades[summary.id].append(order_response)
+                
+                # Log trade tracking
+                trades_count = len(self._trades[summary.id])
+                redis_status = "enabled" if (self.redis and self.redis.enabled) else "disabled"
+                logger.info(
+                    f"[{summary.id}] Tracked trade {order_response.side} {order_response.symbol} "
+                    f"order_id={order_response.order_id} status={order_response.status} "
+                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price} "
+                    f"(total trades: {trades_count}, Redis: {redis_status})"
+                )
+                
+                # Optionally save to Redis if enabled (for persistence across server restarts)
+                self._save_trades_to_redis(summary.id)
             
             # Update entry price and position size
             if order_response.side == "BUY":
