@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Trade & PnL Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .filters {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .filters h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .filter-group input,
+        .filter-group select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .filter-group input:focus,
+        .filter-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .stats-overview {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-card .value.positive {
+            color: #28a745;
+        }
+
+        .stat-card .value.negative {
+            color: #dc3545;
+        }
+
+        .content {
+            padding: 25px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            font-size: 1em;
+            font-weight: 600;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .pnl-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .pnl-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .pnl-table td {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .pnl-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .pnl-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge.danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .badge.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .positions-section {
+            margin-top: 30px;
+        }
+
+        .positions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .position-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-left: 4px solid #667eea;
+        }
+
+        .position-card.long {
+            border-left-color: #28a745;
+        }
+
+        .position-card.short {
+            border-left-color: #dc3545;
+        }
+
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .position-symbol {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .position-pnl {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .position-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .position-detail-item {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .trades-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .trades-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .trades-table td {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .trades-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state h3 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+
+        .refresh-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .auto-refresh input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Trade & Profit/Loss Viewer</h1>
+            <p>Monitor your trading performance and position PnL</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/docs">📖 API Docs</a>
+            </div>
+        </div>
+
+        <div class="filters">
+            <h2>Filters</h2>
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label for="symbolFilter">Cryptocurrency</label>
+                    <select id="symbolFilter">
+                        <option value="">All Symbols</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="startDateFilter">Start Date</label>
+                    <input type="date" id="startDateFilter">
+                </div>
+                <div class="filter-group">
+                    <label for="endDateFilter">End Date</label>
+                    <input type="date" id="endDateFilter">
+                </div>
+                <div class="filter-group">
+                    <label for="sideFilter">Trade Side</label>
+                    <select id="sideFilter">
+                        <option value="">All Sides</option>
+                        <option value="BUY">BUY</option>
+                        <option value="SELL">SELL</option>
+                    </select>
+                </div>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
+                <button class="btn btn-secondary" onclick="clearFilters()">Clear Filters</button>
+                <div class="auto-refresh">
+                    <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                    <label for="autoRefresh">Auto-refresh (30s)</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-overview">
+            <h2>Overall Statistics</h2>
+            <div class="stats-grid" id="overallStats">
+                <div class="stat-card">
+                    <h3>Total PnL</h3>
+                    <div class="value" id="totalPnL">$0.00</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Realized PnL</h3>
+                    <div class="value" id="realizedPnL">$0.00</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Unrealized PnL</h3>
+                    <div class="value" id="unrealizedPnL">$0.00</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Trades</h3>
+                    <div class="value" id="totalTrades">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Win Rate</h3>
+                    <div class="value" id="winRate">0%</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Active Positions</h3>
+                    <div class="value" id="activePositions">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('overview')">Overview by Symbol</button>
+                <button class="tab" onclick="switchTab('positions')">Open Positions</button>
+                <button class="tab" onclick="switchTab('trades')">All Trades</button>
+            </div>
+
+            <div id="overview" class="tab-content active">
+                <div class="refresh-controls">
+                    <h2>Profit/Loss by Symbol</h2>
+                    <button class="btn btn-primary" onclick="loadData()">Refresh</button>
+                </div>
+                <div id="overviewContent">
+                    <div class="loading">Loading data...</div>
+                </div>
+            </div>
+
+            <div id="positions" class="tab-content">
+                <div class="refresh-controls">
+                    <h2>Open Positions</h2>
+                    <button class="btn btn-primary" onclick="loadData()">Refresh</button>
+                </div>
+                <div id="positionsContent">
+                    <div class="loading">Loading positions...</div>
+                </div>
+            </div>
+
+            <div id="trades" class="tab-content">
+                <div class="refresh-controls">
+                    <h2>Trade History</h2>
+                    <button class="btn btn-primary" onclick="loadTrades()">Refresh</button>
+                </div>
+                <div id="tradesContent">
+                    <div class="loading">Loading trades...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+        let allSymbols = [];
+
+        async function loadSymbols() {
+            try {
+                const response = await fetch('/trades/symbols');
+                if (!response.ok) throw new Error('Failed to load symbols');
+                allSymbols = await response.json();
+                
+                const select = document.getElementById('symbolFilter');
+                select.innerHTML = '<option value="">All Symbols</option>';
+                allSymbols.forEach(symbol => {
+                    const option = document.createElement('option');
+                    option.value = symbol;
+                    option.textContent = symbol;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading symbols:', error);
+            }
+        }
+
+        async function loadData() {
+            try {
+                const response = await fetch('/trades/pnl/overview');
+                if (!response.ok) throw new Error('Failed to load PnL data');
+                const pnlData = await response.json();
+                
+                displayOverview(pnlData);
+                displayPositions(pnlData);
+                updateOverallStats(pnlData);
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('overviewContent').innerHTML = 
+                    `<div class="error">Error loading data: ${error.message}</div>`;
+            }
+        }
+
+        function updateOverallStats(pnlData) {
+            let totalPnL = 0;
+            let totalRealizedPnL = 0;
+            let totalUnrealizedPnL = 0;
+            let totalTrades = 0;
+            let totalCompleted = 0;
+            let totalWinning = 0;
+            let totalLosing = 0;
+            let activePositions = 0;
+
+            pnlData.forEach(symbol => {
+                totalPnL += symbol.total_pnl || 0;
+                totalRealizedPnL += symbol.total_realized_pnl || 0;
+                totalUnrealizedPnL += symbol.total_unrealized_pnl || 0;
+                totalTrades += symbol.total_trades || 0;
+                totalCompleted += symbol.completed_trades || 0;
+                totalWinning += symbol.winning_trades || 0;
+                totalLosing += symbol.losing_trades || 0;
+                activePositions += symbol.open_positions.length || 0;
+            });
+
+            const winRate = totalCompleted > 0 ? (totalWinning / totalCompleted * 100).toFixed(2) : 0;
+
+            document.getElementById('totalPnL').textContent = formatCurrency(totalPnL);
+            document.getElementById('totalPnL').className = 'value ' + (totalPnL >= 0 ? 'positive' : 'negative');
+            document.getElementById('realizedPnL').textContent = formatCurrency(totalRealizedPnL);
+            document.getElementById('realizedPnL').className = 'value ' + (totalRealizedPnL >= 0 ? 'positive' : 'negative');
+            document.getElementById('unrealizedPnL').textContent = formatCurrency(totalUnrealizedPnL);
+            document.getElementById('unrealizedPnL').className = 'value ' + (totalUnrealizedPnL >= 0 ? 'positive' : 'negative');
+            document.getElementById('totalTrades').textContent = totalTrades;
+            document.getElementById('winRate').textContent = winRate + '%';
+            document.getElementById('activePositions').textContent = activePositions;
+        }
+
+        function displayOverview(pnlData) {
+            const content = document.getElementById('overviewContent');
+            
+            if (!pnlData || pnlData.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No trading data available</h3><p>Start trading to see your PnL here</p></div>';
+                return;
+            }
+
+            let html = '<table class="pnl-table"><thead><tr>';
+            html += '<th>Symbol</th><th>Total PnL</th><th>Realized PnL</th><th>Unrealized PnL</th>';
+            html += '<th>Completed Trades</th><th>Win Rate</th><th>Wins/Losses</th><th>Open Positions</th>';
+            html += '</tr></thead><tbody>';
+
+            pnlData.forEach(symbol => {
+                html += '<tr>';
+                html += `<td><strong>${symbol.symbol}</strong></td>`;
+                html += `<td class="${symbol.total_pnl >= 0 ? 'positive' : 'negative'}"><strong>${formatCurrency(symbol.total_pnl)}</strong></td>`;
+                html += `<td class="${symbol.total_realized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(symbol.total_realized_pnl)}</td>`;
+                html += `<td class="${symbol.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(symbol.total_unrealized_pnl)}</td>`;
+                html += `<td>${symbol.completed_trades}</td>`;
+                html += `<td>${symbol.win_rate.toFixed(2)}%</td>`;
+                html += `<td><span class="badge success">${symbol.winning_trades}W</span> / <span class="badge danger">${symbol.losing_trades}L</span></td>`;
+                html += `<td>${symbol.open_positions.length}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            content.innerHTML = html;
+        }
+
+        function displayPositions(pnlData) {
+            const content = document.getElementById('positionsContent');
+            
+            const allPositions = [];
+            pnlData.forEach(symbol => {
+                symbol.open_positions.forEach(pos => {
+                    allPositions.push({...pos, symbolPnL: symbol});
+                });
+            });
+
+            if (allPositions.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
+                return;
+            }
+
+            let html = '<div class="positions-grid">';
+            allPositions.forEach(pos => {
+                const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
+                html += `<div class="position-card ${sideClass}">`;
+                html += `<div class="position-header">`;
+                html += `<div class="position-symbol">${pos.symbol}</div>`;
+                html += `<div class="position-pnl ${pos.unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pos.unrealized_pnl)}</div>`;
+                html += `</div>`;
+                html += `<div class="position-details">`;
+                html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side}</span></span></div>`;
+                html += `<div class="position-detail-item"><span>Size:</span><span>${pos.position_size.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${pos.entry_price.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${pos.current_price.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Leverage:</span><span>${pos.leverage}x</span></div>`;
+                if (pos.strategy_name) {
+                    html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
+                }
+                html += `</div>`;
+                html += `</div>`;
+            });
+            html += '</div>';
+            content.innerHTML = html;
+        }
+
+        async function loadTrades() {
+            const symbol = document.getElementById('symbolFilter').value;
+            const side = document.getElementById('sideFilter').value;
+            
+            let url = '/trades/?';
+            const params = new URLSearchParams();
+            if (symbol) params.append('symbol', symbol);
+            if (side) params.append('side', side);
+            url += params.toString();
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Failed to load trades');
+                const trades = await response.json();
+                
+                displayTrades(trades);
+            } catch (error) {
+                console.error('Error loading trades:', error);
+                document.getElementById('tradesContent').innerHTML = 
+                    `<div class="error">Error loading trades: ${error.message}</div>`;
+            }
+        }
+
+        function displayTrades(trades) {
+            const content = document.getElementById('tradesContent');
+            
+            if (!trades || trades.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No trades found</h3><p>Try adjusting your filters</p></div>';
+                return;
+            }
+
+            let html = '<table class="trades-table"><thead><tr>';
+            html += '<th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
+            html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Strategy</th>';
+            html += '</tr></thead><tbody>';
+
+            trades.forEach(trade => {
+                html += '<tr>';
+                html += `<td><strong>${trade.symbol}</strong></td>`;
+                html += `<td>${trade.order_id}</td>`;
+                html += `<td><span class="badge ${trade.side === 'BUY' ? 'success' : 'danger'}">${trade.side}</span></td>`;
+                html += `<td><span class="badge info">${trade.status}</span></td>`;
+                html += `<td>$${trade.price.toFixed(4)}</td>`;
+                html += `<td>$${(trade.avg_price || trade.price).toFixed(4)}</td>`;
+                html += `<td>${trade.executed_qty.toFixed(4)}</td>`;
+                html += `<td>${trade.strategy_name || 'N/A'}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            content.innerHTML = html;
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabName).classList.add('active');
+            
+            if (tabName === 'trades') {
+                loadTrades();
+            } else {
+                loadData();
+            }
+        }
+
+        function applyFilters() {
+            const symbol = document.getElementById('symbolFilter').value;
+            const startDate = document.getElementById('startDateFilter').value;
+            const endDate = document.getElementById('endDateFilter').value;
+            const side = document.getElementById('sideFilter').value;
+            
+            // Filter and reload data based on active tab
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab.id === 'trades') {
+                loadTrades();
+            } else {
+                loadData();
+            }
+        }
+
+        function clearFilters() {
+            document.getElementById('symbolFilter').value = '';
+            document.getElementById('startDateFilter').value = '';
+            document.getElementById('endDateFilter').value = '';
+            document.getElementById('sideFilter').value = '';
+            applyFilters();
+        }
+
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+                autoRefreshInterval = setInterval(() => {
+                    loadData();
+                    if (document.getElementById('trades').classList.contains('active')) {
+                        loadTrades();
+                    }
+                }, 30000); // 30 seconds
+            } else {
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        function formatCurrency(value) {
+            const sign = value >= 0 ? '+' : '';
+            return sign + '$' + value.toFixed(2);
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            loadSymbols();
+            loadData();
+        });
+    </script>
+</body>
+</html>
+
