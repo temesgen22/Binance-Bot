@@ -239,6 +239,7 @@ def create_app() -> FastAPI:
             }
         )
     
+    # GUI routes - registered before routers to take precedence
     @app.get("/strategies", tags=["gui"], include_in_schema=False)
     async def strategies_gui():
         """Serve the Strategy Performance & Ranking GUI (without trailing slash)."""
@@ -250,7 +251,6 @@ def create_app() -> FastAPI:
         return await _serve_strategies_gui()
     
     # Include API routers AFTER GUI routes to avoid conflicts
-    # Note: The API endpoint /strategies/ will still work, but GUI routes take precedence
     app.include_router(health_router)
     app.include_router(strategies_router)
     app.include_router(logs_router)

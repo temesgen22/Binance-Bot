@@ -21,9 +21,12 @@ from app.core.exceptions import (
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
-@router.get("/", response_model=list[StrategySummary])
+@router.get("/list", response_model=list[StrategySummary])
 def list_strategies(runner: StrategyRunner = Depends(get_strategy_runner)) -> list[StrategySummary]:
-    """List all registered strategies."""
+    """List all registered strategies.
+    
+    Note: Changed from GET / to GET /list to avoid conflict with GUI route at /strategies
+    """
     return runner.list_strategies()
 
 

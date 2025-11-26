@@ -45,7 +45,7 @@ def _convert_order_to_trade_with_timestamp(
     )
 
 
-@router.get("/", response_model=List[TradeWithTimestamp])
+@router.get("/list", response_model=List[TradeWithTimestamp])
 def list_all_trades(
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
     start_date: Optional[datetime] = Query(default=None, description="Filter from date"),
