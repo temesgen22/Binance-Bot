@@ -373,8 +373,36 @@ class StrategyRunner:
         if signal.action == "HOLD":
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
             return
+        
+        # Ensure leverage configuration is applied BEFORE any order (Binance default is 20x)
+        # This must happen for both opening and closing positions
+        if summary.meta is None:
+            summary.meta = {}
+        leverage_applied = summary.meta.get("leverage_applied", False)
+        if not leverage_applied:
+            try:
+                self.client.adjust_leverage(summary.symbol, summary.leverage)
+                summary.meta["leverage_applied"] = True
+                self._save_to_redis(summary.id, summary)
+                logger.info(
+                    f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
+                )
+        
+        # Get current position from Binance to ensure accurate size for closing
+        current_position = self.client.get_open_position(summary.symbol)
         current_side = summary.position_side
         current_size = float(summary.position_size or 0)
+        
+        # If Binance has a position, use that size (more accurate than our tracking)
+        if current_position and abs(float(current_position["positionAmt"])) > 0:
+            position_amt = float(current_position["positionAmt"])
+            current_size = abs(position_amt)
+            current_side = "LONG" if position_amt > 0 else "SHORT"
+        
         is_closing_long = current_side == "LONG" and current_size > 0 and signal.action == "SELL"
         is_closing_short = current_side == "SHORT" and current_size > 0 and signal.action == "BUY"
         force_close_quantity = None
@@ -389,23 +417,11 @@ class StrategyRunner:
                     notional=force_close_quantity * price,
                 )
                 reduce_only_override = True
+                logger.info(
+                    f"[{summary.id}] Closing entire position: {current_side} {current_size} {summary.symbol} "
+                    f"(reduce_only=True)"
+                )
             else:
-                # Ensure leverage configuration is applied before placing orders (Binance default is 20x)
-                if summary.meta is None:
-                    summary.meta = {}
-                leverage_applied = summary.meta.get("leverage_applied", False)
-                if not leverage_applied:
-                    try:
-                        self.client.adjust_leverage(summary.symbol, summary.leverage)
-                        summary.meta["leverage_applied"] = True
-                        self._save_to_redis(summary.id, summary)
-                        logger.info(
-                            f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
-                        )
                 sizing = self.risk.size_position(
                     symbol=signal.symbol, 
                     risk_per_trade=summary.risk_per_trade, 

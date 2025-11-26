@@ -447,6 +447,56 @@ class TestStrategyRunnerOrderExecution:
             assert strategy_summary.meta.get("leverage_applied") is True
 
     @pytest.mark.asyncio
+    async def test_leverage_applied_when_closing_position(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+        mock_order_response
+    ):
+        """Ensure leverage is applied even when closing a position (not just opening)."""
+        # Reset meta to ensure leverage not yet applied
+        strategy_summary.meta = {}
+        strategy_summary.position_size = 0.5
+        strategy_summary.position_side = "LONG"
+        
+        # Mock Binance position
+        mock_binance_client.get_open_position.return_value = {
+            "positionAmt": "0.5",
+            "entryPrice": "39000.0",
+            "unRealizedProfit": "500.0"
+        }
+        
+        mock_order_response.side = "SELL"
+        mock_binance_client.place_order.return_value = mock_order_response
+
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+
+        signal = StrategySignal(
+            action="SELL",
+            symbol="BTCUSDT",
+            confidence=0.85,
+            price=40000.0,
+        )
+
+        await runner._execute(signal, strategy_summary)
+
+        # Leverage should be applied even when closing
+        mock_binance_client.adjust_leverage.assert_called_once_with("BTCUSDT", 5)
+        assert strategy_summary.meta.get("leverage_applied") is True
+        # Verify order was placed with reduce_only
+        mock_binance_client.place_order.assert_called_once()
+        call_args = mock_binance_client.place_order.call_args
+        assert call_args.kwargs["reduce_only"] is True
+        assert call_args.kwargs["quantity"] == 0.5  # Exact position size
+
+    @pytest.mark.asyncio
     async def test_leverage_not_reapplied_when_already_set(
         self,
         mock_binance_client,
