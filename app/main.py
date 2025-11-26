@@ -109,13 +109,6 @@ def create_app() -> FastAPI:
         for task in app.state.background_tasks:
             task.cancel()
 
-    # Include API routers
-    app.include_router(health_router)
-    app.include_router(strategies_router)
-    app.include_router(logs_router)
-    app.include_router(trades_router)
-    app.include_router(strategy_performance_router)
-    
     # Serve static files (GUI)
     static_dir = Path(__file__).parent / "static"
     static_dir.mkdir(exist_ok=True)
@@ -128,6 +121,7 @@ def create_app() -> FastAPI:
         except Exception:
             pass  # Ignore if mount fails
     
+    # Register GUI routes BEFORE API routers to ensure they take precedence
     # Serve index.html at root - register this route explicitly
     @app.get("/", tags=["gui"])
     async def root():
@@ -166,10 +160,9 @@ def create_app() -> FastAPI:
             }
         )
     
-    # Serve trades.html for Trade & PnL Viewer
-    @app.get("/trades", tags=["gui"])
-    async def trades_gui():
-        """Serve the Trade & PnL Viewer GUI."""
+    # Helper function to serve trades GUI
+    async def _serve_trades_gui():
+        """Helper function to serve the Trade & PnL Viewer GUI."""
         trades_path = static_dir / "trades.html"
         abs_trades_path = trades_path.resolve()
         abs_static_dir = static_dir.resolve()
@@ -201,10 +194,20 @@ def create_app() -> FastAPI:
             }
         )
     
+    # Serve trades.html for Trade & PnL Viewer
+    @app.get("/trades", tags=["gui"], include_in_schema=False)
+    async def trades_gui():
+        """Serve the Trade & PnL Viewer GUI (without trailing slash)."""
+        return await _serve_trades_gui()
+    
+    @app.get("/trades/", tags=["gui"], include_in_schema=False)
+    async def trades_gui_with_slash():
+        """Serve the Trade & PnL Viewer GUI (with trailing slash)."""
+        return await _serve_trades_gui()
+    
     # Serve strategies.html for Strategy Performance Viewer
-    @app.get("/strategies", tags=["gui"])
-    async def strategies_gui():
-        """Serve the Strategy Performance & Ranking GUI."""
+    async def _serve_strategies_gui():
+        """Helper function to serve the Strategy Performance GUI."""
         strategies_path = static_dir / "strategies.html"
         abs_strategies_path = strategies_path.resolve()
         abs_static_dir = static_dir.resolve()
@@ -235,6 +238,24 @@ def create_app() -> FastAPI:
                 "static_dir_exists": abs_static_dir.exists(),
             }
         )
+    
+    @app.get("/strategies", tags=["gui"], include_in_schema=False)
+    async def strategies_gui():
+        """Serve the Strategy Performance & Ranking GUI (without trailing slash)."""
+        return await _serve_strategies_gui()
+    
+    @app.get("/strategies/", tags=["gui"], include_in_schema=False)
+    async def strategies_gui_with_slash():
+        """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
+        return await _serve_strategies_gui()
+    
+    # Include API routers AFTER GUI routes to avoid conflicts
+    # Note: The API endpoint /strategies/ will still work, but GUI routes take precedence
+    app.include_router(health_router)
+    app.include_router(strategies_router)
+    app.include_router(logs_router)
+    app.include_router(trades_router)
+    app.include_router(strategy_performance_router)
     
     return app
 
