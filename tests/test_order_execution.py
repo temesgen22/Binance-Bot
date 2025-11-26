@@ -379,13 +379,15 @@ class TestStrategyRunnerOrderExecution:
     
     @pytest.mark.asyncio
     async def test_position_sizing_failure_handled(
-        self, 
-        mock_binance_client, 
-        risk_manager, 
+        self,
+        mock_binance_client,
+        risk_manager,
         order_executor,
         strategy_summary
     ):
         """Test that position sizing failures are handled gracefully."""
+        from app.core.exceptions import PositionSizingError
+        
         # Mock position sizing to raise ValueError (e.g., minimum notional)
         with patch.object(risk_manager, 'size_position', side_effect=ValueError("Notional too small")):
             runner = StrategyRunner(
@@ -402,8 +404,9 @@ class TestStrategyRunnerOrderExecution:
                 price=40000.0
             )
             
-            # Should not raise exception, but handle gracefully
-            await runner._execute(signal, strategy_summary)
+            # Should raise PositionSizingError (converted from ValueError)
+            with pytest.raises(PositionSizingError, match="Notional too small"):
+                await runner._execute(signal, strategy_summary)
             
             # Verify no order was placed
             mock_binance_client.place_order.assert_not_called()

@@ -1,12 +1,36 @@
 """Test cases for the log viewer GUI and API endpoints."""
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.api.routes.logs import parse_log_line, filter_logs, LogEntry
+
+
+def setup_mock_file(mock_file_func, content: str):
+    """Helper function to setup mock file for reading lines.
+    
+    The file is opened with 'with open(...) as f:' and then iterated with 'for line in f:'.
+    We need to make the mock file object iterable.
+    """
+    lines = content.splitlines(keepends=False)  # Split into lines without newlines
+    if not lines:  # Handle empty content
+        lines = ['']
+    
+    # Create a mock that acts like a file object with context manager support
+    mock_file_obj = MagicMock()
+    
+    # Make it iterable - when iter() is called, return an iterator over lines
+    mock_file_obj.__iter__ = MagicMock(return_value=iter(lines))
+    # Support context manager protocol
+    mock_file_obj.__enter__ = MagicMock(return_value=mock_file_obj)
+    mock_file_obj.__exit__ = MagicMock(return_value=False)
+    
+    # When open() is called, return our mock file object
+    mock_file_func.return_value = mock_file_obj
+    return mock_file_obj
 
 
 class TestLogParsing:
@@ -233,11 +257,11 @@ class TestLogAPIEndpoints:
 """
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_endpoint(self, mock_file, mock_read_files, client, sample_log_content):
         """Test the GET /logs/ endpoint returns log entries."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/")
         
@@ -249,11 +273,11 @@ class TestLogAPIEndpoints:
         assert len(data["entries"]) == 4
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_symbol_filter(self, mock_file, mock_read_files, client, sample_log_content):
         """Test filtering logs by symbol."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?symbol=BTCUSDT")
         
@@ -263,11 +287,11 @@ class TestLogAPIEndpoints:
         assert all("BTCUSDT" in entry["message"].upper() for entry in data["entries"])
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_level_filter(self, mock_file, mock_read_files, client, sample_log_content):
         """Test filtering logs by level."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?level=ERROR")
         
@@ -277,11 +301,11 @@ class TestLogAPIEndpoints:
         assert data["entries"][0]["level"] == "ERROR"
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_date_filter(self, mock_file, mock_read_files, client, sample_log_content):
         """Test filtering logs by date."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?date_from=2025-11-25")
         
@@ -291,11 +315,11 @@ class TestLogAPIEndpoints:
         assert data["entries"][0]["timestamp"].startswith("2025-11-25")
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_limit(self, mock_file, mock_read_files, client, sample_log_content):
         """Test limiting the number of log entries returned."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?limit=2")
         
@@ -304,11 +328,11 @@ class TestLogAPIEndpoints:
         assert len(data["entries"]) == 2
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_search_text(self, mock_file, mock_read_files, client, sample_log_content):
         """Test searching logs by text."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?search_text=order")
         
@@ -330,11 +354,11 @@ class TestLogAPIEndpoints:
         assert data["filtered_count"] == 0
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_module_filter(self, mock_file, mock_read_files, client, sample_log_content):
         """Test filtering logs by module."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?module=strategy_runner")
         
@@ -343,11 +367,11 @@ class TestLogAPIEndpoints:
         assert all("strategy_runner" in entry["module"] for entry in data["entries"])
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_with_function_filter(self, mock_file, mock_read_files, client, sample_log_content):
         """Test filtering logs by function."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/?function=_execute")
         
@@ -356,11 +380,11 @@ class TestLogAPIEndpoints:
         assert all(entry["function"] == "_execute" for entry in data["entries"])
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_reverse_order(self, mock_file, mock_read_files, client, sample_log_content):
         """Test that logs are returned in reverse chronological order by default."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/")
         
@@ -371,11 +395,11 @@ class TestLogAPIEndpoints:
         assert timestamps == sorted(timestamps, reverse=True)
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_symbols_endpoint(self, mock_file, mock_read_files, client, sample_log_content):
         """Test the GET /logs/symbols endpoint."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/symbols")
         
@@ -386,11 +410,11 @@ class TestLogAPIEndpoints:
         assert "ETHUSDT" in symbols
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_get_logs_stats_endpoint(self, mock_file, mock_read_files, client, sample_log_content):
         """Test the GET /logs/stats endpoint."""
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = sample_log_content.splitlines()
+        setup_mock_file(mock_file, sample_log_content)
         
         response = client.get("/logs/stats")
         
@@ -448,7 +472,7 @@ class TestLogViewerIntegration:
         return TestClient(test_app)
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_full_filter_workflow(self, mock_file, mock_read_files, client):
         """Test a complete filtering workflow with multiple filters."""
         log_content = """2025-11-24 01:00:00 | INFO     | app.services.strategy_runner:_execute:100 | Order BUY placed for BTCUSDT at 42000
@@ -457,7 +481,7 @@ class TestLogViewerIntegration:
 2025-11-25 01:00:00 | INFO     | app.services.strategy_runner:_execute:150 | Order SELL placed for BTCUSDT at 42500
 """
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = log_content.splitlines()
+        setup_mock_file(mock_file, log_content)
         
         # Test: Filter by symbol, level, and date
         response = client.get("/logs/?symbol=BTCUSDT&level=INFO&date_from=2025-11-24&limit=10")
@@ -469,7 +493,7 @@ class TestLogViewerIntegration:
         assert all(entry["level"] == "INFO" for entry in data["entries"])
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_symbol_extraction(self, mock_file, mock_read_files, client):
         """Test that symbols are correctly extracted from log messages."""
         log_content = """2025-11-24 01:00:00 | INFO | app.services.strategy_runner:_execute:100 | Trading BTCUSDT
@@ -477,7 +501,7 @@ class TestLogViewerIntegration:
 2025-11-24 03:00:00 | INFO | app.services.strategy_runner:_execute:100 | Trading BNBUSDT
 """
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = log_content.splitlines()
+        setup_mock_file(mock_file, log_content)
         
         response = client.get("/logs/symbols")
         
@@ -488,7 +512,7 @@ class TestLogViewerIntegration:
         assert "BNBUSDT" in symbols
 
     @patch("app.api.routes.logs.read_log_files")
-    @patch("builtins.open", new_callable=mock_open)
+    @patch("builtins.open")
     def test_statistics_calculation(self, mock_file, mock_read_files, client):
         """Test that statistics are correctly calculated."""
         log_content = """2025-11-24 01:00:00 | INFO     | app.services.strategy_runner:_execute:100 | Message 1
@@ -497,7 +521,7 @@ class TestLogViewerIntegration:
 2025-11-24 04:00:00 | INFO     | app.services.strategy_runner:_run_loop:150 | Message 4
 """
         mock_read_files.return_value = ["logs/bot.log"]
-        mock_file.return_value.__iter__.return_value = log_content.splitlines()
+        setup_mock_file(mock_file, log_content)
         
         response = client.get("/logs/stats")
         
