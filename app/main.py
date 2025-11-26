@@ -10,7 +10,11 @@ from fastapi.responses import FileResponse
 
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import health, strategies, logs, trades, strategy_performance
+from app.api.routes.health import router as health_router
+from app.api.routes.strategies import router as strategies_router
+from app.api.routes.logs import router as logs_router
+from app.api.routes.trades import router as trades_router
+from app.api.routes.strategy_performance import router as strategy_performance_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -106,11 +110,11 @@ def create_app() -> FastAPI:
             task.cancel()
 
     # Include API routers
-    app.include_router(health.router)
-    app.include_router(strategies.router)
-    app.include_router(logs.router)
-    app.include_router(trades.router)
-    app.include_router(strategy_performance.router)
+    app.include_router(health_router)
+    app.include_router(strategies_router)
+    app.include_router(logs_router)
+    app.include_router(trades_router)
+    app.include_router(strategy_performance_router)
     
     # Serve static files (GUI)
     static_dir = Path(__file__).parent / "static"
