@@ -10,7 +10,7 @@ from loguru import logger
 from app.core.my_binance_client import BinanceClient
 from app.models.order import OrderResponse
 from app.core.redis_storage import RedisStorage
-from app.risk.manager import RiskManager
+from app.risk.manager import RiskManager, PositionSizingResult
 from app.models.strategy import CreateStrategyRequest, StrategyState, StrategySummary, StrategyType, StrategyStats, OverallStats
 from app.services.order_executor import OrderExecutor
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
@@ -373,36 +373,56 @@ class StrategyRunner:
         if signal.action == "HOLD":
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
             return
+        current_side = summary.position_side
+        current_size = float(summary.position_size or 0)
+        is_closing_long = current_side == "LONG" and current_size > 0 and signal.action == "SELL"
+        is_closing_short = current_side == "SHORT" and current_size > 0 and signal.action == "BUY"
+        force_close_quantity = None
+        reduce_only_override: bool | None = None
+
         try:
-            # Ensure leverage configuration is applied before placing orders (Binance default is 20x)
-            if summary.meta is None:
-                summary.meta = {}
-            leverage_applied = summary.meta.get("leverage_applied", False)
-            if not leverage_applied:
-                try:
-                    self.client.adjust_leverage(summary.symbol, summary.leverage)
-                    summary.meta["leverage_applied"] = True
-                    self._save_to_redis(summary.id, summary)
-                    logger.info(
-                        f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
-                    )
-            sizing = self.risk.size_position(
-                symbol=signal.symbol, 
-                risk_per_trade=summary.risk_per_trade, 
-                price=signal.price or self.client.get_price(signal.symbol),
-                fixed_amount=summary.fixed_amount
-            )
+            if is_closing_long or is_closing_short:
+                price = signal.price or self.client.get_price(signal.symbol)
+                force_close_quantity = current_size
+                sizing = PositionSizingResult(
+                    quantity=force_close_quantity,
+                    notional=force_close_quantity * price,
+                )
+                reduce_only_override = True
+            else:
+                # Ensure leverage configuration is applied before placing orders (Binance default is 20x)
+                if summary.meta is None:
+                    summary.meta = {}
+                leverage_applied = summary.meta.get("leverage_applied", False)
+                if not leverage_applied:
+                    try:
+                        self.client.adjust_leverage(summary.symbol, summary.leverage)
+                        summary.meta["leverage_applied"] = True
+                        self._save_to_redis(summary.id, summary)
+                        logger.info(
+                            f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
+                        )
+                sizing = self.risk.size_position(
+                    symbol=signal.symbol, 
+                    risk_per_trade=summary.risk_per_trade, 
+                    price=signal.price or self.client.get_price(signal.symbol),
+                    fixed_amount=summary.fixed_amount
+                )
         except ValueError as exc:
             # Handle minimum notional errors gracefully
             logger.error(f"[{summary.id}] Position sizing failed: {exc}")
             logger.error(f"[{summary.id}] Strategy will skip this signal. Please update strategy configuration.")
             return
         
-        order_response = self.executor.execute(signal=signal, sizing=sizing)
+        order_response = self.executor.execute(
+            signal=signal,
+            sizing=sizing,
+            reduce_only_override=reduce_only_override,
+        )
         if order_response:
             # Track the executed trade
             if summary.id not in self._trades:
@@ -412,14 +432,27 @@ class StrategyRunner:
             
             # Update entry price and position size
             if order_response.side == "BUY":
-                summary.entry_price = order_response.avg_price or order_response.price
-                summary.position_size = order_response.executed_qty
+                if summary.position_side == "SHORT":
+                    remaining = max(0.0, (summary.position_size or 0.0) - order_response.executed_qty)
+                    summary.position_size = remaining
+                    if remaining == 0:
+                        summary.entry_price = None
+                        summary.position_side = None
+                else:
+                    summary.entry_price = order_response.avg_price or order_response.price
+                    summary.position_size = order_response.executed_qty
+                    summary.position_side = "LONG"
             elif order_response.side == "SELL":
-                # Position closed or reduced
-                if summary.position_size:
-                    summary.position_size = max(0, summary.position_size - order_response.executed_qty)
-                    if summary.position_size == 0:
-                        summary.entry_price = None  # Position fully closed
+                if summary.position_side == "LONG":
+                    remaining = max(0.0, (summary.position_size or 0.0) - order_response.executed_qty)
+                    summary.position_size = remaining
+                    if remaining == 0:
+                        summary.entry_price = None
+                        summary.position_side = None
+                else:
+                    summary.entry_price = order_response.avg_price or order_response.price
+                    summary.position_size = order_response.executed_qty
+                    summary.position_side = "SHORT"
             
             logger.info(
                 f"Trade executed for strategy {summary.id}: "
@@ -433,17 +466,20 @@ class StrategyRunner:
             # Get current position from Binance
             position = self.client.get_open_position(summary.symbol)
             
-            if position and abs(position["positionAmt"]) > 0:
+            if position and abs(float(position["positionAmt"])) > 0:
                 # Update position info from Binance
-                summary.position_size = abs(position["positionAmt"])
-                summary.entry_price = position["entryPrice"]
-                summary.unrealized_pnl = position["unRealizedProfit"]
+                position_amt = float(position["positionAmt"])
+                summary.position_size = abs(position_amt)
+                summary.entry_price = float(position["entryPrice"])
+                summary.unrealized_pnl = float(position["unRealizedProfit"])
+                summary.position_side = "LONG" if position_amt > 0 else "SHORT"
             else:
                 # No open position
                 if summary.position_size != 0:  # Position was closed
                     summary.entry_price = None
                     summary.position_size = 0
                     summary.unrealized_pnl = 0
+                    summary.position_side = None
         except Exception as exc:
             logger.debug(f"Failed to update position info for {summary.symbol}: {exc}")
             # Calculate unrealized PnL manually if we have entry price and current price

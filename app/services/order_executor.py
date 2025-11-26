@@ -17,6 +17,7 @@ class OrderExecutor:
         *,
         signal: StrategySignal,
         sizing: PositionSizingResult,
+        reduce_only_override: bool | None = None,
     ) -> OrderResponse | None:
         if signal.action == "HOLD":
             logger.info(f"HOLD signal for {signal.symbol}, skipping order")
@@ -36,6 +37,8 @@ class OrderExecutor:
         
         side = "BUY" if signal.action == "BUY" else "SELL"
         reduce_only = signal.action == "CLOSE"
+        if reduce_only_override is not None:
+            reduce_only = reduce_only_override
         return self.client.place_order(
             symbol=signal.symbol,
             side=side,

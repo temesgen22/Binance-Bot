@@ -71,6 +71,7 @@ class StrategySummary(BaseModel):
     entry_price: Optional[float] = None  # Price when position was opened
     current_price: Optional[float] = None  # Latest market price
     position_size: Optional[float] = None  # Current position quantity (0 if no position)
+    position_side: Optional[Literal["LONG", "SHORT"]] = None  # Track current position direction
     unrealized_pnl: Optional[float] = None  # Current unrealized profit/loss
     meta: Dict[str, Any] = Field(default_factory=dict)
 

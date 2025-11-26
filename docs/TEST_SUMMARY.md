@@ -1,6 +1,6 @@
 # Test Summary for Binance Bot
 
-_Latest run: `pytest` (entire `tests/` suite) • **88 tests passed** • 9 deprecation warnings (FastAPI startup/shutdown hooks, python-binance websockets, pydantic config)._
+_Latest run: `pytest` (entire `tests/` suite) • **89 tests passed** • 9 deprecation warnings (FastAPI startup/shutdown hooks, python-binance websockets, pydantic config)._
 
 ---
 
@@ -11,14 +11,14 @@ _Latest run: `pytest` (entire `tests/` suite) • **88 tests passed** • 9 depr
 | `tests/test_critical_functions.py` (19 tests) | Unit coverage for EMA math, crossover detection, state, TP/SL, filters | ✅ Passed |
 | `tests/test_strategy_scalping.py` (24 tests) | Strategy behavior, signals, filter gating, cooldown, integration | ✅ Passed |
 | `tests/test_strategy_integration.py` (10 tests) | Long/short trade flows, exits via TP/SL, death/golden cross exits, realistic BTC candles | ✅ Passed |
-| `tests/test_order_execution.py` (13 tests) | Order executor + runner: leverage application, sizing, failure handling | ✅ Passed |
+| `tests/test_order_execution.py` (14 tests) | Order executor + runner: leverage application, sizing, closing full positions, failure handling | ✅ Passed |
 | `tests/test_parameter_contracts.py` (8 tests) | **NEW** strict parameter contract checks (min separation, HTF bias, trailing stop, enable_short, risk sizing) | ✅ Passed |
 | `tests/test_trailing_stop.py` (13 tests) | Trailing stop manager behavior for long/short, activation thresholds | ✅ Passed |
 | `tests/test_health.py` (1 test) | `/health` endpoint | ✅ Passed |
 | `tests/test_strategy_runner.py` (1 test) | Runner registration/start lifecycle, leverage guardrails | ✅ Passed |
 | `tests/test_logging.py` (1 test) | Log file creation and message persistence | ✅ Passed |
 
-_Total: 88 passing tests across 9 suites._
+_Total: 89 passing tests across 9 suites._
 
 ---
 
@@ -33,7 +33,7 @@ _Total: 88 passing tests across 9 suites._
 - Long/short TP & SL math checked (including inverted logic for shorts).
 - Cooldown, min EMA separation, and higher-timeframe bias filters block entries until thresholds are satisfied.
 - New parameter-contract tests assert `enable_short`, `min_ema_separation`, `cooldown_candles`, `kline_interval`, and trailing-stop settings behave exactly as configured.
-- `RiskManager` now explicitly tested for both `fixed_amount` and `risk_per_trade` sizing paths.
+- `RiskManager` now explicitly tested for both `fixed_amount` and `risk_per_trade` sizing paths, and the runner is covered for closing an entire open position without re-sizing.
 
 ### Order Execution & Leverage
 - `StrategyRunner` tests confirm leverage is applied via `adjust_leverage()` before the first order and not re-applied afterward.

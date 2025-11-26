@@ -259,6 +259,7 @@ class TestStrategyRunnerOrderExecution:
         """Test that SELL signals execute orders."""
         # Set up existing position
         strategy_summary.position_size = 0.001
+        strategy_summary.position_side = "LONG"
         strategy_summary.entry_price = 39000.0
         
         mock_order_response.side = "SELL"
@@ -288,6 +289,55 @@ class TestStrategyRunnerOrderExecution:
             # Position should be reduced
             assert strategy_summary.position_size == 0.0
             assert strategy_summary.entry_price is None
+
+    @pytest.mark.asyncio
+    async def test_sell_signal_closes_entire_position_without_risk_sizing(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+        mock_order_response,
+    ):
+        """SELL while long should close the full position without re-sizing."""
+        strategy_summary.position_size = 0.5
+        strategy_summary.position_side = "LONG"
+        strategy_summary.entry_price = 30000.0
+        mock_order_response.side = "SELL"
+        mock_order_response.executed_qty = 0.5
+
+        runner = StrategyRunner(
+            client=mock_binance_client,
+            risk=risk_manager,
+            executor=order_executor,
+            max_concurrent=3,
+        )
+
+        signal = StrategySignal(
+            action="SELL",
+            symbol="BTCUSDT",
+            confidence=0.85,
+            price=31000.0,
+        )
+
+        with patch.object(
+            risk_manager,
+            "size_position",
+            side_effect=AssertionError("size_position should not be called when closing"),
+        ):
+            mock_binance_client.place_order.return_value = mock_order_response
+            await runner._execute(signal, strategy_summary)
+
+        mock_binance_client.place_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=0.5,
+            order_type="MARKET",
+            reduce_only=True,
+        )
+        assert strategy_summary.position_size == 0
+        assert strategy_summary.position_side is None
+        assert strategy_summary.entry_price is None
     
     @pytest.mark.asyncio
     async def test_order_execution_failure_handled(
@@ -497,6 +547,7 @@ class TestOrderExecutionIntegration:
         """Test complete flow for SELL order execution."""
         # Set up existing position
         strategy_summary.position_size = 0.001
+        strategy_summary.position_side = "LONG"
         strategy_summary.entry_price = 39000.0
         
         mock_order_response.side = "SELL"
