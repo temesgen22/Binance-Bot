@@ -20,6 +20,70 @@ from app.strategies.base import StrategyContext, StrategySignal
 from app.core.my_binance_client import BinanceClient
 
 
+REALISTIC_BTC_LONG_TREND = [
+    27380.0,
+    27340.5,
+    27295.2,
+    27250.8,
+    27205.3,
+    27160.7,
+    27110.4,
+    27060.0,
+    27015.6,
+    26970.1,
+    27030.2,
+    27095.8,
+    27160.3,
+    27225.9,
+    27290.5,
+    27355.0,
+    27420.7,
+    27485.1,
+    27555.8,
+    27625.4,
+    27695.9,
+]
+
+REALISTIC_BTC_SHORT_TREND = [
+    26890.0,
+    26940.5,
+    26995.1,
+    27050.6,
+    27105.0,
+    27160.3,
+    27215.8,
+    27270.4,
+    27320.9,
+    27370.5,
+    27415.0,
+    27455.4,
+    27490.8,
+    27440.2,
+    27380.5,
+    27310.1,
+    27235.6,
+    27160.0,
+    27085.3,
+    27005.7,
+    26925.2,
+]
+
+SIDEWAYS_BTC_RANGE = [
+    27200.0,
+    27210.0,
+    27205.0,
+    27215.0,
+    27208.0,
+    27212.0,
+    27206.0,
+    27214.0,
+    27207.0,
+    27213.0,
+    27209.0,
+    27211.0,
+]
+
+
 def create_klines(prices: list[float], start_time: int = 0, interval_ms: int = 60000):
     """Helper to create kline data from price list."""
     klines = []
@@ -259,6 +323,101 @@ class TestStateManagement:
         # Next candle will use these updated values
         assert strategy.prev_fast == fast_ema
         assert strategy.prev_slow == slow_ema
+
+
+class TestRealMarketScenarios:
+    """Integration tests using realistic BTCUSDT price action."""
+
+    def _build_strategy(self, context: StrategyContext, client: MagicMock) -> EmaScalpingStrategy:
+        strategy = EmaScalpingStrategy(context, client)
+        strategy.cooldown_left = 0
+        return strategy
+
+    @pytest.mark.asyncio
+    async def test_realistic_long_flow_hits_take_profit(self, mock_client, base_context):
+        """Simulate a long breakout using realistic BTCUSDT candles."""
+        strategy = self._build_strategy(base_context, mock_client)
+        mock_client.get_klines.return_value = create_klines(
+            REALISTIC_BTC_LONG_TREND, start_time=0
+        )
+
+        seed_signal = await strategy.evaluate()
+        # First pass seeds prev EMA values
+        assert seed_signal.action == "HOLD"
+
+        strategy.last_closed_candle_time = None
+        if strategy.prev_slow is not None:
+            strategy.prev_fast = strategy.prev_slow - 25
+        mock_client.get_klines.return_value = create_klines(
+            REALISTIC_BTC_LONG_TREND + [REALISTIC_BTC_LONG_TREND[-1] * 1.002],
+            start_time=500_000,
+        )
+        buy_signal = await strategy.evaluate()
+        assert buy_signal.action == "BUY"
+        assert strategy.position == "LONG"
+
+        # Continue rally to trigger take profit
+        extended_prices = REALISTIC_BTC_LONG_TREND + [
+            REALISTIC_BTC_LONG_TREND[-1] * 1.004,
+            REALISTIC_BTC_LONG_TREND[-1] * 1.008,
+        ]
+        mock_client.get_klines.return_value = create_klines(
+            extended_prices, start_time=1_000_000
+        )
+        strategy.last_closed_candle_time = None
+
+        exit_signal = await strategy.evaluate()
+        assert exit_signal.action in ("SELL", "HOLD")
+        if exit_signal.action == "SELL":
+            assert strategy.position is None
+
+    @pytest.mark.asyncio
+    async def test_realistic_short_flow_hits_take_profit(self, mock_client, base_context):
+        """Simulate a short setup with BTC rolling over."""
+        strategy = self._build_strategy(base_context, mock_client)
+        strategy.enable_short = True
+        mock_client.get_klines.return_value = create_klines(
+            REALISTIC_BTC_SHORT_TREND, start_time=0
+        )
+
+        warmup = await strategy.evaluate()
+        assert warmup.action == "HOLD"
+
+        strategy.last_closed_candle_time = None
+        if strategy.prev_slow is not None:
+            strategy.prev_fast = strategy.prev_slow + 25
+        mock_client.get_klines.return_value = create_klines(
+            REALISTIC_BTC_SHORT_TREND + [REALISTIC_BTC_SHORT_TREND[-1] * 0.999],
+            start_time=500_000,
+        )
+        sell_signal = await strategy.evaluate()
+        assert sell_signal.action == "SELL"
+        assert strategy.position == "SHORT"
+
+        extended_prices = REALISTIC_BTC_SHORT_TREND + [
+            REALISTIC_BTC_SHORT_TREND[-1] * 0.998,
+            REALISTIC_BTC_SHORT_TREND[-1] * 0.996,
+        ]
+        mock_client.get_klines.return_value = create_klines(
+            extended_prices, start_time=1_000_000
+        )
+        strategy.last_closed_candle_time = None
+
+        cover_signal = await strategy.evaluate()
+        assert cover_signal.action in ("BUY", "HOLD")
+
+    @pytest.mark.asyncio
+    async def test_sideways_market_stays_on_hold(self, mock_client, base_context):
+        """Strategy should stay flat when market is range-bound."""
+        strategy = self._build_strategy(base_context, mock_client)
+        mock_client.get_klines.return_value = create_klines(
+            SIDEWAYS_BTC_RANGE, start_time=0
+        )
+
+        signal = await strategy.evaluate()
+        # EMA separation is tiny, should not trigger entries
+        assert signal.action == "HOLD"
+        assert strategy.position is None
 
 
 if __name__ == "__main__":

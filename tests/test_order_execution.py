@@ -28,6 +28,7 @@ def mock_binance_client():
     client.get_price = MagicMock(return_value=40000.0)
     client.get_klines = MagicMock(return_value=[])
     client.get_open_position = MagicMock(return_value=None)
+    client.adjust_leverage = MagicMock(return_value={"leverage": 5})
     return client
 
 
@@ -356,6 +357,80 @@ class TestStrategyRunnerOrderExecution:
             
             # Verify no order was placed
             mock_binance_client.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_leverage_applied_before_first_trade(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+        mock_order_response
+    ):
+        """Ensure leverage configuration is applied before first trade."""
+        # Reset meta to ensure leverage not yet applied
+        strategy_summary.meta = {}
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.001, notional=40.0),
+        ):
+            mock_binance_client.place_order.return_value = mock_order_response
+
+            runner = StrategyRunner(
+                client=mock_binance_client,
+                risk=risk_manager,
+                executor=order_executor,
+                max_concurrent=3,
+            )
+
+            signal = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+
+            await runner._execute(signal, strategy_summary)
+
+            mock_binance_client.adjust_leverage.assert_called_once_with("BTCUSDT", 5)
+            assert strategy_summary.meta.get("leverage_applied") is True
+
+    @pytest.mark.asyncio
+    async def test_leverage_not_reapplied_when_already_set(
+        self,
+        mock_binance_client,
+        risk_manager,
+        order_executor,
+        strategy_summary,
+        mock_order_response
+    ):
+        """Ensure leverage is only applied once per strategy."""
+        strategy_summary.meta = {"leverage_applied": True}
+        with patch.object(
+            risk_manager,
+            "size_position",
+            return_value=PositionSizingResult(quantity=0.001, notional=40.0),
+        ):
+            mock_binance_client.place_order.return_value = mock_order_response
+
+            runner = StrategyRunner(
+                client=mock_binance_client,
+                risk=risk_manager,
+                executor=order_executor,
+                max_concurrent=3,
+            )
+
+            signal = StrategySignal(
+                action="BUY",
+                symbol="BTCUSDT",
+                confidence=0.75,
+                price=40000.0,
+            )
+
+            await runner._execute(signal, strategy_summary)
+
+            mock_binance_client.adjust_leverage.assert_not_called()
 
 
 class TestOrderExecutionIntegration:

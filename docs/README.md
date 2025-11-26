@@ -13,6 +13,7 @@ This directory contains all project documentation.
 
 - **[CANDLESTICK_DATA_EXAMPLE.md](CANDLESTICK_DATA_EXAMPLE.md)** - Candlestick data structure and examples
 - **[POSITION_CREATION_EXPLANATION.md](POSITION_CREATION_EXPLANATION.md)** - Position creation logic explanation
+- **[EMA_CROSSOVER_EXPLANATION.md](EMA_CROSSOVER_EXPLANATION.md)** - **When orders are created: crossover vs. just being above**
 - **[VIEW_LOGS.md](VIEW_LOGS.md)** - Logging guide
 - **[TEST_SUMMARY.md](TEST_SUMMARY.md)** - Test coverage summary
 

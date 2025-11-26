@@ -19,6 +19,26 @@ from app.strategies.base import StrategyContext, StrategySignal
 from app.core.my_binance_client import BinanceClient
 
 
+def build_dummy_klines(count: int, start_price: float = 100.0) -> list[list[float]]:
+    """Create deterministic klines for testing."""
+    klines = []
+    for idx in range(count):
+        price = start_price + idx * 0.1
+        open_time = idx * 60000
+        close_time = open_time + 60000
+        klines.append([
+            open_time,            # open_time
+            price,                # open
+            price + 0.5,          # high
+            price - 0.5,          # low
+            price,                # close
+            100.0,                # volume
+            close_time,           # close_time
+            0, 0, 0, 0, 0        # placeholders
+        ])
+    return klines
+
+
 @pytest.fixture
 def mock_client():
     """Create a mock BinanceClient."""
@@ -54,9 +74,108 @@ def strategy_context():
 
 
 @pytest.fixture
+def full_config_context():
+    """Strategy context representing full user configuration."""
+    return StrategyContext(
+        id="full-config-1",
+        name="Full Config Strategy",
+        symbol="BTCUSDT",
+        leverage=5,
+        risk_per_trade=0.01,
+        params={
+            "ema_fast": 8,
+            "ema_slow": 21,
+            "take_profit_pct": 0.004,
+            "stop_loss_pct": 0.002,
+            "interval_seconds": 10,
+            "kline_interval": "1m",
+            "enable_short": True,
+            "min_ema_separation": 0.0002,
+            "enable_htf_bias": True,
+            "cooldown_candles": 2,
+            "trailing_stop_enabled": False,
+            "trailing_stop_activation_pct": 0.0,
+        },
+        interval_seconds=10,
+    )
+
+
+@pytest.fixture
 def strategy(mock_client, strategy_context):
     """Create an EmaScalpingStrategy instance."""
     return EmaScalpingStrategy(strategy_context, mock_client)
+
+
+class TestConfigurationMapping:
+    """Tests to ensure configuration parameters are honored."""
+
+    def test_strategy_initializes_from_full_configuration(self, mock_client, full_config_context):
+        strategy = EmaScalpingStrategy(full_config_context, mock_client)
+
+        assert strategy.fast_period == 8
+        assert strategy.slow_period == 21
+        assert strategy.take_profit_pct == pytest.approx(0.004)
+        assert strategy.stop_loss_pct == pytest.approx(0.002)
+        assert strategy.enable_short is True
+        assert strategy.min_ema_separation == pytest.approx(0.0002)
+        assert strategy.enable_htf_bias is True
+        assert strategy.cooldown_candles == 2
+        assert strategy.interval == "1m"
+        assert strategy.trailing_stop_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_trailing_stop_configuration_passed_to_manager(self, mock_client):
+        params = {
+            "ema_fast": 8,
+            "ema_slow": 21,
+            "take_profit_pct": 0.004,
+            "stop_loss_pct": 0.002,
+            "interval_seconds": 10,
+            "kline_interval": "1m",
+            "enable_short": True,
+            "min_ema_separation": 0.0,
+            "enable_htf_bias": False,
+            "cooldown_candles": 0,
+            "trailing_stop_enabled": True,
+            "trailing_stop_activation_pct": 0.01,
+        }
+        context = StrategyContext(
+            id="trailing-test",
+            name="Trailing Test",
+            symbol="BTCUSDT",
+            leverage=5,
+            risk_per_trade=0.01,
+            params=params,
+            interval_seconds=10,
+        )
+        strategy = EmaScalpingStrategy(context, mock_client)
+        strategy.prev_fast = 1.0
+        strategy.prev_slow = 1.1
+        strategy.position = None
+        strategy.last_closed_candle_time = None
+
+        mock_client.get_klines.return_value = build_dummy_klines(strategy.slow_period + 2, start_price=100.0)
+
+        with patch.object(EmaScalpingStrategy, "_ema", side_effect=[1.2, 1.0]):
+            with patch("app.strategies.scalping.TrailingStopManager") as mock_manager:
+                instance = MagicMock()
+                instance.current_tp = 0.0
+                instance.current_sl = 0.0
+                instance.activation_price = 0.0
+                instance.update.return_value = (0.0, 0.0)
+                instance.check_exit.return_value = None
+                mock_manager.return_value = instance
+
+                signal = await strategy.evaluate()
+
+                assert signal.action == "BUY"
+                mock_manager.assert_called_once()
+                kwargs = mock_manager.call_args.kwargs
+                assert kwargs["activation_pct"] == pytest.approx(0.01)
+                assert kwargs["take_profit_pct"] == pytest.approx(0.004)
+                assert kwargs["stop_loss_pct"] == pytest.approx(0.002)
+                assert kwargs["position_type"] == "LONG"
+                assert strategy.trailing_stop is instance
 
 
 class TestEMACalculation:

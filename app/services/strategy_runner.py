@@ -80,8 +80,7 @@ class StrategyRunner:
         self._strategies[strategy_id] = summary
         self._save_to_redis(strategy_id, summary)
         logger.info(f"Registered strategy {strategy_id} ({payload.strategy_type})")
-        if payload.auto_start:
-            asyncio.create_task(self.start(strategy_id))
+        # auto_start is handled by the API layer to avoid double-starting the same strategy.
         return summary
 
     async def start(self, strategy_id: str) -> StrategySummary:
@@ -375,6 +374,22 @@ class StrategyRunner:
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
             return
         try:
+            # Ensure leverage configuration is applied before placing orders (Binance default is 20x)
+            if summary.meta is None:
+                summary.meta = {}
+            leverage_applied = summary.meta.get("leverage_applied", False)
+            if not leverage_applied:
+                try:
+                    self.client.adjust_leverage(summary.symbol, summary.leverage)
+                    summary.meta["leverage_applied"] = True
+                    self._save_to_redis(summary.id, summary)
+                    logger.info(
+                        f"[{summary.id}] Applied leverage {summary.leverage}x for {summary.symbol}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[{summary.id}] Failed to apply leverage {summary.leverage}x for {summary.symbol}: {exc}"
+                    )
             sizing = self.risk.size_position(
                 symbol=signal.symbol, 
                 risk_per_trade=summary.risk_per_trade, 

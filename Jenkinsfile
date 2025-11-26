@@ -241,11 +241,13 @@ If Jenkins is on a host/server:
 
 
 
-                        # Copy docker-compose file
-                        if [ -f "\$COMPOSE_FILE" ]; then
-                            echo "📦 Copying docker-compose file..."
-                            scp \$SSH_OPTS -P \$SSH_PORT "\$COMPOSE_FILE" \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/
-                        fi
+
+                         echo "📥 Pulling latest code from GitHub..."
+                         ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "
+                              cd \$DEPLOY_PATH
+                              git reset --hard
+                              git pull origin main
+                         "
 
                         # Copy .env.example if .env doesn't exist
                         if [ -f ".env.example" ]; then
