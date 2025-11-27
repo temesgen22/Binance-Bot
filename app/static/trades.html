@@ -683,14 +683,27 @@
 
             try {
                 const response = await fetch(url);
-                if (!response.ok) throw new Error('Failed to load trades');
-                const trades = await response.json();
+                const contentType = response.headers.get('content-type');
                 
+                // Check if response is JSON before parsing
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    console.error('Non-JSON response received:', text.substring(0, 200));
+                    throw new Error(`Expected JSON but received ${contentType || 'unknown type'}. Response: ${text.substring(0, 100)}`);
+                }
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText.substring(0, 200)}`);
+                }
+                
+                const trades = await response.json();
                 displayTrades(trades);
             } catch (error) {
                 console.error('Error loading trades:', error);
+                console.error('Requested URL:', url);
                 document.getElementById('tradesContent').innerHTML = 
-                    `<div class="error">Error loading trades: ${error.message}</div>`;
+                    `<div class="error">Error loading trades: ${error.message}<br><small>URL: ${url}</small></div>`;
             }
         }
 

@@ -194,7 +194,16 @@ def create_app() -> FastAPI:
             }
         )
     
-    # Serve trades.html for Trade & PnL Viewer
+    # Include API routers FIRST to ensure API endpoints take precedence
+    # This ensures /trades/list matches before /trades GUI route
+    app.include_router(health_router)
+    app.include_router(trades_router)  # Must be before /trades GUI route
+    app.include_router(strategies_router)  # Must be before /strategies GUI route
+    app.include_router(logs_router)
+    app.include_router(strategy_performance_router)
+    
+    # GUI routes - registered AFTER API routers
+    # FastAPI matches more specific routes first, so /trades/list will match before /trades
     @app.get("/trades", tags=["gui"], include_in_schema=False)
     async def trades_gui():
         """Serve the Trade & PnL Viewer GUI (without trailing slash)."""
@@ -239,7 +248,7 @@ def create_app() -> FastAPI:
             }
         )
     
-    # GUI routes - registered before routers to take precedence
+    # GUI routes for strategies - registered AFTER API routers
     @app.get("/strategies", tags=["gui"], include_in_schema=False)
     async def strategies_gui():
         """Serve the Strategy Performance & Ranking GUI (without trailing slash)."""
@@ -249,13 +258,6 @@ def create_app() -> FastAPI:
     async def strategies_gui_with_slash():
         """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
         return await _serve_strategies_gui()
-    
-    # Include API routers AFTER GUI routes to avoid conflicts
-    app.include_router(health_router)
-    app.include_router(strategies_router)
-    app.include_router(logs_router)
-    app.include_router(trades_router)
-    app.include_router(strategy_performance_router)
     
     return app
 

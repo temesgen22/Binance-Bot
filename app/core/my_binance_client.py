@@ -523,6 +523,207 @@ class BinanceClient:
         rest = self._ensure()
         logger.info(f"Cancelling open orders for {symbol}")
         return rest.futures_cancel_all_open_orders(symbol=symbol)
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def place_stop_loss_order(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
+        """Place a STOP_MARKET order (stop-loss) on Binance.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            side: "BUY" to close short, "SELL" to close long
+            quantity: Order quantity (ignored if close_position=True)
+            stop_price: Trigger price for stop-loss
+            close_position: If True, closes entire position (quantity ignored)
+            
+        Returns:
+            Order response dict with orderId, etc.
+        """
+        rest = self._ensure()
+        
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP_MARKET",
+            "stopPrice": stop_price,
+            "reduceOnly": True,  # Stop-loss always reduces position
+        }
+        
+        if close_position:
+            params["closePosition"] = True
+        else:
+            rounded_quantity = self.round_quantity(symbol, quantity)
+            params["quantity"] = rounded_quantity
+        
+        logger.info(
+            f"Placing STOP_MARKET order: {side} {symbol} stop_price={stop_price} "
+            f"quantity={params.get('quantity', 'CLOSE_POSITION')}"
+        )
+        
+        try:
+            response = rest.futures_create_order(**params)
+            logger.info(f"STOP_MARKET order placed: orderId={response.get('orderId')}")
+            return response
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to place STOP_MARKET order for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(
+                    error_msg, retry_after=10,
+                    details={"symbol": symbol, "order_type": "STOP_MARKET"}
+                ) from exc
+            else:
+                raise BinanceAPIError(
+                    error_msg, status_code=status_code, error_code=error_code,
+                    details={"symbol": symbol, "order_type": "STOP_MARKET"}
+                ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error placing STOP_MARKET order: {exc}",
+                details={"symbol": symbol}
+            ) from exc
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def place_take_profit_order(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
+        """Place a TAKE_PROFIT_MARKET order on Binance.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            side: "BUY" to close short, "SELL" to close long
+            quantity: Order quantity (ignored if close_position=True)
+            stop_price: Trigger price for take-profit
+            close_position: If True, closes entire position (quantity ignored)
+            
+        Returns:
+            Order response dict with orderId, etc.
+        """
+        rest = self._ensure()
+        
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": stop_price,
+            "reduceOnly": True,  # Take-profit always reduces position
+        }
+        
+        if close_position:
+            params["closePosition"] = True
+        else:
+            rounded_quantity = self.round_quantity(symbol, quantity)
+            params["quantity"] = rounded_quantity
+        
+        logger.info(
+            f"Placing TAKE_PROFIT_MARKET order: {side} {symbol} stop_price={stop_price} "
+            f"quantity={params.get('quantity', 'CLOSE_POSITION')}"
+        )
+        
+        try:
+            response = rest.futures_create_order(**params)
+            logger.info(f"TAKE_PROFIT_MARKET order placed: orderId={response.get('orderId')}")
+            return response
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to place TAKE_PROFIT_MARKET order for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(
+                    error_msg, retry_after=10,
+                    details={"symbol": symbol, "order_type": "TAKE_PROFIT_MARKET"}
+                ) from exc
+            else:
+                raise BinanceAPIError(
+                    error_msg, status_code=status_code, error_code=error_code,
+                    details={"symbol": symbol, "order_type": "TAKE_PROFIT_MARKET"}
+                ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error placing TAKE_PROFIT_MARKET order: {exc}",
+                details={"symbol": symbol}
+            ) from exc
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def cancel_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
+        """Cancel a specific order by order ID.
+        
+        Args:
+            symbol: Trading symbol
+            order_id: Order ID to cancel
+            
+        Returns:
+            Cancellation response dict
+        """
+        rest = self._ensure()
+        logger.info(f"Cancelling order {order_id} for {symbol}")
+        try:
+            return rest.futures_cancel_order(symbol=symbol, orderId=order_id)
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to cancel order {order_id} for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(
+                    error_msg, retry_after=10,
+                    details={"symbol": symbol, "order_id": order_id}
+                ) from exc
+            else:
+                raise BinanceAPIError(
+                    error_msg, status_code=status_code, error_code=error_code,
+                    details={"symbol": symbol, "order_id": order_id}
+                ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error cancelling order: {exc}",
+                details={"symbol": symbol, "order_id": order_id}
+            ) from exc
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_open_orders(self, symbol: str) -> list[Dict[str, Any]]:
+        """Get all open orders for a symbol.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            List of open order dicts
+        """
+        rest = self._ensure()
+        try:
+            return rest.futures_get_open_orders(symbol=symbol)
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to get open orders for {symbol}: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(
+                    error_msg, retry_after=10, details={"symbol": symbol}
+                ) from exc
+            else:
+                raise BinanceAPIError(
+                    error_msg, status_code=status_code, error_code=error_code,
+                    details={"symbol": symbol}
+                ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error getting open orders: {exc}",
+                details={"symbol": symbol}
+            ) from exc
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_open_position(self, symbol: str) -> Optional[Dict[str, Any]]:

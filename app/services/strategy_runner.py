@@ -169,20 +169,28 @@ class StrategyRunner:
             raise StrategyNotFoundError(strategy_id)
         summary = self._strategies[strategy_id]
         
+        # Cancel any open TP/SL orders first
+        try:
+            await self._cancel_tp_sl_orders(summary)
+        except Exception as exc:
+            logger.warning(f"Error cancelling TP/SL orders for strategy {strategy_id}: {exc}")
+        
         # Check for open positions and close them
         try:
             position = self.client.get_open_position(summary.symbol)
             if position:
+                position_side = "LONG" if float(position['positionAmt']) > 0 else "SHORT"
                 logger.info(
-                    f"Closing open position for strategy {strategy_id}: "
+                    f"🔴 MANUAL CLOSE: Closing {position_side} position for strategy {strategy_id}: "
                     f"{position['positionAmt']} {summary.symbol} @ {position['entryPrice']} "
                     f"(Unrealized PnL: {position['unRealizedProfit']:.2f} USDT)"
                 )
                 close_order = self.client.close_position(summary.symbol)
                 if close_order:
                     logger.info(
-                        f"Position closed for strategy {strategy_id}: "
-                        f"{close_order.side} {close_order.symbol} qty={close_order.executed_qty} @ {close_order.avg_price or close_order.price}"
+                        f"[{strategy_id}] 🔴 Position CLOSED (reason: MANUAL/STOP): "
+                        f"{close_order.side} {close_order.symbol} qty={close_order.executed_qty} @ {close_order.avg_price or close_order.price:.8f} "
+                        f"(was {position_side} @ {position['entryPrice']})"
                     )
                     # Track the closing trade
                     if strategy_id not in self._trades:
@@ -448,6 +456,29 @@ class StrategyRunner:
         logger.info(f"Starting loop for {summary.id}")
         try:
             while True:
+                # CRITICAL ORDER: Sync with Binance BEFORE evaluating strategy
+                # This ensures strategy.evaluate() uses correct state, not stale state
+                # 
+                # Flow: Binance → summary → strategy → evaluate → execute
+                # 
+                # 1) First: Sync summary from Binance reality
+                await self._update_position_info(summary)
+                
+                # 2) Then: Sync strategy internal state from summary/Binance
+                # BUG FIX 1: This prevents desync when Binance native TP/SL orders close positions
+                try:
+                    strategy.sync_position_state(
+                        position_side=summary.position_side,
+                        entry_price=summary.entry_price,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[{summary.id}] Failed to sync strategy position state: {exc}. "
+                        f"This may cause strategy state desync."
+                    )
+                
+                # 3) Now evaluate using **correct synced state**
+                # Strategy now knows the real Binance position before making decisions
                 signal = await strategy.evaluate()
                 summary.last_signal = signal.action  # type: ignore[assignment]
                 
@@ -459,15 +490,13 @@ class StrategyRunner:
                     f"Confidence: {signal.confidence}"
                 )
                 
-                # Update current price
+                # 4) Update current price for UI/stats (not critical to logic)
                 try:
                     summary.current_price = self.client.get_price(summary.symbol)
                 except Exception as exc:
                     logger.warning(f"Failed to get current price for {summary.symbol}: {exc}")
                 
-                # Update position info and unrealized PnL
-                await self._update_position_info(summary)
-                
+                # 5) Execute order based on synced state + fresh signal
                 await self._execute(signal, summary)
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
@@ -695,14 +724,17 @@ class StrategyRunner:
                     self._trades[summary.id] = []
                 self._trades[summary.id].append(order_response)
                 
-                # Log trade tracking
+                # Log trade tracking with position direction and exit reason
                 trades_count = len(self._trades[summary.id])
                 redis_status = "enabled" if (self.redis and self.redis.enabled) else "disabled"
+                exit_reason = signal.exit_reason or "N/A"
+                position_direction = summary.position_side or "FLAT"
                 logger.info(
-                    f"[{summary.id}] Tracked trade {order_response.side} {order_response.symbol} "
+                    f"[{summary.id}] 📝 Tracked trade: {order_response.side} {order_response.symbol} "
                     f"order_id={order_response.order_id} status={order_response.status} "
-                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price} "
-                    f"(total trades: {trades_count}, Redis: {redis_status})"
+                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f} "
+                    f"(position: {position_direction}, exit_reason: {exit_reason}, "
+                    f"total trades: {trades_count}, Redis: {redis_status})"
                 )
                 
                 # Optionally save to Redis if enabled (for persistence across server restarts)
@@ -732,12 +764,207 @@ class StrategyRunner:
                     summary.position_size = order_response.executed_qty
                     summary.position_side = "SHORT"
             
-            logger.info(
-                f"Trade executed for strategy {summary.id}: "
-                f"{order_response.side} {order_response.symbol} "
-                f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price}"
+            # Determine position direction and exit reason for logging
+            position_direction = summary.position_side  # Current position before order
+            exit_reason = signal.exit_reason or "UNKNOWN"
+            
+            # Determine if this is opening or closing
+            is_opening_order = (
+                (order_response.side == "BUY" and position_direction is None) or
+                (order_response.side == "SELL" and position_direction is None)
             )
+            is_closing_order = (
+                (order_response.side == "SELL" and position_direction == "LONG") or
+                (order_response.side == "BUY" and position_direction == "SHORT")
+            )
+            
+            if is_opening_order:
+                new_position = "LONG" if order_response.side == "BUY" else "SHORT"
+                logger.info(
+                    f"[{summary.id}] 🟢 OPEN {new_position} position: "
+                    f"{order_response.side} {order_response.symbol} "
+                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
+                )
+            elif is_closing_order:
+                logger.info(
+                    f"[{summary.id}] 🔴 CLOSE {position_direction} position (reason: {exit_reason}): "
+                    f"{order_response.side} {order_response.symbol} "
+                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
+                )
+            else:
+                logger.info(
+                    f"[{summary.id}] 📊 Trade executed: "
+                    f"{order_response.side} {order_response.symbol} "
+                    f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f} "
+                    f"(position: {position_direction}, exit_reason: {exit_reason})"
+                )
+            
+            # Place Binance native TP/SL orders when opening a new position
+            # This ensures Binance handles exits even if bot crashes/hangs
+            # BUG FIX 2: Check if existing TP/SL orders are actually still open on Binance
+            # If they're already filled/cancelled, we should clear the meta and place new ones
+            has_position = summary.position_size and summary.position_size > 0
+            has_entry_price = summary.entry_price is not None
+            tp_sl_meta = summary.meta.get("tp_sl_orders", {})
+            tp_order_id = tp_sl_meta.get("tp_order_id")
+            sl_order_id = tp_sl_meta.get("sl_order_id")
+            
+            # Check if stored order IDs are still valid (orders still exist on Binance)
+            has_valid_orders = False
+            if tp_order_id or sl_order_id:
+                try:
+                    open_orders = self.client.get_open_orders(summary.symbol)
+                    open_order_ids = {o.get("orderId") for o in open_orders}
+                    has_valid_orders = (tp_order_id in open_order_ids) or (sl_order_id in open_order_ids)
+                    
+                    # If orders don't exist anymore, clear the stale metadata
+                    if not has_valid_orders:
+                        logger.info(
+                            f"[{summary.id}] Stale TP/SL order IDs detected (orders no longer exist). "
+                            f"Clearing metadata."
+                        )
+                        summary.meta["tp_sl_orders"] = {}
+                        self._save_to_redis(summary.id, summary)
+                except Exception as exc:
+                    logger.warning(
+                        f"[{summary.id}] Failed to verify TP/SL orders exist: {exc}. "
+                        f"Assuming they exist for safety."
+                    )
+                    has_valid_orders = True  # Assume they exist if we can't verify
+            
+            is_opening = has_position and has_entry_price and not has_valid_orders and not reduce_only_override
+            
+            if is_opening:
+                try:
+                    await self._place_tp_sl_orders(summary, order_response)
+                except Exception as exc:
+                    logger.warning(
+                        f"[{summary.id}] Failed to place TP/SL orders on Binance: {exc}. "
+                        f"Strategy will still monitor TP/SL, but Binance native orders not active."
+                    )
+            
+            # Cancel existing TP/SL orders if position was closed via our own order
+            # Note: If position closed via Binance native TP/SL, cleanup is handled in _update_position_info()
+            position_closed = summary.position_size == 0 or summary.position_side is None
+            has_order_ids = bool(tp_order_id or sl_order_id)
+            if position_closed and has_order_ids:
+                try:
+                    await self._cancel_tp_sl_orders(summary)
+                except Exception as exc:
+                    logger.warning(f"[{summary.id}] Failed to cancel TP/SL orders: {exc}")
 
+    async def _place_tp_sl_orders(self, summary: StrategySummary, entry_order: OrderResponse) -> None:
+        """Place Binance native TP/SL orders when opening a position.
+        
+        Args:
+            summary: Strategy summary with position info
+            entry_order: The entry order that opened the position
+        """
+        if not summary.entry_price or not summary.position_size or not summary.position_side:
+            logger.debug(f"[{summary.id}] Cannot place TP/SL: missing position info")
+            return
+        
+        # Get TP/SL percentages from strategy params
+        take_profit_pct = summary.params.take_profit_pct
+        stop_loss_pct = summary.params.stop_loss_pct
+        
+        # Calculate TP/SL prices
+        if summary.position_side == "LONG":
+            tp_price = summary.entry_price * (1 + take_profit_pct)
+            sl_price = summary.entry_price * (1 - stop_loss_pct)
+            tp_side = "SELL"  # Sell to close long
+            sl_side = "SELL"  # Sell to close long
+        else:  # SHORT
+            tp_price = summary.entry_price * (1 - take_profit_pct)  # Inverted
+            sl_price = summary.entry_price * (1 + stop_loss_pct)  # Inverted
+            tp_side = "BUY"  # Buy to close short
+            sl_side = "BUY"  # Buy to close short
+        
+        # Skip if trailing stop enabled (we'll handle it differently)
+        if summary.params.trailing_stop_enabled:
+            logger.info(
+                f"[{summary.id}] Trailing stop enabled - skipping Binance native TP/SL orders. "
+                f"Strategy will manage exits dynamically."
+            )
+            return
+        
+        logger.info(
+            f"[{summary.id}] Placing Binance native TP/SL orders: "
+            f"TP={tp_price:.8f} ({tp_side}), SL={sl_price:.8f} ({sl_side})"
+        )
+        
+        tp_order_id = None
+        sl_order_id = None
+        
+        try:
+            # Place take profit order
+            tp_response = self.client.place_take_profit_order(
+                symbol=summary.symbol,
+                side=tp_side,
+                quantity=summary.position_size,
+                stop_price=tp_price,
+                close_position=True  # Close entire position
+            )
+            tp_order_id = tp_response.get("orderId")
+            logger.info(f"[{summary.id}] TP order placed: orderId={tp_order_id}")
+        except Exception as exc:
+            logger.error(f"[{summary.id}] Failed to place TP order: {exc}")
+        
+        try:
+            # Place stop loss order
+            sl_response = self.client.place_stop_loss_order(
+                symbol=summary.symbol,
+                side=sl_side,
+                quantity=summary.position_size,
+                stop_price=sl_price,
+                close_position=True  # Close entire position
+            )
+            sl_order_id = sl_response.get("orderId")
+            logger.info(f"[{summary.id}] SL order placed: orderId={sl_order_id}")
+        except Exception as exc:
+            logger.error(f"[{summary.id}] Failed to place SL order: {exc}")
+        
+        # Store order IDs in meta for later cancellation
+        if "tp_sl_orders" not in summary.meta:
+            summary.meta["tp_sl_orders"] = {}
+        summary.meta["tp_sl_orders"] = {
+            "tp_order_id": tp_order_id,
+            "sl_order_id": sl_order_id,
+        }
+        self._save_to_redis(summary.id, summary)
+    
+    async def _cancel_tp_sl_orders(self, summary: StrategySummary) -> None:
+        """Cancel existing TP/SL orders when position is closed."""
+        tp_sl_orders = summary.meta.get("tp_sl_orders", {})
+        tp_order_id = tp_sl_orders.get("tp_order_id")
+        sl_order_id = tp_sl_orders.get("sl_order_id")
+        
+        if not tp_order_id and not sl_order_id:
+            return  # No orders to cancel
+        
+        logger.info(
+            f"[{summary.id}] Cancelling TP/SL orders: TP={tp_order_id}, SL={sl_order_id}"
+        )
+        
+        if tp_order_id:
+            try:
+                self.client.cancel_order(summary.symbol, tp_order_id)
+                logger.info(f"[{summary.id}] Cancelled TP order: {tp_order_id}")
+            except Exception as exc:
+                logger.warning(f"[{summary.id}] Failed to cancel TP order {tp_order_id}: {exc}")
+        
+        if sl_order_id:
+            try:
+                self.client.cancel_order(summary.symbol, sl_order_id)
+                logger.info(f"[{summary.id}] Cancelled SL order: {sl_order_id}")
+            except Exception as exc:
+                logger.warning(f"[{summary.id}] Failed to cancel SL order {sl_order_id}: {exc}")
+        
+        # Clear order IDs from meta
+        if "tp_sl_orders" in summary.meta:
+            summary.meta["tp_sl_orders"] = {}
+            self._save_to_redis(summary.id, summary)
+    
     async def _update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy."""
         try:
@@ -753,11 +980,49 @@ class StrategyRunner:
                 summary.position_side = "LONG" if position_amt > 0 else "SHORT"
             else:
                 # No open position
-                if summary.position_size != 0:  # Position was closed
+                position_was_closed = summary.position_size != 0  # Position was closed
+                if position_was_closed:
                     summary.entry_price = None
                     summary.position_size = 0
                     summary.unrealized_pnl = 0
                     summary.position_side = None
+                    
+                    # BUG FIX 2: Clear TP/SL order IDs when position closes (even if via Binance native orders)
+                    # This prevents TP/SL meta from getting stuck after exchange-side exit
+                    has_existing_orders = bool(summary.meta.get("tp_sl_orders", {}).get("tp_order_id") or 
+                                              summary.meta.get("tp_sl_orders", {}).get("sl_order_id"))
+                    if has_existing_orders:
+                        # Check if any TP/SL orders were filled (by checking if they're still open)
+                        try:
+                            open_orders = self.client.get_open_orders(summary.symbol)
+                            open_order_ids = {o.get("orderId") for o in open_orders}
+                            tp_order_id = summary.meta.get("tp_sl_orders", {}).get("tp_order_id")
+                            sl_order_id = summary.meta.get("tp_sl_orders", {}).get("sl_order_id")
+                            
+                            tp_filled = tp_order_id and tp_order_id not in open_order_ids
+                            sl_filled = sl_order_id and sl_order_id not in open_order_ids
+                            
+                            exit_reason = "TP" if tp_filled else ("SL" if sl_filled else "UNKNOWN")
+                            logger.info(
+                                f"[{summary.id}] 🔴 Position CLOSED via Binance native {exit_reason} order "
+                                f"(TP_filled: {tp_filled}, SL_filled: {sl_filled}). "
+                                f"Clearing TP/SL order metadata."
+                            )
+                        except Exception as exc:
+                            logger.info(
+                                f"[{summary.id}] 🔴 Position CLOSED (possibly via native TP/SL, unable to verify): {exc}. "
+                                f"Clearing TP/SL order metadata."
+                            )
+                        # Try to cancel orders (they may already be filled/executed)
+                        try:
+                            await self._cancel_tp_sl_orders(summary)
+                        except Exception as exc:
+                            # Even if cancellation fails (orders already filled), clear the metadata
+                            logger.debug(f"[{summary.id}] Error cancelling TP/SL orders (may already be filled): {exc}")
+                            # Clear metadata regardless
+                            if "tp_sl_orders" in summary.meta:
+                                summary.meta["tp_sl_orders"] = {}
+                                self._save_to_redis(summary.id, summary)
         except Exception as exc:
             logger.debug(f"Failed to update position info for {summary.symbol}: {exc}")
             # Calculate unrealized PnL manually if we have entry price and current price

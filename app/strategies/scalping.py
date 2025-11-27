@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from statistics import fmean
-from typing import Deque, Optional
+from typing import Deque, Optional, Literal
 from collections import deque
 
 from loguru import logger
@@ -81,6 +81,91 @@ class EmaScalpingStrategy(Strategy):
         # Dynamic trailing stop (optional)
         self.trailing_stop_enabled = bool(context.params.get("trailing_stop_enabled", False))
         self.trailing_stop: Optional[TrailingStopManager] = None
+    
+    def sync_position_state(
+        self,
+        *,
+        position_side: Optional[Literal["LONG", "SHORT"]],
+        entry_price: Optional[float],
+    ) -> None:
+        """Sync strategy's internal position state with Binance reality.
+        
+        BUG FIX 1: This prevents strategy state desync when Binance native TP/SL
+        orders close positions without the strategy knowing.
+        
+        Args:
+            position_side: Current position side from Binance (None if flat)
+            entry_price: Current entry price from Binance (None if flat)
+        """
+        # If Binance says we're flat but strategy thinks we have a position,
+        # Binance must have closed it (e.g., via native TP/SL order)
+        if position_side is None and self.position is not None:
+            logger.warning(
+                f"[{self.context.id}] Strategy state desync detected: "
+                f"strategy thinks position={self.position} but Binance says flat. "
+                f"Syncing strategy to Binance reality (position closed)."
+            )
+            self.position = None
+            self.entry_price = None
+            self.trailing_stop = None
+            # Reset cooldown since position was closed externally
+            self.cooldown_left = self.cooldown_candles
+        
+        # If Binance has a position but strategy thinks it's flat,
+        # sync strategy to Binance state (may happen on restart/recovery)
+        elif position_side is not None and self.position is None:
+            logger.info(
+                f"[{self.context.id}] Syncing strategy to Binance position: "
+                f"{position_side} @ {entry_price:.8f}"
+            )
+            self.position = position_side
+            self.entry_price = entry_price
+            
+            # Reinitialize trailing stop if enabled and we have entry price
+            if self.trailing_stop_enabled and entry_price is not None:
+                activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                self.trailing_stop = TrailingStopManager(
+                    entry_price=entry_price,
+                    take_profit_pct=self.take_profit_pct,
+                    stop_loss_pct=self.stop_loss_pct,
+                    position_type=position_side,
+                    enabled=True,
+                    activation_pct=activation_pct
+                )
+                logger.debug(
+                    f"[{self.context.id}] Trailing stop reinitialized for {position_side} "
+                    f"@ {entry_price:.8f}"
+                )
+        
+        # If both have positions but they don't match, sync to Binance
+        elif position_side != self.position:
+            logger.warning(
+                f"[{self.context.id}] Strategy position ({self.position}) doesn't match "
+                f"Binance ({position_side}). Syncing to Binance."
+            )
+            self.position = position_side
+            self.entry_price = entry_price
+            # Reset trailing stop - will be reinitialized if needed
+            self.trailing_stop = None
+        
+        # If entry price changed (position size changed), update it
+        elif position_side is not None and entry_price is not None and self.entry_price != entry_price:
+            logger.debug(
+                f"[{self.context.id}] Entry price changed: {self.entry_price:.8f} -> {entry_price:.8f}. "
+                f"Updating strategy state."
+            )
+            self.entry_price = entry_price
+            # Reset trailing stop with new entry price if enabled
+            if self.trailing_stop_enabled:
+                activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                self.trailing_stop = TrailingStopManager(
+                    entry_price=entry_price,
+                    take_profit_pct=self.take_profit_pct,
+                    stop_loss_pct=self.stop_loss_pct,
+                    position_type=position_side,
+                    enabled=True,
+                    activation_pct=activation_pct
+                )
         
     async def evaluate(self) -> StrategySignal:
         """
@@ -113,18 +198,173 @@ class EmaScalpingStrategy(Strategy):
             last_closed_time = int(last_closed[6])  # close_time in ms
             last_close_price = float(last_closed[4])
             
-            # Avoid re-processing same candle
+            # CRITICAL: If in position, check TP/SL using live price even if no new candle
+            # This allows TP/SL to be evaluated on every call, not just when candles close
+            live_price = self.client.get_price(self.context.symbol)
+            
             if self.last_closed_candle_time == last_closed_time:
-                current_price = self.client.get_price(self.context.symbol)
+                # No new candle, but check TP/SL if in position
+                if self.position is not None and self.entry_price is not None:
+                    # Check TP/SL with live price (using trailing stop or fixed)
+                    if self.position == "LONG":
+                        if self.trailing_stop_enabled and self.trailing_stop is not None:
+                            tp_price, sl_price = self.trailing_stop.update(live_price)
+                            exit_reason = self.trailing_stop.check_exit(live_price)
+                            if exit_reason == "TP":
+                                logger.info(
+                                    f"[{self.context.id}] Long Take profit hit (trailing, no new candle): "
+                                    f"{live_price:.8f} >= {tp_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.trailing_stop = None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="SELL",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="TP_TRAILING",
+                                    position_side=current_position
+                                )
+                            elif exit_reason == "SL":
+                                logger.info(
+                                    f"[{self.context.id}] Long Stop loss hit (trailing, no new candle): "
+                                    f"{live_price:.8f} <= {sl_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.trailing_stop = None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="SELL",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="SL_TRAILING",
+                                    position_side=current_position
+                                )
+                        else:
+                            # Fixed TP/SL
+                            tp_price = self.entry_price * (1 + self.take_profit_pct)
+                            sl_price = self.entry_price * (1 - self.stop_loss_pct)
+                            if live_price >= tp_price:
+                                logger.info(
+                                    f"[{self.context.id}] Long Take profit hit (no new candle): "
+                                    f"{live_price:.8f} >= {tp_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="SELL",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="TP",
+                                    position_side=current_position
+                                )
+                            if live_price <= sl_price:
+                                logger.info(
+                                    f"[{self.context.id}] Long Stop loss hit (no new candle): "
+                                    f"{live_price:.8f} <= {sl_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="SELL",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="SL",
+                                    position_side=current_position
+                                )
+                    elif self.position == "SHORT":
+                        if self.trailing_stop_enabled and self.trailing_stop is not None:
+                            tp_price, sl_price = self.trailing_stop.update(live_price)
+                            exit_reason = self.trailing_stop.check_exit(live_price)
+                            if exit_reason == "TP":
+                                logger.info(
+                                    f"[{self.context.id}] Short Take profit hit (trailing, no new candle): "
+                                    f"{live_price:.8f} <= {tp_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.trailing_stop = None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="TP_TRAILING",
+                                    position_side=current_position
+                                )
+                            elif exit_reason == "SL":
+                                logger.info(
+                                    f"[{self.context.id}] Short Stop loss hit (trailing, no new candle): "
+                                    f"{live_price:.8f} >= {sl_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.trailing_stop = None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="SL_TRAILING",
+                                    position_side=current_position
+                                )
+                        else:
+                            # Fixed TP/SL (inverted)
+                            tp_price = self.entry_price * (1 - self.take_profit_pct)
+                            sl_price = self.entry_price * (1 + self.stop_loss_pct)
+                            if live_price <= tp_price:
+                                logger.info(
+                                    f"[{self.context.id}] Short Take profit hit (no new candle): "
+                                    f"{live_price:.8f} <= {tp_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="TP",
+                                    position_side=current_position
+                                )
+                            if live_price >= sl_price:
+                                logger.info(
+                                    f"[{self.context.id}] Short Stop loss hit (no new candle): "
+                                    f"{live_price:.8f} >= {sl_price:.8f}"
+                                )
+                                current_position = self.position
+                                self.position, self.entry_price = None, None
+                                self.cooldown_left = self.cooldown_candles
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.85,
+                                    price=live_price,
+                                    exit_reason="SL",
+                                    position_side=current_position
+                                )
+                
+                # No new candle and no position, or position check didn't trigger exit
                 logger.debug(
                     f"[{self.context.id}] HOLD: Duplicate candle (already processed) | "
-                    f"Price: {current_price:.8f} | Candle time: {last_closed_time}"
+                    f"Price: {live_price:.8f} | Candle time: {last_closed_time} | Position: {self.position}"
                 )
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,
                     confidence=0.1,
-                    price=current_price
+                    price=live_price
                 )
             
             self.last_closed_candle_time = last_closed_time
@@ -153,10 +393,14 @@ class EmaScalpingStrategy(Strategy):
             
             fast_ema = self._ema(self.fast_period)
             slow_ema = self._ema(self.slow_period)
-            price = last_close_price
+            
+            # Live price already fetched above (for TP/SL checks when no new candle)
+            # For new candles, use live price for TP/SL, closed candle price for EMA logic
+            candle_price = last_close_price  # Keep for EMA cross logic
             
             logger.debug(
-                f"[{self.context.id}] close={price:.8f} fast_ema={fast_ema:.8f} slow_ema={slow_ema:.8f} "
+                f"[{self.context.id}] live_price={live_price:.8f} candle_close={candle_price:.8f} "
+                f"fast_ema={fast_ema:.8f} slow_ema={slow_ema:.8f} "
                 f"prev_fast={prev_fast} prev_slow={prev_slow}"
             )
             
@@ -168,30 +412,32 @@ class EmaScalpingStrategy(Strategy):
                     self.cooldown_left -= 1
                     logger.warning(
                         f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
-                        f"Price: {price:.8f} | Position: {self.position}"
+                        f"Price: {live_price:.8f} | Position: {self.position}"
                     )
                     # Early return: state will be updated in finally block
                     return StrategySignal(
                         action="HOLD",
                         symbol=self.context.symbol,
                         confidence=0.1,
-                        price=price
+                        price=live_price
                     )
                 
                 # --- TP / SL for LONG positions ---
+                # ALWAYS check TP/SL using LIVE PRICE when in position
                 if self.position == "LONG" and self.entry_price is not None:
                     # Use trailing stop if enabled, otherwise use fixed TP/SL
                     if self.trailing_stop_enabled and self.trailing_stop is not None:
-                        # Update trailing stop with current price
-                        tp_price, sl_price = self.trailing_stop.update(price)
+                        # Update trailing stop with live price
+                        tp_price, sl_price = self.trailing_stop.update(live_price)
                         
-                        # Check for exit conditions
-                        exit_reason = self.trailing_stop.check_exit(price)
+                        # Check for exit conditions using live price
+                        exit_reason = self.trailing_stop.check_exit(live_price)
                         if exit_reason == "TP":
                             logger.info(
-                                f"[{self.context.id}] Long Take profit hit (trailing): {price:.8f} >= {tp_price:.8f}"
+                                f"[{self.context.id}] Long Take profit hit (trailing): {live_price:.8f} >= {tp_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.trailing_stop = None
                             self.cooldown_left = self.cooldown_candles
@@ -199,13 +445,16 @@ class EmaScalpingStrategy(Strategy):
                                 action="SELL",
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="TP_TRAILING",
+                                position_side=current_position
                             )
                         elif exit_reason == "SL":
                             logger.info(
-                                f"[{self.context.id}] Long Stop loss hit (trailing): {price:.8f} <= {sl_price:.8f}"
+                                f"[{self.context.id}] Long Stop loss hit (trailing): {live_price:.8f} <= {sl_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.trailing_stop = None
                             self.cooldown_left = self.cooldown_candles
@@ -213,55 +462,66 @@ class EmaScalpingStrategy(Strategy):
                                 action="SELL",
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="SL_TRAILING",
+                                position_side=current_position
                             )
                     else:
-                        # Fixed TP/SL (original behavior)
+                        # Fixed TP/SL (original behavior) - use LIVE PRICE
                         tp_price = self.entry_price * (1 + self.take_profit_pct)
                         sl_price = self.entry_price * (1 - self.stop_loss_pct)
                         
-                        if price >= tp_price:
+                        if live_price >= tp_price:
                             logger.info(
-                                f"[{self.context.id}] Long Take profit hit: {price:.8f} >= {tp_price:.8f}"
+                                f"[{self.context.id}] Long Take profit hit: {live_price:.8f} >= {tp_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.cooldown_left = self.cooldown_candles
                             return StrategySignal(
                                 action="SELL",
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="TP",
+                                position_side=current_position
                             )
                         
-                        if price <= sl_price:
+                        if live_price <= sl_price:
                             logger.info(
-                                f"[{self.context.id}] Long Stop loss hit: {price:.8f} <= {sl_price:.8f}"
+                                f"[{self.context.id}] Long Stop loss hit: {live_price:.8f} <= {sl_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.cooldown_left = self.cooldown_candles
                             return StrategySignal(
                                 action="SELL",
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="SL",
+                                position_side=current_position
                             )
                 
                 # --- TP / SL for SHORT positions (3) - INVERTED ---
+                # ALWAYS check TP/SL using LIVE PRICE when in position
                 if self.position == "SHORT" and self.entry_price is not None:
                     # Use trailing stop if enabled, otherwise use fixed TP/SL
+                    # CRITICAL: Use LIVE PRICE for TP/SL evaluation
                     if self.trailing_stop_enabled and self.trailing_stop is not None:
-                        # Update trailing stop with current price
-                        tp_price, sl_price = self.trailing_stop.update(price)
+                        # Update trailing stop with live price
+                        tp_price, sl_price = self.trailing_stop.update(live_price)
                         
-                        # Check for exit conditions
-                        exit_reason = self.trailing_stop.check_exit(price)
+                        # Check for exit conditions using live price
+                        exit_reason = self.trailing_stop.check_exit(live_price)
                         if exit_reason == "TP":
                             logger.info(
-                                f"[{self.context.id}] Short Take profit hit (trailing): {price:.8f} <= {tp_price:.8f}"
+                                f"[{self.context.id}] Short Take profit hit (trailing): {live_price:.8f} <= {tp_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.trailing_stop = None
                             self.cooldown_left = self.cooldown_candles
@@ -269,13 +529,16 @@ class EmaScalpingStrategy(Strategy):
                                 action="BUY",  # Cover short
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="TP_TRAILING",
+                                position_side=current_position
                             )
                         elif exit_reason == "SL":
                             logger.info(
-                                f"[{self.context.id}] Short Stop loss hit (trailing): {price:.8f} >= {sl_price:.8f}"
+                                f"[{self.context.id}] Short Stop loss hit (trailing): {live_price:.8f} >= {sl_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.trailing_stop = None
                             self.cooldown_left = self.cooldown_candles
@@ -283,63 +546,73 @@ class EmaScalpingStrategy(Strategy):
                                 action="BUY",  # Cover short
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="SL_TRAILING",
+                                position_side=current_position
                             )
                     else:
-                        # Fixed TP/SL (original behavior - inverted for shorts)
+                        # Fixed TP/SL (original behavior - inverted for shorts) - use LIVE PRICE
                         tp_price = self.entry_price * (1 - self.take_profit_pct)  # Price must drop
                         sl_price = self.entry_price * (1 + self.stop_loss_pct)  # Price must rise
                         
-                        if price <= tp_price:
+                        if live_price <= tp_price:
                             logger.info(
-                                f"[{self.context.id}] Short Take profit hit: {price:.8f} <= {tp_price:.8f}"
+                                f"[{self.context.id}] Short Take profit hit: {live_price:.8f} <= {tp_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.cooldown_left = self.cooldown_candles
                             return StrategySignal(
                                 action="BUY",  # Cover short
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="TP",
+                                position_side=current_position
                             )
                         
-                        if price >= sl_price:
+                        if live_price >= sl_price:
                             logger.info(
-                                f"[{self.context.id}] Short Stop loss hit: {price:.8f} >= {sl_price:.8f}"
+                                f"[{self.context.id}] Short Stop loss hit: {live_price:.8f} >= {sl_price:.8f}"
                             )
-                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                            logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                            current_position = self.position
                             self.position, self.entry_price = None, None
                             self.cooldown_left = self.cooldown_candles
                             return StrategySignal(
                                 action="BUY",  # Cover short
                                 symbol=self.context.symbol,
                                 confidence=0.85,
-                                price=price
+                                price=live_price,
+                                exit_reason="SL",
+                                position_side=current_position
                             )
                 
                 # --- Minimum EMA separation filter (B) ---
                 # Note: Apply separation filter only for entries, not exits (safety consideration)
                 # For exits, we want to allow closing even if EMAs are close
-                ema_separation_pct = abs(fast_ema - slow_ema) / price if price > 0 else 0
+                # Use candle_price for EMA calculations (stable reference)
+                ema_separation_pct = abs(fast_ema - slow_ema) / candle_price if candle_price > 0 else 0
                 should_check_separation = self.position is None  # Only check for new entries
                 
                 if should_check_separation and ema_separation_pct < self.min_ema_separation:
                     logger.warning(
                         f"[{self.context.id}] HOLD: EMA separation too small ({ema_separation_pct:.6f} < {self.min_ema_separation}) | "
-                        f"Price: {price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | Position: {self.position}"
+                        f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | Position: {self.position}"
                     )
                     # Early return: state will be updated in finally block
                     return StrategySignal(
                         action="HOLD",
                         symbol=self.context.symbol,
                         confidence=0.1,
-                        price=price
+                        price=live_price
                     )
                 
                 # --- Crossover detection on closed candles ---
                 # CRITICAL: Use local prev_fast/prev_slow (from previous candle), not self.prev_*
                 # This allows proper crossover detection between candles
+                # Use candle_price for entry signals (consistent with EMA calculation)
                 if prev_fast is not None and prev_slow is not None:
                     golden_cross = (prev_fast <= prev_slow) and (fast_ema > slow_ema)
                     death_cross = (prev_fast >= prev_slow) and (fast_ema < slow_ema)
@@ -350,15 +623,21 @@ class EmaScalpingStrategy(Strategy):
                             f"[{self.context.id}] Golden Cross: fast {fast_ema:.8f} > slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} <= {prev_slow:.8f})"
                         )
-                        logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                        # CRITICAL: Use candle close price (where EMA cross was detected) for entry signal
+                        # The actual fill price from Binance will update entry_price after order execution
+                        # This prevents entry price mismatch when live_price is far from candle close
+                        logger.warning(
+                            f"[{self.context.id}] SIGNAL => BUY at {candle_price:.8f} "
+                            f"(candle close, live={live_price:.8f}) pos={self.position}"
+                        )
                         self.position = "LONG"
-                        self.entry_price = price
+                        self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         
-                        # Initialize trailing stop if enabled
+                        # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
                             activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
                             self.trailing_stop = TrailingStopManager(
-                                entry_price=price,
+                                entry_price=candle_price,  # Initial estimate, will sync with real entry after fill
                                 take_profit_pct=self.take_profit_pct,
                                 stop_loss_pct=self.stop_loss_pct,
                                 position_type="LONG",
@@ -366,9 +645,9 @@ class EmaScalpingStrategy(Strategy):
                                 activation_pct=activation_pct
                             )
                             logger.info(
-                                f"[{self.context.id}] Trailing stop enabled for LONG: "
+                                f"[{self.context.id}] Trailing stop enabled for LONG (initial): "
                                 f"TP={self.trailing_stop.current_tp:.8f}, SL={self.trailing_stop.current_sl:.8f}, "
-                                f"Activation={activation_pct*100:.2f}% (price must reach {self.trailing_stop.activation_price:.8f})"
+                                f"Activation={activation_pct*100:.2f}% (will sync with actual entry after fill)"
                             )
                         
                         # State will be updated in finally block
@@ -376,7 +655,9 @@ class EmaScalpingStrategy(Strategy):
                             action="BUY",
                             symbol=self.context.symbol,
                             confidence=0.75,
-                            price=price
+                            price=candle_price,  # Use candle close price for signal
+                            exit_reason=None,  # Entry signal, no exit reason
+                            position_side="LONG"  # Opening LONG position
                         )
                     
                     # --- LONG Exit: Death Cross (when long) ---
@@ -385,7 +666,8 @@ class EmaScalpingStrategy(Strategy):
                             f"[{self.context.id}] Death Cross (exit long): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
                         )
-                        logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                        logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                        current_position = self.position
                         self.position, self.entry_price = None, None
                         self.trailing_stop = None  # Reset trailing stop
                         self.cooldown_left = self.cooldown_candles
@@ -394,7 +676,9 @@ class EmaScalpingStrategy(Strategy):
                             action="SELL",
                             symbol=self.context.symbol,
                             confidence=0.75,
-                            price=price
+                            price=live_price,
+                            exit_reason="EMA_DEATH_CROSS",
+                            position_side=current_position
                         )
                     
                     # --- SHORT Entry: Death Cross (1) - when flat and short enabled ---
@@ -424,22 +708,28 @@ class EmaScalpingStrategy(Strategy):
                                             action="HOLD",
                                             symbol=self.context.symbol,
                                             confidence=0.1,
-                                            price=price
+                                            price=live_price
                                         )
                         
                         logger.info(
                             f"[{self.context.id}] Death Cross (enter short): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
                         )
-                        logger.warning(f"[{self.context.id}] SIGNAL => SELL at {price:.8f} pos={self.position}")
+                        # CRITICAL: Use candle close price (where EMA cross was detected) for entry signal
+                        # The actual fill price from Binance will update entry_price after order execution
+                        # This prevents entry price mismatch when live_price is far from candle close
+                        logger.warning(
+                            f"[{self.context.id}] SIGNAL => SELL at {candle_price:.8f} "
+                            f"(candle close, live={live_price:.8f}) pos={self.position}"
+                        )
                         self.position = "SHORT"
-                        self.entry_price = price
+                        self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         
-                        # Initialize trailing stop if enabled
+                        # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
                             activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
                             self.trailing_stop = TrailingStopManager(
-                                entry_price=price,
+                                entry_price=candle_price,  # Initial estimate, will sync with real entry after fill
                                 take_profit_pct=self.take_profit_pct,
                                 stop_loss_pct=self.stop_loss_pct,
                                 position_type="SHORT",
@@ -447,9 +737,9 @@ class EmaScalpingStrategy(Strategy):
                                 activation_pct=activation_pct
                             )
                             logger.info(
-                                f"[{self.context.id}] Trailing stop enabled for SHORT: "
+                                f"[{self.context.id}] Trailing stop enabled for SHORT (initial): "
                                 f"TP={self.trailing_stop.current_tp:.8f}, SL={self.trailing_stop.current_sl:.8f}, "
-                                f"Activation={activation_pct*100:.2f}% (price must reach {self.trailing_stop.activation_price:.8f})"
+                                f"Activation={activation_pct*100:.2f}% (will sync with actual entry after fill)"
                             )
                         
                         # State will be updated in finally block
@@ -457,7 +747,9 @@ class EmaScalpingStrategy(Strategy):
                             action="SELL",  # Open short
                             symbol=self.context.symbol,
                             confidence=0.75,
-                            price=price
+                            price=candle_price,  # Use candle close price for signal
+                            exit_reason=None,  # Entry signal, no exit reason
+                            position_side="SHORT"  # Opening SHORT position
                         )
                     
                     # --- SHORT Exit: Golden Cross (2) - when short ---
@@ -465,7 +757,8 @@ class EmaScalpingStrategy(Strategy):
                         logger.info(
                             f"[{self.context.id}] Golden Cross (exit short): fast {fast_ema:.8f} > slow {slow_ema:.8f}"
                         )
-                        logger.warning(f"[{self.context.id}] SIGNAL => BUY at {price:.8f} pos={self.position}")
+                        logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                        current_position = self.position
                         self.position, self.entry_price = None, None
                         self.trailing_stop = None  # Reset trailing stop
                         self.cooldown_left = self.cooldown_candles
@@ -474,14 +767,16 @@ class EmaScalpingStrategy(Strategy):
                             action="BUY",  # Cover short
                             symbol=self.context.symbol,
                             confidence=0.75,
-                            price=price
+                            price=live_price,
+                            exit_reason="EMA_GOLDEN_CROSS",
+                            position_side=current_position
                         )
                 
                 # Normal HOLD path (when no crossover or prev values not set)
                 if prev_fast is None or prev_slow is None:
                     logger.warning(
                         f"[{self.context.id}] HOLD: No previous EMA values (first run or reset) | "
-                        f"Price: {price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | "
+                        f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | "
                         f"Position: {self.position}"
                     )
                 else:
@@ -492,7 +787,7 @@ class EmaScalpingStrategy(Strategy):
                     
                     logger.warning(
                         f"[{self.context.id}] HOLD: No crossover detected | "
-                        f"Price: {price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | "
+                        f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | "
                         f"Prev Fast: {prev_fast:.8f} | Prev Slow: {prev_slow:.8f} | "
                         f"Fast above slow: {fast_above_slow} | Prev fast above slow: {prev_fast_above_slow} | "
                         f"Same side: {same_side} | Position: {self.position}"
@@ -501,7 +796,7 @@ class EmaScalpingStrategy(Strategy):
                     action="HOLD",
                     symbol=self.context.symbol,
                     confidence=0.2,
-                    price=price
+                    price=live_price
                 )
             finally:
                 # CRITICAL: Always update state at the end, regardless of return path

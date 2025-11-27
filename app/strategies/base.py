@@ -19,6 +19,8 @@ class StrategySignal:
     symbol: str
     confidence: float
     price: float | None = None
+    exit_reason: str | None = None  # Reason for exit: "TP", "SL", "EMA_CROSS", "MANUAL", etc.
+    position_side: Literal["LONG", "SHORT"] | None = None  # Position direction when signal is generated
 
 
 @dataclass
@@ -52,6 +54,27 @@ class Strategy(ABC):
     @property
     def is_stopped(self) -> bool:
         return self._stopped.is_set()
+    
+    def sync_position_state(
+        self,
+        *,
+        position_side: Literal["LONG", "SHORT"] | None,
+        entry_price: float | None,
+    ) -> None:
+        """Sync strategy's internal position state with Binance reality.
+        
+        Called by StrategyRunner after detecting that Binance position changed
+        (e.g., via native TP/SL orders filling) to keep strategy state in sync.
+        
+        Args:
+            position_side: Current position side from Binance (None if flat)
+            entry_price: Current entry price from Binance (None if flat)
+        
+        Default implementation does nothing. Strategies should override this
+        if they maintain internal position state.
+        """
+        # Default: no-op. Strategies with internal state should override.
+        pass
 
 
 class StrategyFactory(Protocol):
