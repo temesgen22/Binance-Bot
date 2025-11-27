@@ -675,7 +675,7 @@
             const symbol = document.getElementById('symbolFilter').value;
             const side = document.getElementById('sideFilter').value;
             
-            let url = '/trades/?';
+            let url = '/trades/list?';
             const params = new URLSearchParams();
             if (symbol) params.append('symbol', symbol);
             if (side) params.append('side', side);

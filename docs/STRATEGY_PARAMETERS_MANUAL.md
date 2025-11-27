@@ -16,11 +16,8 @@ Complete guide to all parameters for the EmaScalpingStrategy (`scalping` strateg
 
 ### `name` (string, required)
 **Description**: A descriptive name for your strategy instance.
-
-**Example**: `"BTC Scalping 8/21 EMA"`
-
-**Notes**: 
-- Used for identification in the API responses
+docker exec -it jenkins bash
+ the API responses
 - Can be any string, but descriptive names help track multiple strategies
 - Appears in logs and statistics
 
