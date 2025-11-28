@@ -259,6 +259,15 @@ If Jenkins is on a host/server:
                             "
                         fi
 
+                        # Copy redis.conf to deployment (required for Redis to start)
+                        if [ -f "redis.conf" ]; then
+                            echo "📝 Copying redis.conf to deployment..."
+                            scp \$SSH_OPTS -P \$SSH_PORT redis.conf \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/redis.conf
+                        else
+                            echo "⚠️  Warning: redis.conf not found in repository!"
+                            echo "   Redis container may fail to start without this file."
+                        fi
+
                         # Pull latest image and restart
                        # if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
                          #   IMAGE_TAG="${env.DOCKER_REGISTRY_URL}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
