@@ -434,12 +434,12 @@
                     </select>
                 </div>
                 <div class="filter-group">
-                    <label for="startDateFilter">Start Date</label>
-                    <input type="date" id="startDateFilter">
+                    <label for="startDateFilter">Start Date & Time</label>
+                    <input type="datetime-local" id="startDateFilter">
                 </div>
                 <div class="filter-group">
-                    <label for="endDateFilter">End Date</label>
-                    <input type="date" id="endDateFilter">
+                    <label for="endDateFilter">End Date & Time</label>
+                    <input type="datetime-local" id="endDateFilter">
                 </div>
                 <div class="filter-group">
                     <label for="sideFilter">Trade Side</label>
@@ -674,22 +674,52 @@
         async function loadTrades() {
             const symbol = document.getElementById('symbolFilter').value;
             const side = document.getElementById('sideFilter').value;
+            const startDate = document.getElementById('startDateFilter').value;
+            const endDate = document.getElementById('endDateFilter').value;
             
-            let url = '/trades/list?';
             const params = new URLSearchParams();
             if (symbol) params.append('symbol', symbol);
             if (side) params.append('side', side);
-            url += params.toString();
+            if (startDate) {
+                // Convert datetime-local to ISO format for API
+                const isoStart = new Date(startDate).toISOString();
+                params.append('start_date', isoStart);
+            }
+            if (endDate) {
+                // Convert datetime-local to ISO format for API
+                const isoEnd = new Date(endDate).toISOString();
+                params.append('end_date', isoEnd);
+            }
+            
+            // Only append ? if there are parameters
+            const url = params.toString() ? `/trades/list?${params.toString()}` : '/trades/list';
 
             try {
-                const response = await fetch(url);
-                const contentType = response.headers.get('content-type');
+                // Add cache-busting timestamp to prevent browser cache issues
+                const cacheBuster = `_t=${Date.now()}`;
+                const finalUrl = url.includes('?') ? `${url}&${cacheBuster}` : `${url}?${cacheBuster}`;
+                
+                const response = await fetch(finalUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                
+                const contentType = response.headers.get('content-type') || '';
                 
                 // Check if response is JSON before parsing
-                if (!contentType || !contentType.includes('application/json')) {
+                if (!contentType.includes('application/json')) {
                     const text = await response.text();
-                    console.error('Non-JSON response received:', text.substring(0, 200));
-                    throw new Error(`Expected JSON but received ${contentType || 'unknown type'}. Response: ${text.substring(0, 100)}`);
+                    console.error('Non-JSON response received:', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        contentType: contentType,
+                        url: finalUrl,
+                        responsePreview: text.substring(0, 500)
+                    });
+                    throw new Error(`Expected JSON but received ${contentType || 'unknown type'} (HTTP ${response.status}). First 200 chars: ${text.substring(0, 200)}`);
                 }
                 
                 if (!response.ok) {
@@ -703,7 +733,7 @@
                 console.error('Error loading trades:', error);
                 console.error('Requested URL:', url);
                 document.getElementById('tradesContent').innerHTML = 
-                    `<div class="error">Error loading trades: ${error.message}<br><small>URL: ${url}</small></div>`;
+                    `<div class="error">Error loading trades: ${error.message}<br><small>URL: ${url}</small><br><small>Check browser console for details</small></div>`;
             }
         }
 

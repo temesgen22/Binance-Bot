@@ -17,7 +17,7 @@ Complete guide to all parameters for the EmaScalpingStrategy (`scalping` strateg
 ### `name` (string, required)
 **Description**: A descriptive name for your strategy instance.
 docker exec -it jenkins bash
- the API responses
+ the API responsespython -m pytest tests/test_log_viewer.py
 - Can be any string, but descriptive names help track multiple strategies
 - Appears in logs and statistics
 

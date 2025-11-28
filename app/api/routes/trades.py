@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -84,8 +84,29 @@ def list_all_trades(
             if side and trade_with_ts.side.upper() != side.upper():
                 continue
             
-            # Apply date filters (if we had timestamps)
-            # For now, we'll include all trades
+            # Apply date filters
+            if start_date or end_date:
+                trade_timestamp = trade_with_ts.timestamp
+                # Ensure both datetimes are timezone-aware for comparison
+                if trade_timestamp.tzinfo is None:
+                    # If trade timestamp is naive, assume it's UTC
+                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                
+                if start_date:
+                    # Ensure start_date is timezone-aware
+                    start_date_aware = start_date
+                    if start_date_aware.tzinfo is None:
+                        start_date_aware = start_date_aware.replace(tzinfo=timezone.utc)
+                    if trade_timestamp < start_date_aware:
+                        continue
+                
+                if end_date:
+                    # Ensure end_date is timezone-aware
+                    end_date_aware = end_date
+                    if end_date_aware.tzinfo is None:
+                        end_date_aware = end_date_aware.replace(tzinfo=timezone.utc)
+                    if trade_timestamp > end_date_aware:
+                        continue
             
             all_trades.append(trade_with_ts)
     

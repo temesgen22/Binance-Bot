@@ -479,6 +479,16 @@
                     </select>
                 </div>
             </div>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="startDateFilter">Start Date & Time</label>
+                    <input type="datetime-local" id="startDateFilter">
+                </div>
+                <div class="filter-group">
+                    <label for="endDateFilter">End Date & Time</label>
+                    <input type="datetime-local" id="endDateFilter">
+                </div>
+            </div>
             <div class="filter-actions">
                 <button class="btn btn-primary" onclick="loadData()">Apply Filters</button>
                 <button class="btn btn-secondary" onclick="clearFilters()">Clear Filters</button>
@@ -550,12 +560,25 @@
             const status = document.getElementById('statusFilter').value;
             const rankBy = document.getElementById('rankBy').value;
 
+            const startDate = document.getElementById('startDateFilter').value;
+            const endDate = document.getElementById('endDateFilter').value;
+            
             let url = '/strategies/performance/?';
             const params = new URLSearchParams();
             if (strategyName) params.append('strategy_name', strategyName);
             if (symbol) params.append('symbol', symbol);
             if (status) params.append('status', status);
             if (rankBy) params.append('rank_by', rankBy);
+            if (startDate) {
+                // Convert datetime-local to ISO format for API
+                const isoStart = new Date(startDate).toISOString();
+                params.append('start_date', isoStart);
+            }
+            if (endDate) {
+                // Convert datetime-local to ISO format for API
+                const isoEnd = new Date(endDate).toISOString();
+                params.append('end_date', isoEnd);
+            }
             url += params.toString();
 
             try {
@@ -733,6 +756,8 @@
             document.getElementById('strategyNameFilter').value = '';
             document.getElementById('symbolFilter').value = '';
             document.getElementById('statusFilter').value = '';
+            document.getElementById('startDateFilter').value = '';
+            document.getElementById('endDateFilter').value = '';
             loadData();
         }
 

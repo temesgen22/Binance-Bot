@@ -22,6 +22,8 @@ def get_strategy_performance(
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
     status: Optional[str] = Query(default=None, description="Filter by status (running/stopped/error)"),
     rank_by: Optional[str] = Query(default="total_pnl", description="Rank by field (total_pnl, win_rate, completed_trades)"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO datetime) - not yet implemented"),
+    end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO datetime) - not yet implemented"),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> StrategyPerformanceList:
     """Get performance metrics for all strategies, ranked by profitability.

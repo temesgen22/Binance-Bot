@@ -357,13 +357,13 @@
                 </div>
 
                 <div class="filter-group">
-                    <label for="dateFrom">From Date</label>
-                    <input type="date" id="dateFrom">
+                    <label for="dateFrom">From Date & Time</label>
+                    <input type="datetime-local" id="dateFrom">
                 </div>
 
                 <div class="filter-group">
-                    <label for="dateTo">To Date</label>
-                    <input type="date" id="dateTo">
+                    <label for="dateTo">To Date & Time</label>
+                    <input type="datetime-local" id="dateTo">
                 </div>
 
                 <div class="filter-group">
@@ -470,10 +470,18 @@
                 if (level) params.append('level', level);
                 
                 const dateFrom = document.getElementById('dateFrom').value;
-                if (dateFrom) params.append('date_from', dateFrom);
+                if (dateFrom) {
+                    // Convert datetime-local to ISO format for API
+                    const isoFrom = new Date(dateFrom).toISOString();
+                    params.append('date_from', isoFrom);
+                }
                 
                 const dateTo = document.getElementById('dateTo').value;
-                if (dateTo) params.append('date_to', dateTo);
+                if (dateTo) {
+                    // Convert datetime-local to ISO format for API
+                    const isoTo = new Date(dateTo).toISOString();
+                    params.append('date_to', isoTo);
+                }
                 
                 const module = document.getElementById('module').value.trim();
                 if (module) params.append('module', module);
@@ -603,13 +611,23 @@
 
         // Set default date to today
         function setDefaultDates() {
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('dateTo').value = today;
+            const now = new Date();
+            // Format for datetime-local input (YYYY-MM-DDTHH:mm)
+            const formatDateTimeLocal = (date) => {
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                return `${year}-${month}-${day}T${hours}:${minutes}`;
+            };
+            
+            document.getElementById('dateTo').value = formatDateTimeLocal(now);
             
             // Set dateFrom to 7 days ago
             const weekAgo = new Date();
             weekAgo.setDate(weekAgo.getDate() - 7);
-            document.getElementById('dateFrom').value = weekAgo.toISOString().split('T')[0];
+            document.getElementById('dateFrom').value = formatDateTimeLocal(weekAgo);
         }
 
         // Initialize on page load

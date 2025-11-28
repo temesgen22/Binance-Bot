@@ -275,9 +275,26 @@ If Jenkins is on a host/server:
                         ssh \$SSH_OPTS \$SSH_USER@\$SSH_HOST "
                             cd \$DEPLOY_PATH
                             if [ -f docker-compose.yml ]; then
-                                docker-compose down || true
+                                # Verify Redis volume exists before stopping (safety check)
+                                echo '📦 Checking Redis volume...'
+                                docker volume ls | grep redis-data || echo '⚠️  Warning: redis-data volume not found'
+                                
+                                # Stop containers WITHOUT removing volumes (volumes persist data)
+                                echo '🛑 Stopping containers (volumes will be preserved)...'
+                                docker-compose down --remove-orphans || true
+                                
+                                # Pull latest images
+                                echo '📥 Pulling latest images...'
                                 docker-compose pull || true
+                                
+                                # Start services (volumes will be reattached automatically)
+                                echo '🚀 Starting services...'
                                 docker-compose up -d
+                                
+                                # Verify Redis volume still exists
+                                echo '✅ Verifying Redis volume after restart...'
+                                docker volume ls | grep redis-data && echo '✅ Redis volume preserved' || echo '⚠️  Warning: Redis volume not found'
+                                
                                 docker-compose ps
                             else
                                 echo '⚠️  docker-compose.yml not found. Skipping restart.'
