@@ -4,7 +4,7 @@
 
 set -e
 
-BACKUP_DIR="${BACKUP_DIR:-/tmp/redis-backups}"
+BACKUP_DIR="${BACKUP_DIR:-/home/jenkins-deploy/redis-backups}"
 
 if [ -z "$1" ]; then
     echo "📦 Available backups:"
@@ -38,10 +38,23 @@ fi
 echo "🛑 Stopping Redis container..."
 docker-compose stop redis
 
+# Find the correct Redis volume name
+echo "🔍 Finding Redis volume..."
+REDIS_VOLUME=$(docker volume ls | grep redis-data | awk '{print $2}' | head -1)
+
+if [ -z "$REDIS_VOLUME" ]; then
+    echo "❌ Error: Redis volume not found!"
+    echo "   Available volumes:"
+    docker volume ls | sed 's/^/      /'
+    exit 1
+fi
+
+echo "   ✅ Found volume: $REDIS_VOLUME"
+
 # Copy backup file into container's data directory
 echo "📥 Copying backup file to Redis data directory..."
 docker run --rm \
-    -v binance-bot_redis-data:/data \
+    -v "$REDIS_VOLUME":/data \
     -v "$(dirname "$BACKUP_FILE")":/backup:ro \
     alpine sh -c "cd /data && rm -f dump.rdb appendonly.aof && cp /backup/$(basename "$BACKUP_FILE") dump.rdb && ls -la /data"
 
