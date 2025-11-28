@@ -9,6 +9,13 @@ from loguru import logger
 from app.core.my_binance_client import BinanceClient
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.trailing_stop import TrailingStopManager
+from app.strategies.indicators import calculate_ema as _calculate_ema_from_prices_shared
+
+
+# Shared functionality:
+# - Technical indicators (EMA) from app.strategies.indicators
+# - Position state synchronization with Binance reality
+# - Live price TP/SL checking on every evaluation (even without new candle)
 
 
 class EmaScalpingStrategy(Strategy):
@@ -114,9 +121,10 @@ class EmaScalpingStrategy(Strategy):
         # If Binance has a position but strategy thinks it's flat,
         # sync strategy to Binance state (may happen on restart/recovery)
         elif position_side is not None and self.position is None:
+            price_str = f"{entry_price:.8f}" if entry_price is not None else "unknown"
             logger.info(
                 f"[{self.context.id}] Syncing strategy to Binance position: "
-                f"{position_side} @ {entry_price:.8f}"
+                f"{position_side} @ {price_str}"
             )
             self.position = position_side
             self.entry_price = entry_price
@@ -825,18 +833,13 @@ class EmaScalpingStrategy(Strategy):
         """
         Calculate EMA from a list of prices.
         Used for both 1m and 5m timeframes.
+        
+        Uses shared indicator utility function from app.strategies.indicators.
+        Provides fallback for insufficient data to maintain backward compatibility.
         """
-        if len(prices) < period:
+        ema = _calculate_ema_from_prices_shared(prices, period)
+        if ema is None:
             return fmean(prices) if prices else 0.0
-        
-        smoothing = 2.0 / (period + 1)
-        # Start with SMA for the first value
-        ema = fmean(prices[:period])
-        
-        # Calculate EMA for remaining prices
-        for p in prices[period:]:
-            ema = (p - ema) * smoothing + ema
-        
         return ema
 
 

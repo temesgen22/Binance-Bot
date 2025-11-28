@@ -53,31 +53,122 @@ echo "   ✅ Found volume: $REDIS_VOLUME"
 
 # Copy backup file into container's data directory
 echo "📥 Copying backup file to Redis data directory..."
-echo "   Removing old AOF files and directories..."
+echo "   Removing ALL AOF files and directories (critical for RDB-only restore)..."
 docker run --rm \
     -v "$REDIS_VOLUME":/data \
     -v "$(dirname "$BACKUP_FILE")":/backup:ro \
     alpine sh -c "
         cd /data
-        # Remove all AOF files and directories (Redis will recreate if needed)
-        rm -rf appendonly.aof appendonlydir
+        echo 'Removing all AOF-related files...'
+        # Remove ALL AOF files and directories (Redis will recreate if needed)
+        rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof
         # Remove old RDB
         rm -f dump.rdb
+        echo 'Copying RDB backup...'
         # Copy new RDB backup
         cp /backup/$(basename "$BACKUP_FILE") dump.rdb
-        # Set correct permissions
+        # Set correct permissions (Redis runs as user 999)
         chmod 644 dump.rdb
-        echo 'Files in /data after restore:'
-        ls -la /data
         echo ''
-        echo 'RDB file size:'
+        echo 'Files in /data after restore:'
+        ls -lah /data
+        echo ''
+        echo 'RDB file details:'
         ls -lh dump.rdb
+        echo ''
+        echo 'Verifying RDB file is not empty:'
+        [ -s dump.rdb ] && echo '  ✅ RDB file has content' || echo '  ❌ RDB file is empty!'
     "
 
-# Start Redis (it will automatically load dump.rdb)
-# Note: With AOF disabled temporarily, Redis will load from RDB
-echo "🚀 Starting Redis container..."
-docker-compose start redis
+# Start Redis with AOF disabled to force RDB load
+echo "🚀 Starting Redis with AOF disabled (to force RDB load)..."
+echo "   Using temporary config with appendonly=no"
+
+# Create a temporary Redis container with AOF disabled
+docker run -d --name redis-temp-restore \
+    -v "$REDIS_VOLUME":/data \
+    redis:7-alpine \
+    redis-server --appendonly no --dir /data --dbfilename dump.rdb 2>/dev/null || {
+    echo "   ⚠️  Could not start temp Redis"
+    docker rm -f redis-temp-restore 2>/dev/null || true
+    echo "   Trying normal Redis start instead..."
+    docker-compose start redis
+    sleep 8
+    KEY_COUNT=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+    if [ "$KEY_COUNT" -gt 0 ]; then
+        echo "   ✅ Keys loaded: $KEY_COUNT"
+    else
+        echo "   ❌ No keys loaded"
+    fi
+    exit 0
+}
+
+# Wait for Redis to start and load RDB
+echo "⏳ Waiting for Redis to load RDB file..."
+sleep 8
+
+# Check if temp Redis loaded data
+if docker ps | grep -q redis-temp-restore; then
+    KEY_COUNT=$(docker exec redis-temp-restore redis-cli DBSIZE 2>/dev/null || echo "0")
+    echo "   📊 Keys loaded in temp Redis: $KEY_COUNT"
+    
+    if [ "$KEY_COUNT" -gt 0 ]; then
+        echo "   ✅ Data loaded successfully!"
+        echo ""
+        echo "   Sample keys:"
+        docker exec redis-temp-restore redis-cli --scan --pattern "*" | head -10 | sed 's/^/      /'
+        
+        # Stop temp Redis
+        echo ""
+        echo "🔄 Stopping temp Redis..."
+        docker stop redis-temp-restore
+        docker rm redis-temp-restore
+        
+        # Save the data to RDB before stopping (so normal Redis can load it)
+        echo "💾 Saving data to RDB for normal Redis..."
+        docker exec redis-temp-restore redis-cli BGSAVE
+        sleep 2
+        
+        # Stop temp Redis
+        echo "🛑 Stopping temp Redis..."
+        docker stop redis-temp-restore
+        docker rm redis-temp-restore
+        
+        # Now start normal Redis (it should load the RDB)
+        echo "🚀 Starting normal Redis container..."
+        docker-compose up -d redis
+        sleep 5
+        
+        # Verify normal Redis has the data
+        KEY_COUNT_FINAL=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+        echo "   📊 Final key count in normal Redis: $KEY_COUNT_FINAL"
+        
+        if [ "$KEY_COUNT_FINAL" -gt 0 ]; then
+            echo "   ✅ Data successfully restored to normal Redis!"
+            echo ""
+            echo "   Sample keys:"
+            docker exec binance-bot-redis redis-cli --scan --pattern "*" | head -10 | sed 's/^/      /'
+        else
+            echo "   ⚠️  Keys lost when starting normal Redis"
+            echo "   This might be because AOF is enabled and Redis is loading from empty AOF"
+            echo "   Try running the restore again or check Redis logs"
+        fi
+    else
+        echo "   ❌ No keys loaded - backup file might be empty or corrupted"
+        echo ""
+        echo "   Checking backup file..."
+        BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+        echo "   Backup file size: $BACKUP_SIZE bytes"
+        
+        docker stop redis-temp-restore
+        docker rm redis-temp-restore
+    fi
+else
+    echo "   ⚠️  Temp Redis didn't start properly"
+    docker rm -f redis-temp-restore 2>/dev/null || true
+    echo "   Starting normal Redis..."
+    docker-compose start redis
+fi
 
 # Give Redis time to load the RDB file
 echo "⏳ Waiting for Redis to load RDB file..."

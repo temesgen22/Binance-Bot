@@ -25,6 +25,7 @@ from app.models.strategy import CreateStrategyRequest, StrategyState, StrategySu
 from app.services.order_executor import OrderExecutor
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
+from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
 
 
 class StrategyRegistry:
@@ -34,6 +35,7 @@ class StrategyRegistry:
             # ema_crossover is now an alias for scalping with default 5/20 EMA
             # Users can achieve the same by setting ema_fast=5, ema_slow=20 in params
             StrategyType.ema_crossover.value: EmaScalpingStrategy,
+            StrategyType.range_mean_reversion.value: RangeMeanReversionStrategy,
         }
 
     def build(self, strategy_type: StrategyType, context: StrategyContext, client: BinanceClient) -> Strategy:
