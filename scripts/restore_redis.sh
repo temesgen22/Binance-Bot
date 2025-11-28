@@ -53,18 +53,51 @@ echo "   ✅ Found volume: $REDIS_VOLUME"
 
 # Copy backup file into container's data directory
 echo "📥 Copying backup file to Redis data directory..."
+echo "   Removing old AOF files and directories..."
 docker run --rm \
     -v "$REDIS_VOLUME":/data \
     -v "$(dirname "$BACKUP_FILE")":/backup:ro \
-    alpine sh -c "cd /data && rm -f dump.rdb appendonly.aof && cp /backup/$(basename "$BACKUP_FILE") dump.rdb && ls -la /data"
+    alpine sh -c "
+        cd /data
+        # Remove all AOF files and directories (Redis will recreate if needed)
+        rm -rf appendonly.aof appendonlydir
+        # Remove old RDB
+        rm -f dump.rdb
+        # Copy new RDB backup
+        cp /backup/$(basename "$BACKUP_FILE") dump.rdb
+        # Set correct permissions
+        chmod 644 dump.rdb
+        echo 'Files in /data after restore:'
+        ls -la /data
+        echo ''
+        echo 'RDB file size:'
+        ls -lh dump.rdb
+    "
 
 # Start Redis (it will automatically load dump.rdb)
+# Note: With AOF disabled temporarily, Redis will load from RDB
 echo "🚀 Starting Redis container..."
 docker-compose start redis
 
-# Wait for Redis to be ready
-echo "⏳ Waiting for Redis to be ready..."
-sleep 3
+# Give Redis time to load the RDB file
+echo "⏳ Waiting for Redis to load RDB file..."
+sleep 8
+
+# Check Redis logs for loading messages
+echo ""
+echo "📋 Checking Redis startup logs..."
+echo "   Looking for RDB loading messages..."
+docker logs --tail 30 binance-bot-redis 2>&1 | grep -E "(Loading|DB loaded|Ready to accept|Error|Fatal|RDB)" | sed 's/^/   /' || echo "   No loading messages found"
+
+# Check if Redis is responding
+echo ""
+echo "🧪 Testing Redis connection..."
+if docker exec binance-bot-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+    echo "   ✅ Redis is responding"
+else
+    echo "   ❌ Redis is not responding"
+    echo "   Check logs: docker logs binance-bot-redis"
+fi
 
 # Verify data was restored
 echo "✅ Verifying restored data..."
