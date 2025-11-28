@@ -707,6 +707,18 @@
                     }
                 });
                 
+                // Check response status first
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('API error response:', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        url: finalUrl,
+                        error: errorText.substring(0, 500)
+                    });
+                    throw new Error(`API error (${response.status}): ${response.statusText}. ${errorText.substring(0, 200)}`);
+                }
+                
                 const contentType = response.headers.get('content-type') || '';
                 
                 // Check if response is JSON before parsing
@@ -719,12 +731,7 @@
                         url: finalUrl,
                         responsePreview: text.substring(0, 500)
                     });
-                    throw new Error(`Expected JSON but received ${contentType || 'unknown type'} (HTTP ${response.status}). First 200 chars: ${text.substring(0, 200)}`);
-                }
-                
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText.substring(0, 200)}`);
+                    throw new Error(`Expected JSON but received ${contentType || 'unknown type'} (HTTP ${response.status}). URL: ${finalUrl}. Response preview: ${text.substring(0, 200)}`);
                 }
                 
                 const trades = await response.json();

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
@@ -30,7 +31,16 @@ def _convert_order_to_trade_with_timestamp(
     strategy_id: Optional[str] = None,
     strategy_name: Optional[str] = None,
 ) -> TradeWithTimestamp:
-    """Convert OrderResponse to TradeWithTimestamp."""
+    """Convert OrderResponse to TradeWithTimestamp.
+    
+    Note: OrderResponse doesn't have a timestamp field, so we use order_id
+    as a proxy for ordering. For proper timestamp tracking, we should
+    add a timestamp field to OrderResponse in the future.
+    """
+    # Use order_id as a proxy for timestamp ordering
+    # Higher order_id = more recent (Binance order IDs are sequential)
+    # For now, we'll use a timestamp based on when the trade was retrieved
+    # In a production system, we should store the actual order timestamp from Binance
     return TradeWithTimestamp(
         symbol=order.symbol,
         order_id=order.order_id,
@@ -39,7 +49,8 @@ def _convert_order_to_trade_with_timestamp(
         price=order.price,
         avg_price=order.avg_price,
         executed_qty=order.executed_qty,
-        timestamp=datetime.utcnow(),  # We'll need to track this better in the future
+        # Use current time as fallback - in future, get from Binance order response
+        timestamp=datetime.now(timezone.utc),
         strategy_id=strategy_id,
         strategy_name=strategy_name,
     )
@@ -48,13 +59,37 @@ def _convert_order_to_trade_with_timestamp(
 @router.get("/list", response_model=List[TradeWithTimestamp])
 def list_all_trades(
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
-    start_date: Optional[datetime] = Query(default=None, description="Filter from date"),
-    end_date: Optional[datetime] = Query(default=None, description="Filter until date"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date (ISO format or YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(default=None, description="Filter until date (ISO format or YYYY-MM-DD)"),
     side: Optional[str] = Query(default=None, description="Filter by side (BUY/SELL)"),
     strategy_id: Optional[str] = Query(default=None, description="Filter by strategy ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> List[TradeWithTimestamp]:
     """Get all trades across all strategies with optional filtering."""
+    # Parse datetime strings
+    start_datetime: Optional[datetime] = None
+    end_datetime: Optional[datetime] = None
+    
+    if start_date:
+        try:
+            # Try parsing ISO format first, then fallback to other formats
+            start_datetime = date_parser.parse(start_date)
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.warning(f"Invalid start_date format: {start_date}, error: {exc}")
+            start_datetime = None
+    
+    if end_date:
+        try:
+            # Try parsing ISO format first, then fallback to other formats
+            end_datetime = date_parser.parse(end_date)
+            if end_datetime.tzinfo is None:
+                end_datetime = end_datetime.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
+            end_datetime = None
+    
     all_trades = []
     
     # Get all strategies
@@ -84,28 +119,19 @@ def list_all_trades(
             if side and trade_with_ts.side.upper() != side.upper():
                 continue
             
-            # Apply date filters
-            if start_date or end_date:
+            # Apply date filters with proper timezone handling
+            if start_datetime or end_datetime:
                 trade_timestamp = trade_with_ts.timestamp
-                # Ensure both datetimes are timezone-aware for comparison
+                # Ensure trade timestamp is timezone-aware
                 if trade_timestamp.tzinfo is None:
-                    # If trade timestamp is naive, assume it's UTC
                     trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
                 
-                if start_date:
-                    # Ensure start_date is timezone-aware
-                    start_date_aware = start_date
-                    if start_date_aware.tzinfo is None:
-                        start_date_aware = start_date_aware.replace(tzinfo=timezone.utc)
-                    if trade_timestamp < start_date_aware:
+                if start_datetime:
+                    if trade_timestamp < start_datetime:
                         continue
                 
-                if end_date:
-                    # Ensure end_date is timezone-aware
-                    end_date_aware = end_date
-                    if end_date_aware.tzinfo is None:
-                        end_date_aware = end_date_aware.replace(tzinfo=timezone.utc)
-                    if trade_timestamp > end_date_aware:
+                if end_datetime:
+                    if trade_timestamp > end_datetime:
                         continue
             
             all_trades.append(trade_with_ts)
