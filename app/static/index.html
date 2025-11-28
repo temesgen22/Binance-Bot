@@ -358,12 +358,12 @@
 
                 <div class="filter-group">
                     <label for="dateFrom">From Date & Time</label>
-                    <input type="datetime-local" id="dateFrom">
+                    <input type="datetime-local" id="dateFrom" step="1">
                 </div>
 
                 <div class="filter-group">
                     <label for="dateTo">To Date & Time</label>
-                    <input type="datetime-local" id="dateTo">
+                    <input type="datetime-local" id="dateTo" step="1">
                 </div>
 
                 <div class="filter-group">
@@ -612,14 +612,15 @@
         // Set default date to today
         function setDefaultDates() {
             const now = new Date();
-            // Format for datetime-local input (YYYY-MM-DDTHH:mm)
+            // Format for datetime-local input (YYYY-MM-DDTHH:mm:ss)
             const formatDateTimeLocal = (date) => {
                 const year = date.getFullYear();
                 const month = String(date.getMonth() + 1).padStart(2, '0');
                 const day = String(date.getDate()).padStart(2, '0');
                 const hours = String(date.getHours()).padStart(2, '0');
                 const minutes = String(date.getMinutes()).padStart(2, '0');
-                return `${year}-${month}-${day}T${hours}:${minutes}`;
+                const seconds = String(date.getSeconds()).padStart(2, '0');
+                return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
             };
             
             document.getElementById('dateTo').value = formatDateTimeLocal(now);

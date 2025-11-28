@@ -66,78 +66,90 @@ def list_all_trades(
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> List[TradeWithTimestamp]:
     """Get all trades across all strategies with optional filtering."""
-    # Parse datetime strings
-    start_datetime: Optional[datetime] = None
-    end_datetime: Optional[datetime] = None
-    
-    if start_date:
-        try:
-            # Try parsing ISO format first, then fallback to other formats
-            start_datetime = date_parser.parse(start_date)
-            if start_datetime.tzinfo is None:
-                start_datetime = start_datetime.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError) as exc:
-            logger.warning(f"Invalid start_date format: {start_date}, error: {exc}")
-            start_datetime = None
-    
-    if end_date:
-        try:
-            # Try parsing ISO format first, then fallback to other formats
-            end_datetime = date_parser.parse(end_date)
-            if end_datetime.tzinfo is None:
-                end_datetime = end_datetime.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError) as exc:
-            logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
-            end_datetime = None
-    
-    all_trades = []
-    
-    # Get all strategies
-    strategies = runner.list_strategies()
-    strategy_map = {s.id: s for s in strategies}
-    
-    # Collect trades from all strategies
-    for strategy in strategies:
-        # Apply strategy_id filter
-        if strategy_id and strategy.id != strategy_id:
-            continue
+    try:
+        # Parse datetime strings
+        start_datetime: Optional[datetime] = None
+        end_datetime: Optional[datetime] = None
         
-        # Apply symbol filter
-        if symbol and strategy.symbol.upper() != symbol.upper():
-            continue
+        if start_date:
+            try:
+                # Try parsing ISO format first, then fallback to other formats
+                start_datetime = date_parser.parse(start_date)
+                if start_datetime.tzinfo is None:
+                    start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError) as exc:
+                logger.warning(f"Invalid start_date format: {start_date}, error: {exc}")
+                start_datetime = None
         
-        # Get trades for this strategy
-        strategy_trades = runner.get_trades(strategy.id)
-        for trade in strategy_trades:
-            trade_with_ts = _convert_order_to_trade_with_timestamp(
-                trade,
-                strategy_id=strategy.id,
-                strategy_name=strategy.name,
-            )
-            
-            # Apply side filter
-            if side and trade_with_ts.side.upper() != side.upper():
+        if end_date:
+            try:
+                # Try parsing ISO format first, then fallback to other formats
+                end_datetime = date_parser.parse(end_date)
+                if end_datetime.tzinfo is None:
+                    end_datetime = end_datetime.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError) as exc:
+                logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
+                end_datetime = None
+        
+        all_trades = []
+        
+        # Get all strategies
+        strategies = runner.list_strategies()
+        
+        # Collect trades from all strategies
+        for strategy in strategies:
+            # Apply strategy_id filter
+            if strategy_id and strategy.id != strategy_id:
                 continue
             
-            # Apply date filters with proper timezone handling
-            if start_datetime or end_datetime:
-                trade_timestamp = trade_with_ts.timestamp
-                # Ensure trade timestamp is timezone-aware
-                if trade_timestamp.tzinfo is None:
-                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
-                
-                if start_datetime:
-                    if trade_timestamp < start_datetime:
-                        continue
-                
-                if end_datetime:
-                    if trade_timestamp > end_datetime:
-                        continue
+            # Apply symbol filter
+            if symbol and strategy.symbol.upper() != symbol.upper():
+                continue
             
-            all_trades.append(trade_with_ts)
+            # Get trades for this strategy
+            try:
+                strategy_trades = runner.get_trades(strategy.id)
+                for trade in strategy_trades:
+                    trade_with_ts = _convert_order_to_trade_with_timestamp(
+                        trade,
+                        strategy_id=strategy.id,
+                        strategy_name=strategy.name,
+                    )
+                    
+                    # Apply side filter
+                    if side and trade_with_ts.side.upper() != side.upper():
+                        continue
+                    
+                    # Apply date filters with proper timezone handling
+                    if start_datetime or end_datetime:
+                        trade_timestamp = trade_with_ts.timestamp
+                        # Ensure trade timestamp is timezone-aware
+                        if trade_timestamp.tzinfo is None:
+                            trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                        
+                        if start_datetime:
+                            if trade_timestamp < start_datetime:
+                                continue
+                        
+                        if end_datetime:
+                            if trade_timestamp > end_datetime:
+                                continue
+                    
+                    all_trades.append(trade_with_ts)
+            except Exception as exc:
+                logger.warning(f"Error getting trades for strategy {strategy.id}: {exc}")
+                continue
+        
+        logger.info(f"Retrieved {len(all_trades)} trades with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
+        return all_trades
     
-    logger.info(f"Retrieved {len(all_trades)} trades with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
-    return all_trades
+    except Exception as exc:
+        logger.exception(f"Error in list_all_trades endpoint: {exc}")
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving trades: {str(exc)}"
+        ) from exc
 
 
 @router.get("/symbols", response_model=List[str])
