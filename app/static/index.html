@@ -332,6 +332,8 @@
             <div class="nav-links" style="margin-top: 15px;">
                 <a href="/trades" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📊 Trade & PnL Viewer</a>
                 <a href="/strategies" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🏆 Strategy Performance</a>
+                <a href="/reports" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📊 Trading Reports</a>
+                <a href="/register" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🚀 Register Strategy</a>
                 <a href="/docs" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📖 API Docs</a>
             </div>
         </div>
@@ -492,8 +494,11 @@
                 const searchText = document.getElementById('searchText').value.trim();
                 if (searchText) params.append('search_text', searchText);
                 
-                const limit = document.getElementById('limit').value;
-                params.append('limit', limit);
+                // Validate and clamp limit value (1-10000)
+                let limit = parseInt(document.getElementById('limit').value) || 1000;
+                if (limit < 1) limit = 1;
+                if (limit > 10000) limit = 10000;
+                params.append('limit', limit.toString());
 
                 const response = await fetch(`${API_BASE}/logs/?${params.toString()}`);
                 

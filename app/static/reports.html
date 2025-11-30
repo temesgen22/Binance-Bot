@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Trading Reports</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .filters {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .filters h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .filter-group input,
+        .filter-group select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .filter-group input:focus,
+        .filter-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .overview-stats {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .overview-stats h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-card .value.positive {
+            color: #28a745;
+        }
+
+        .stat-card .value.negative {
+            color: #dc3545;
+        }
+
+        .content {
+            padding: 25px;
+        }
+
+        .strategy-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            transition: box-shadow 0.3s;
+        }
+
+        .strategy-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .strategy-header {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .strategy-header:hover {
+            background: #e9ecef;
+        }
+
+        .strategy-info {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .strategy-name {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .strategy-meta {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .strategy-stats {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-item-label {
+            font-size: 0.8em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .stat-item-value {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-item-value.positive {
+            color: #28a745;
+        }
+
+        .stat-item-value.negative {
+            color: #dc3545;
+        }
+
+        .expand-icon {
+            font-size: 1.5em;
+            transition: transform 0.3s;
+        }
+
+        .strategy-card.expanded .expand-icon {
+            transform: rotate(180deg);
+        }
+
+        .strategy-details {
+            display: none;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .strategy-card.expanded .strategy-details {
+            display: block;
+        }
+
+        .trades-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .trades-table thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .trades-table th {
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .trades-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 0.9em;
+        }
+
+        .trades-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        .trades-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge.danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .badge.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .positive {
+            color: #28a745;
+        }
+
+        .negative {
+            color: #dc3545;
+        }
+
+        .refresh-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .refresh-controls h2 {
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        @media (max-width: 768px) {
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .strategy-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .trades-table {
+                font-size: 0.8em;
+            }
+
+            .trades-table th,
+            .trades-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Trading Reports</h1>
+            <p>Comprehensive trading analysis with Binance trade parameters</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/trades">💹 Trade & PnL Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/register">🚀 Register Strategy</a>
+                <a href="/docs">📖 API Docs</a>
+            </div>
+        </div>
+
+        <div class="filters">
+            <h2>Filters</h2>
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label for="strategyIdFilter">Strategy ID</label>
+                    <input type="text" id="strategyIdFilter" placeholder="Filter by strategy ID">
+                </div>
+                <div class="filter-group">
+                    <label for="strategyNameFilter">Strategy Name</label>
+                    <input type="text" id="strategyNameFilter" placeholder="Filter by strategy name">
+                </div>
+                <div class="filter-group">
+                    <label for="symbolFilter">Symbol</label>
+                    <input type="text" id="symbolFilter" placeholder="e.g., BTCUSDT">
+                </div>
+                <div class="filter-group">
+                    <label for="startDateFilter">Start Date & Time</label>
+                    <input type="datetime-local" id="startDateFilter" step="1">
+                </div>
+                <div class="filter-group">
+                    <label for="endDateFilter">End Date & Time</label>
+                    <input type="datetime-local" id="endDateFilter" step="1">
+                </div>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="loadReport()">Generate Report</button>
+                <button class="btn btn-secondary" onclick="clearFilters()">Clear Filters</button>
+            </div>
+        </div>
+
+        <div class="overview-stats" id="overviewStats" style="display: none;">
+            <h2>Overall Statistics</h2>
+            <div class="stats-grid" id="overviewStatsGrid">
+                <!-- Stats will be populated here -->
+            </div>
+        </div>
+
+        <div class="content">
+            <div id="reportContent">
+                <div class="loading">Click "Generate Report" to view trading reports</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function formatCurrency(value) {
+            const sign = value >= 0 ? '+' : '';
+            return sign + '$' + value.toFixed(2);
+        }
+
+        function formatPercent(value) {
+            const sign = value >= 0 ? '+' : '';
+            return sign + value.toFixed(2) + '%';
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleString();
+        }
+
+        function getFilters() {
+            const strategyId = document.getElementById('strategyIdFilter').value.trim();
+            const strategyName = document.getElementById('strategyNameFilter').value.trim();
+            const symbol = document.getElementById('symbolFilter').value.trim();
+            const startDate = document.getElementById('startDateFilter').value;
+            const endDate = document.getElementById('endDateFilter').value;
+
+            const params = new URLSearchParams();
+            if (strategyId) params.append('strategy_id', strategyId);
+            if (strategyName) params.append('strategy_name', strategyName);
+            if (symbol) params.append('symbol', symbol.toUpperCase());
+            if (startDate) {
+                const isoStart = new Date(startDate).toISOString();
+                params.append('start_date', isoStart);
+            }
+            if (endDate) {
+                const isoEnd = new Date(endDate).toISOString();
+                params.append('end_date', isoEnd);
+            }
+
+            return params.toString();
+        }
+
+        async function loadReport() {
+            const content = document.getElementById('reportContent');
+            content.innerHTML = '<div class="loading">Loading report...</div>';
+
+            try {
+                const filters = getFilters();
+                const url = filters ? `/reports/?${filters}` : '/reports/';
+
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`API error (${response.status}): ${response.statusText}`);
+                }
+
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    const text = await response.text();
+                    throw new Error(`Expected JSON but received ${contentType}`);
+                }
+
+                const report = await response.json();
+                displayReport(report);
+            } catch (error) {
+                console.error('Error loading report:', error);
+                content.innerHTML = `<div class="error">Error loading report: ${error.message}</div>`;
+            }
+        }
+
+        function displayReport(report) {
+            // Display overview stats
+            displayOverviewStats(report);
+
+            // Display strategies
+            const content = document.getElementById('reportContent');
+            
+            if (!report.strategies || report.strategies.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No strategies found</h3><p>Try adjusting your filters</p></div>';
+                return;
+            }
+
+            let html = '';
+            report.strategies.forEach((strategy, index) => {
+                html += createStrategyCard(strategy, index);
+            });
+
+            content.innerHTML = html;
+
+            // Attach click handlers for expanding/collapsing
+            document.querySelectorAll('.strategy-header').forEach(header => {
+                header.addEventListener('click', function() {
+                    const card = this.parentElement;
+                    card.classList.toggle('expanded');
+                });
+            });
+        }
+
+        function displayOverviewStats(report) {
+            const overviewStats = document.getElementById('overviewStats');
+            const statsGrid = document.getElementById('overviewStatsGrid');
+            
+            overviewStats.style.display = 'block';
+            
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <h3>Total Strategies</h3>
+                    <div class="value">${report.total_strategies || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Trades</h3>
+                    <div class="value">${report.total_trades || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Overall Win Rate</h3>
+                    <div class="value">${(report.overall_win_rate || 0).toFixed(2)}%</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Overall Net PnL</h3>
+                    <div class="value ${report.overall_net_pnl >= 0 ? 'positive' : 'negative'}">
+                        ${formatCurrency(report.overall_net_pnl || 0)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function createStrategyCard(strategy, index) {
+            const statusBadge = strategy.stopped_at 
+                ? `<span class="badge warning">Stopped</span>`
+                : `<span class="badge success">Running</span>`;
+
+            const netPnlClass = strategy.net_pnl >= 0 ? 'positive' : 'negative';
+            const winRateColor = strategy.win_rate >= 50 ? 'positive' : 'negative';
+
+            return `
+                <div class="strategy-card" id="strategy-${index}">
+                    <div class="strategy-header">
+                        <div class="strategy-info">
+                            <div class="strategy-name">${strategy.strategy_name || strategy.strategy_id}</div>
+                            <div class="strategy-meta">
+                                <span><strong>Symbol:</strong> ${strategy.symbol}</span>
+                                <span><strong>ID:</strong> ${strategy.strategy_id}</span>
+                                ${statusBadge}
+                            </div>
+                        </div>
+                        <div class="strategy-stats">
+                            <div class="stat-item">
+                                <div class="stat-item-label">Win Rate</div>
+                                <div class="stat-item-value ${winRateColor}">${strategy.win_rate.toFixed(2)}%</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-item-label">Net PnL</div>
+                                <div class="stat-item-value ${netPnlClass}">${formatCurrency(strategy.net_pnl)}</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-item-label">Total Trades</div>
+                                <div class="stat-item-value">${strategy.total_trades}</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-item-label">Wins / Losses</div>
+                                <div class="stat-item-value">
+                                    <span class="positive">${strategy.wins}W</span> / 
+                                    <span class="negative">${strategy.losses}L</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="expand-icon">▼</div>
+                    </div>
+                    <div class="strategy-details">
+                        <div style="margin-bottom: 15px;">
+                            <strong>Created:</strong> ${formatDate(strategy.created_at)} | 
+                            <strong>Stopped:</strong> ${strategy.stopped_at ? formatDate(strategy.stopped_at) : 'Running'}
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <strong>Total Profit:</strong> <span class="positive">${formatCurrency(strategy.total_profit_usd)}</span> | 
+                            <strong>Total Loss:</strong> <span class="negative">${formatCurrency(strategy.total_loss_usd)}</span>
+                        </div>
+                        ${strategy.trades && strategy.trades.length > 0 ? createTradesTable(strategy.trades) : '<p>No completed trades yet.</p>'}
+                    </div>
+                </div>
+            `;
+        }
+
+        function createTradesTable(trades) {
+            let html = '<table class="trades-table"><thead><tr>';
+            html += '<th>Trade ID</th><th>Symbol</th><th>Side</th><th>Entry Time</th><th>Entry Price</th>';
+            html += '<th>Exit Time</th><th>Exit Price</th><th>Quantity</th><th>Leverage</th>';
+            html += '<th>Fee Paid</th><th>Initial Margin</th><th>Margin Type</th><th>Notional Value</th>';
+            html += '<th>PnL (USD)</th><th>PnL (%)</th><th>Exit Reason</th>';
+            html += '</tr></thead><tbody>';
+
+            trades.forEach(trade => {
+                const pnlClass = trade.pnl_usd >= 0 ? 'positive' : 'negative';
+                html += '<tr>';
+                html += `<td>${trade.trade_id}</td>`;
+                html += `<td><strong>${trade.symbol}</strong></td>`;
+                html += `<td><span class="badge ${trade.side === 'LONG' ? 'success' : 'danger'}">${trade.side}</span></td>`;
+                html += `<td>${formatDate(trade.entry_time)}</td>`;
+                html += `<td>$${trade.entry_price.toFixed(4)}</td>`;
+                html += `<td>${formatDate(trade.exit_time)}</td>`;
+                html += `<td>$${(trade.exit_price || 0).toFixed(4)}</td>`;
+                html += `<td>${trade.quantity.toFixed(4)}</td>`;
+                html += `<td>${trade.leverage}x</td>`;
+                html += `<td>$${trade.fee_paid.toFixed(4)}</td>`;
+                html += `<td>${trade.initial_margin ? '$' + trade.initial_margin.toFixed(2) : 'N/A'}</td>`;
+                html += `<td>${trade.margin_type ? `<span class="badge info">${trade.margin_type}</span>` : 'N/A'}</td>`;
+                html += `<td>${trade.notional_value ? '$' + trade.notional_value.toFixed(2) : 'N/A'}</td>`;
+                html += `<td class="${pnlClass}"><strong>${formatCurrency(trade.pnl_usd)}</strong></td>`;
+                html += `<td class="${pnlClass}"><strong>${formatPercent(trade.pnl_pct)}</strong></td>`;
+                html += `<td>${trade.exit_reason || 'N/A'}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function clearFilters() {
+            document.getElementById('strategyIdFilter').value = '';
+            document.getElementById('strategyNameFilter').value = '';
+            document.getElementById('symbolFilter').value = '';
+            document.getElementById('startDateFilter').value = '';
+            document.getElementById('endDateFilter').value = '';
+        }
+
+        // Initialize - load report on page load
+        window.addEventListener('load', () => {
+            // Optionally load report automatically, or wait for user to click button
+            // loadReport();
+        });
+    </script>
+</body>
+</html>
+

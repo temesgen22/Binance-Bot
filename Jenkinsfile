@@ -245,8 +245,12 @@ If Jenkins is on a host/server:
                          echo "📥 Pulling latest code from GitHub..."
                          ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "
                               cd \$DEPLOY_PATH
-                              git reset --hard
-                              git pull origin main
+                              # Fetch latest from remote
+                              git fetch origin main
+                              # Reset local branch to exactly match remote (handles divergent branches)
+                              git reset --hard origin/main
+                              # Ensure we're on main branch
+                              git checkout main 2>/dev/null || true
                          "
 
                         # Copy .env.example if .env doesn't exist

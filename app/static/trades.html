@@ -420,6 +420,8 @@
             <div class="nav-links">
                 <a href="/">📋 Log Viewer</a>
                 <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
             </div>
         </div>
@@ -753,12 +755,22 @@
             }
 
             let html = '<table class="trades-table"><thead><tr>';
-            html += '<th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
-            html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Strategy</th>';
+            html += '<th>Date/Time</th><th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
+            html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Commission</th>';
+            html += '<th>Leverage</th><th>Strategy</th>';
             html += '</tr></thead><tbody>';
 
             trades.forEach(trade => {
                 html += '<tr>';
+                
+                // Date/Time - format timestamp if available
+                if (trade.timestamp) {
+                    const date = new Date(trade.timestamp);
+                    html += `<td>${date.toLocaleString()}</td>`;
+                } else {
+                    html += '<td>N/A</td>';
+                }
+                
                 html += `<td><strong>${trade.symbol}</strong></td>`;
                 html += `<td>${trade.order_id}</td>`;
                 html += `<td><span class="badge ${trade.side === 'BUY' ? 'success' : 'danger'}">${trade.side}</span></td>`;
@@ -766,6 +778,22 @@
                 html += `<td>$${trade.price.toFixed(4)}</td>`;
                 html += `<td>$${(trade.avg_price || trade.price).toFixed(4)}</td>`;
                 html += `<td>${trade.executed_qty.toFixed(4)}</td>`;
+                
+                // Commission
+                if (trade.commission !== null && trade.commission !== undefined) {
+                    const commissionAsset = trade.commission_asset || 'USDT';
+                    html += `<td>${trade.commission.toFixed(4)} ${commissionAsset}</td>`;
+                } else {
+                    html += '<td>-</td>';
+                }
+                
+                // Leverage
+                if (trade.leverage !== null && trade.leverage !== undefined) {
+                    html += `<td>${trade.leverage}x</td>`;
+                } else {
+                    html += '<td>-</td>';
+                }
+                
                 html += `<td>${trade.strategy_name || 'N/A'}</td>`;
                 html += '</tr>';
             });

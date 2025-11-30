@@ -33,14 +33,12 @@ def _convert_order_to_trade_with_timestamp(
 ) -> TradeWithTimestamp:
     """Convert OrderResponse to TradeWithTimestamp.
     
-    Note: OrderResponse doesn't have a timestamp field, so we use order_id
-    as a proxy for ordering. For proper timestamp tracking, we should
-    add a timestamp field to OrderResponse in the future.
+    Uses actual Binance order timestamp if available, otherwise falls back.
     """
-    # Use order_id as a proxy for timestamp ordering
-    # Higher order_id = more recent (Binance order IDs are sequential)
-    # For now, we'll use a timestamp based on when the trade was retrieved
-    # In a production system, we should store the actual order timestamp from Binance
+    # Use actual timestamp from Binance order response if available
+    # Order of preference: timestamp -> update_time -> fallback to current time
+    order_timestamp = order.timestamp or order.update_time or datetime.now(timezone.utc)
+    
     return TradeWithTimestamp(
         symbol=order.symbol,
         order_id=order.order_id,
@@ -49,10 +47,17 @@ def _convert_order_to_trade_with_timestamp(
         price=order.price,
         avg_price=order.avg_price,
         executed_qty=order.executed_qty,
-        # Use current time as fallback - in future, get from Binance order response
-        timestamp=datetime.now(timezone.utc),
+        timestamp=order_timestamp,
         strategy_id=strategy_id,
         strategy_name=strategy_name,
+        # Include Binance trade parameters if available
+        commission=getattr(order, 'commission', None),
+        commission_asset=getattr(order, 'commission_asset', None),
+        leverage=getattr(order, 'leverage', None),
+        initial_margin=getattr(order, 'initial_margin', None),
+        margin_type=getattr(order, 'margin_type', None),
+        notional_value=getattr(order, 'notional_value', None),
+        client_order_id=getattr(order, 'client_order_id', None),
     )
 
 

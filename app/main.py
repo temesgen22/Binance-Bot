@@ -15,6 +15,7 @@ from app.api.routes.strategies import router as strategies_router
 from app.api.routes.logs import router as logs_router
 from app.api.routes.trades import router as trades_router
 from app.api.routes.strategy_performance import router as strategy_performance_router
+from app.api.routes.reports import router as reports_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(strategies_router)  # Must be before /strategies GUI route
     app.include_router(logs_router)
     app.include_router(strategy_performance_router)
+    app.include_router(reports_router)  # Must be before /reports GUI route
     
     # GUI routes - registered AFTER API routers
     # FastAPI matches more specific routes first, so /trades/list will match before /trades
@@ -258,6 +260,96 @@ def create_app() -> FastAPI:
     async def strategies_gui_with_slash():
         """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
         return await _serve_strategies_gui()
+    
+    # Serve reports.html for Trading Reports
+    async def _serve_reports_gui():
+        """Helper function to serve the Trading Reports GUI."""
+        reports_path = static_dir / "reports.html"
+        abs_reports_path = reports_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_reports_path,
+            reports_path,
+            abs_static_dir / "reports.html",
+            static_dir / "reports.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Trading Reports GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # GUI routes for reports - registered AFTER API routers
+    @app.get("/reports", tags=["gui"], include_in_schema=False)
+    async def reports_gui():
+        """Serve the Trading Reports GUI (without trailing slash)."""
+        return await _serve_reports_gui()
+    
+    @app.get("/reports/", tags=["gui"], include_in_schema=False)
+    async def reports_gui_with_slash():
+        """Serve the Trading Reports GUI (with trailing slash)."""
+        return await _serve_reports_gui()
+    
+    # Serve register.html for Strategy Registration
+    async def _serve_register_gui():
+        """Helper function to serve the Strategy Registration GUI."""
+        register_path = static_dir / "register.html"
+        abs_register_path = register_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_register_path,
+            register_path,
+            abs_static_dir / "register.html",
+            static_dir / "register.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Strategy Registration GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # GUI routes for register - registered AFTER API routers
+    @app.get("/register", tags=["gui"], include_in_schema=False)
+    async def register_gui():
+        """Serve the Strategy Registration GUI (without trailing slash)."""
+        return await _serve_register_gui()
+    
+    @app.get("/register/", tags=["gui"], include_in_schema=False)
+    async def register_gui_with_slash():
+        """Serve the Strategy Registration GUI (with trailing slash)."""
+        return await _serve_register_gui()
     
     return app
 

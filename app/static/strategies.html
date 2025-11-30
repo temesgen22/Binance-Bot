@@ -454,6 +454,8 @@
             <div class="nav-links">
                 <a href="/">📋 Log Viewer</a>
                 <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
             </div>
         </div>
@@ -719,12 +721,46 @@
             }
             html += '</div>';
             
-            // Strategy parameters
+            // Strategy parameters (filtered by strategy type)
             if (strategy.params && Object.keys(strategy.params).length > 0) {
                 html += '<div class="detail-section"><h4>Strategy Parameters</h4>';
-                Object.entries(strategy.params).forEach(([key, value]) => {
-                    html += `<div class="detail-item"><label>${key}:</label><value>${value}</value></div>`;
+                
+                // Define parameters for each strategy type
+                const emaScalpingParams = [
+                    'ema_fast', 'ema_slow', 'take_profit_pct', 'stop_loss_pct',
+                    'interval_seconds', 'kline_interval', 'enable_short',
+                    'min_ema_separation', 'enable_htf_bias', 'cooldown_candles',
+                    'trailing_stop_enabled', 'trailing_stop_activation_pct'
+                ];
+                
+                const rangeMeanReversionParams = [
+                    'lookback_period', 'buy_zone_pct', 'sell_zone_pct',
+                    'ema_fast_period', 'ema_slow_period', 'max_ema_spread_pct',
+                    'max_atr_multiplier', 'rsi_period', 'rsi_oversold',
+                    'rsi_overbought', 'tp_buffer_pct', 'sl_buffer_pct', 'kline_interval'
+                ];
+                
+                // Determine which parameters to show based on strategy type
+                let relevantParams = [];
+                if (strategy.strategy_type === 'scalping' || strategy.strategy_type === 'ema_crossover') {
+                    relevantParams = emaScalpingParams;
+                } else if (strategy.strategy_type === 'range_mean_reversion') {
+                    relevantParams = rangeMeanReversionParams;
+                } else {
+                    // Fallback: show all parameters if strategy type is unknown
+                    relevantParams = Object.keys(strategy.params);
+                }
+                
+                // Only display relevant parameters
+                relevantParams.forEach(key => {
+                    if (strategy.params.hasOwnProperty(key)) {
+                        const value = strategy.params[key];
+                        // Format boolean values
+                        const displayValue = typeof value === 'boolean' ? value.toString() : value;
+                        html += `<div class="detail-item"><label>${key}:</label><value>${displayValue}</value></div>`;
+                    }
                 });
+                
                 html += '</div>';
             }
             

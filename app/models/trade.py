@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class TradeWithTimestamp(BaseModel):
-    """Extended order model with timestamp for filtering."""
+    """Extended order model with timestamp and Binance trade parameters for filtering."""
     
     symbol: str
     order_id: int
@@ -18,9 +18,18 @@ class TradeWithTimestamp(BaseModel):
     price: float
     avg_price: Optional[float] = None
     executed_qty: float
-    timestamp: Optional[datetime] = Field(default=None, description="Trade execution timestamp")
+    timestamp: Optional[datetime] = Field(default=None, description="Trade execution timestamp from Binance")
     strategy_id: Optional[str] = Field(default=None, description="Strategy ID that executed this trade")
     strategy_name: Optional[str] = Field(default=None, description="Strategy name")
+    
+    # Binance trade parameters (optional)
+    commission: Optional[float] = Field(default=None, description="Actual commission/fee paid from Binance")
+    commission_asset: Optional[str] = Field(default=None, description="Asset used for commission (usually USDT)")
+    leverage: Optional[int] = Field(default=None, description="Actual leverage used from Binance")
+    initial_margin: Optional[float] = Field(default=None, description="Initial margin used from Binance")
+    margin_type: Optional[Literal["CROSSED", "ISOLATED"]] = Field(default=None, description="Margin type from Binance")
+    notional_value: Optional[float] = Field(default=None, description="Notional value in quote currency")
+    client_order_id: Optional[str] = Field(default=None, description="Client order ID from Binance")
     
     class Config:
         from_attributes = True

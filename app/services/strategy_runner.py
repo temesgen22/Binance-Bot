@@ -980,6 +980,15 @@ class StrategyRunner:
                 summary.entry_price = float(position["entryPrice"])
                 summary.unrealized_pnl = float(position["unRealizedProfit"])
                 summary.position_side = "LONG" if position_amt > 0 else "SHORT"
+                # Update current price from mark price for consistency
+                if "markPrice" in position:
+                    summary.current_price = float(position["markPrice"])
+                else:
+                    # Fallback to getting current price if markPrice not available
+                    try:
+                        summary.current_price = self.client.get_price(summary.symbol)
+                    except Exception:
+                        pass  # Keep existing current_price if update fails
             else:
                 # No open position
                 position_was_closed = summary.position_size != 0  # Position was closed
@@ -1029,7 +1038,21 @@ class StrategyRunner:
             logger.debug(f"Failed to update position info for {summary.symbol}: {exc}")
             # Calculate unrealized PnL manually if we have entry price and current price
             if summary.entry_price and summary.current_price and summary.position_size:
-                summary.unrealized_pnl = (summary.current_price - summary.entry_price) * summary.position_size
+                # Update current price for manual calculation
+                try:
+                    summary.current_price = self.client.get_price(summary.symbol)
+                except Exception as price_exc:
+                    logger.debug(f"Failed to get current price for {summary.symbol}: {price_exc}")
+                
+                # Calculate unrealized PnL based on position side
+                # LONG: profit when current_price > entry_price
+                # SHORT: profit when current_price < entry_price
+                if summary.position_side == "SHORT":
+                    # For SHORT: (entry_price - current_price) * position_size
+                    summary.unrealized_pnl = (summary.entry_price - summary.current_price) * summary.position_size
+                else:
+                    # For LONG: (current_price - entry_price) * position_size
+                    summary.unrealized_pnl = (summary.current_price - summary.entry_price) * summary.position_size
             
             # Save updated summary to Redis (periodically, not every loop)
             # We'll save on state changes instead to reduce Redis writes

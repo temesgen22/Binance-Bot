@@ -467,6 +467,8 @@ class BinanceClient:
         # For market orders that return immediately with "NEW" status but are actually filled,
         # query the order status to get actual fill data
         order_id = response.get("orderId")
+        final_response = response  # Use final_response for parsing Binance data
+        
         if status == "NEW" and order_type == "MARKET" and executed_qty == 0.0:
             logger.debug(f"Order {order_id} returned as NEW, querying status to get fill data...")
             try:
@@ -475,6 +477,9 @@ class BinanceClient:
                 time.sleep(0.1)  # Brief delay for order to process
                 status_response = self.get_order_status(symbol, order_id)
                 logger.debug(f"Order status query response: {status_response}")
+                
+                # Update final_response with order status data (has more complete info)
+                final_response = status_response
                 
                 # Update with actual fill data
                 status = status_response.get("status", status)
@@ -494,6 +499,128 @@ class BinanceClient:
             except Exception as exc:
                 logger.warning(f"Failed to query order status for {order_id}: {exc}")
         
+        # Parse actual Binance trade data from response
+        # Timestamp parsing (Binance returns milliseconds)
+        timestamp = None
+        update_time = None
+        try:
+            if final_response.get("time"):
+                timestamp_ms = int(final_response.get("time", 0))
+                if timestamp_ms > 0:
+                    from datetime import datetime, timezone
+                    timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.debug(f"Could not parse order time: {exc}")
+        
+        try:
+            if final_response.get("updateTime"):
+                update_time_ms = int(final_response.get("updateTime", 0))
+                if update_time_ms > 0:
+                    from datetime import datetime, timezone
+                    update_time = datetime.fromtimestamp(update_time_ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.debug(f"Could not parse order updateTime: {exc}")
+        
+        # Commission parsing (actual fee from Binance)
+        commission = None
+        commission_asset = None
+        try:
+            commission_str = final_response.get("commission") or final_response.get("commissionFee")
+            if commission_str:
+                commission = float(commission_str)
+            commission_asset = final_response.get("commissionAsset")
+        except (ValueError, TypeError) as exc:
+            logger.debug(f"Could not parse commission: {exc}")
+        
+        # Position side (for one-way mode, might not be present)
+        position_side = None
+        pos_side = final_response.get("positionSide")
+        if pos_side and pos_side in ["LONG", "SHORT"]:
+            position_side = pos_side
+        
+        # Leverage - try to get from position info (not always in order response)
+        leverage = None
+        try:
+            # Try to get leverage from current position using existing method
+            leverage = self.get_current_leverage(symbol)
+        except Exception as exc:
+            logger.debug(f"Could not get leverage from position info: {exc}")
+        
+        # Order type and time in force
+        order_type_from_response = final_response.get("type")
+        time_in_force = final_response.get("timeInForce")
+        
+        # Additional Binance trade parameters
+        notional_value = None
+        cummulative_quote_qty = None
+        try:
+            # Notional value: quantity * avg_price (if available)
+            if avg_price and executed_qty > 0:
+                notional_value = avg_price * executed_qty
+            
+            # Cummulative quote quantity (total cost in quote currency)
+            cumm_quote_str = final_response.get("cummulativeQuoteQty") or final_response.get("cummQuoteQty")
+            if cumm_quote_str:
+                cummulative_quote_qty = float(cumm_quote_str)
+            elif notional_value:
+                # Fallback to calculated notional if cummulative not available
+                cummulative_quote_qty = notional_value
+        except (ValueError, TypeError) as exc:
+            logger.debug(f"Could not parse notional/cummulative quote qty: {exc}")
+        
+        # Client order ID
+        client_order_id = final_response.get("clientOrderId") or final_response.get("newClientOrderId")
+        
+        # Working type (for conditional orders)
+        working_type = final_response.get("workingType")
+        
+        # Stop price (for stop-loss/take-profit orders)
+        stop_price = None
+        try:
+            stop_price_str = final_response.get("stopPrice") or final_response.get("activatePrice")
+            if stop_price_str:
+                stop_price = float(stop_price_str)
+        except (ValueError, TypeError):
+            pass
+        
+        # Initial margin and margin type - get from position information
+        initial_margin = None
+        margin_type = None
+        try:
+            # Get position info to extract initial margin and margin type
+            rest_client = self._ensure()
+            positions = rest_client.futures_position_information(symbol=symbol)
+            if positions and len(positions) > 0:
+                # Find the position with non-zero amount or use first position for margin type
+                for pos in positions:
+                    position_amt = float(pos.get("positionAmt", 0))
+                    if abs(position_amt) > 0 or pos.get("marginType"):
+                        # Initial margin (initial margin required)
+                        initial_margin_str = pos.get("initialMargin")
+                        if initial_margin_str:
+                            initial_margin = float(initial_margin_str)
+                        
+                        # Margin type (ISOLATED/CROSSED)
+                        pos_margin_type = pos.get("marginType")
+                        if pos_margin_type in ["ISOLATED", "CROSSED"]:
+                            margin_type = pos_margin_type
+                        
+                        # If we found a position with margin info, we can break
+                        if initial_margin is not None or margin_type:
+                            break
+                
+                # If no position found, try to get margin type from first position
+                if not margin_type and positions:
+                    pos_margin_type = positions[0].get("marginType")
+                    if pos_margin_type in ["ISOLATED", "CROSSED"]:
+                        margin_type = pos_margin_type
+        except Exception as exc:
+            logger.debug(f"Could not get initial margin/margin type from position info: {exc}")
+        
+        # Realized PnL - this is typically available from user trades endpoint, not order response
+        # We'll leave it None for now as it requires querying a different endpoint
+        realized_pnl = None
+        
         # Log warning if order still doesn't have execution data
         if status != "FILLED" and executed_qty == 0.0:
             logger.warning(
@@ -509,12 +636,30 @@ class BinanceClient:
             price=price,
             avg_price=avg_price,
             executed_qty=executed_qty,
+            timestamp=timestamp,
+            commission=commission,
+            commission_asset=commission_asset,
+            leverage=leverage,
+            position_side=position_side,
+            update_time=update_time,
+            time_in_force=time_in_force,
+            order_type=order_type_from_response,
+            notional_value=notional_value,
+            cummulative_quote_qty=cummulative_quote_qty,
+            initial_margin=initial_margin,
+            margin_type=margin_type,
+            client_order_id=client_order_id,
+            working_type=working_type,
+            realized_pnl=realized_pnl,
+            stop_price=stop_price,
         )
         
         logger.info(
             f"Order response: {order_response.side} {order_response.symbol} "
             f"order_id={order_response.order_id} status={order_response.status} "
-            f"executed_qty={order_response.executed_qty} avg_price={order_response.avg_price}"
+            f"executed_qty={order_response.executed_qty} avg_price={order_response.avg_price} "
+            f"commission={commission} {commission_asset} timestamp={timestamp} leverage={leverage}x "
+            f"notional={notional_value} initial_margin={initial_margin} margin_type={margin_type}"
         )
         
         return order_response
