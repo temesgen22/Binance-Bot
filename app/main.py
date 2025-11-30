@@ -351,6 +351,24 @@ def create_app() -> FastAPI:
         """Serve the Strategy Registration GUI (with trailing slash)."""
         return await _serve_register_gui()
     
+    # Diagnostic endpoint to check if register.html exists (for debugging)
+    @app.get("/debug/check-register-file", tags=["debug"], include_in_schema=False)
+    async def check_register_file():
+        """Debug endpoint to check if register.html exists in the container."""
+        register_path = static_dir / "register.html"
+        abs_register_path = register_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        return {
+            "register_path": str(register_path),
+            "abs_register_path": str(abs_register_path),
+            "register_exists": register_path.exists(),
+            "abs_register_exists": abs_register_path.exists(),
+            "static_dir": str(abs_static_dir),
+            "static_dir_exists": abs_static_dir.exists(),
+            "static_dir_contents": list(abs_static_dir.iterdir()) if abs_static_dir.exists() else [],
+        }
+    
     return app
 
 
