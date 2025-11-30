@@ -169,7 +169,12 @@ If Jenkins is on a host/server:
             steps {
                 sh '''#!/bin/bash
                 set -e
-                docker build -t "$IMAGE_NAME:$BUILD_NUMBER" .
+                # Use public DNS servers to resolve Docker Hub
+                docker build \
+                    --dns 8.8.8.8 \
+                    --dns 8.8.4.4 \
+                    --dns 1.1.1.1 \
+                    -t "$IMAGE_NAME:$BUILD_NUMBER" .
                 '''
             }
         }
