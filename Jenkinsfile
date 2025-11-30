@@ -276,6 +276,14 @@ If Jenkins is on a host/server:
                             echo "⚠️  Warning: redis.conf not found in repository!"
                             echo "   Redis container may fail to start without this file."
                         fi
+                        
+                        # Copy restore scripts to deployment (needed for automatic Redis restore)
+                        if [ -d "scripts" ]; then
+                            echo "📝 Copying restore scripts to deployment..."
+                            ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "mkdir -p \$DEPLOY_PATH/scripts"
+                            scp \$SSH_OPTS -P \$SSH_PORT scripts/restore_redis.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  restore_redis.sh not found"
+                            scp \$SSH_OPTS -P \$SSH_PORT scripts/check_and_restore_redis.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  check_and_restore_redis.sh not found"
+                        fi
 
                         # Pull latest image and restart
                        # if [ -n "${env.DOCKER_REGISTRY_URL?.trim()}" ]; then
@@ -301,17 +309,88 @@ If Jenkins is on a host/server:
                                 echo '🛑 Stopping containers (volumes will be preserved)...'
                                 docker-compose down --remove-orphans || true
                                 
-                                # Pull latest images
-                                echo '📥 Pulling latest images...'
+                                # Pull latest images (for images from registry)
+                                echo '📥 Pulling latest images from registry (if any)...'
                                 docker-compose pull || true
                                 
-                                # Start services (volumes will be reattached automatically)
-                                echo '🚀 Starting services...'
-                                docker-compose up -d
+                                # Rebuild and start services with latest code
+                                # This rebuilds the image locally with the code just pulled from GitHub
+                                echo '🔨 Rebuilding Docker image with latest code...'
+                                echo '🚀 Starting services (will rebuild if needed)...'
+                                docker-compose up -d --build
                                 
                                 # Verify Redis volume still exists
                                 echo '✅ Verifying Redis volume after restart...'
                                 docker volume ls | grep redis-data && echo '✅ Redis volume preserved' || echo '⚠️  Warning: Redis volume not found'
+                                
+                                # Wait for Redis to start and check if data exists
+                                echo ''
+                                echo '⏳ Waiting for Redis to start...'
+                                sleep 5
+                                
+                                # Check if Redis has data
+                                KEY_COUNT=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+                                echo "📊 Redis keys after restart: \$KEY_COUNT"
+                                
+                                # If Redis is empty, try to restore from backup
+                                if [ "\$KEY_COUNT" -eq "0" ]; then
+                                    echo ''
+                                    echo '⚠️  WARNING: Redis is empty after restart!'
+                                    echo '🔍 Checking for backups to restore...'
+                                    
+                                    BACKUP_DIR=\${BACKUP_DIR:-/home/jenkins-deploy/redis-backups}
+                                    if [ -d "\$BACKUP_DIR" ]; then
+                                        LATEST_BACKUP=\$(ls -t "\$BACKUP_DIR"/redis-backup-*.rdb 2>/dev/null | head -1)
+                                        if [ -n "\$LATEST_BACKUP" ] && [ -f "\$LATEST_BACKUP" ]; then
+                                            echo "📦 Found latest backup: \$LATEST_BACKUP"
+                                            echo "🔄 Attempting to restore from backup..."
+                                            
+                                            # Check if restore script exists
+                                            if [ -f "\$DEPLOY_PATH/scripts/restore_redis.sh" ]; then
+                                                bash "\$DEPLOY_PATH/scripts/restore_redis.sh" "\$LATEST_BACKUP" || {
+                                                    echo '⚠️  Restore script failed, trying manual restore...'
+                                                    # Manual restore: stop Redis, copy backup, restart
+                                                    docker-compose stop redis
+                                                    sleep 2
+                                                    
+                                                    REDIS_VOLUME=\$(docker volume ls | grep redis-data | awk '{print \$2}' | head -1)
+                                                    if [ -n "\$REDIS_VOLUME" ]; then
+                                                        docker run --rm \\
+                                                            -v "\$REDIS_VOLUME":/data \\
+                                                            -v "\$BACKUP_DIR":/backup:ro \\
+                                                            alpine sh -c "
+                                                                cd /data
+                                                                rm -rf appendonly.aof appendonlydir dump.rdb
+                                                                cp /backup/\$(basename \$LATEST_BACKUP) dump.rdb
+                                                                chmod 644 dump.rdb
+                                                                ls -lh dump.rdb
+                                                            "
+                                                        echo '✅ Backup copied to Redis volume'
+                                                    fi
+                                                    
+                                                    docker-compose up -d redis
+                                                    sleep 5
+                                                    
+                                                    # Verify restore
+                                                    KEY_COUNT_AFTER=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+                                                    if [ "\$KEY_COUNT_AFTER" -gt "0" ]; then
+                                                        echo "✅ Redis restored! Keys: \$KEY_COUNT_AFTER"
+                                                    else
+                                                        echo "⚠️  Restore completed but Redis still empty"
+                                                    fi
+                                                }
+                                            else
+                                                echo '⚠️  Restore script not found at \$DEPLOY_PATH/scripts/restore_redis.sh'
+                                            fi
+                                        else
+                                            echo '⚠️  No backup files found in \$BACKUP_DIR'
+                                        fi
+                                    else
+                                        echo '⚠️  Backup directory not found: \$BACKUP_DIR'
+                                    fi
+                                else
+                                    echo '✅ Redis has data - no restore needed'
+                                fi
                                 
                                 docker-compose ps
                             else
