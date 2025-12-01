@@ -86,6 +86,10 @@ class OrderResponse(BaseModel):
         default=None,
         description="Stop price for stop-loss/take-profit orders from Binance"
     )
+    exit_reason: Optional[str] = Field(
+        default=None,
+        description="Exit reason from strategy signal: TP, SL, TP_TRAILING, SL_TRAILING, EMA_CROSS, MANUAL, etc."
+    )
 
     class Config:
         from_attributes = True

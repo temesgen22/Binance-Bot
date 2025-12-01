@@ -121,13 +121,23 @@ def _match_trades_to_completed_positions(
                     entry_notional = short_price * close_qty
                     pnl_pct = (net_pnl / entry_notional) * 100 if entry_notional > 0 else 0
                     
-                    # Determine exit reason if not already set
-                    exit_reason = short_exit_reason or "MANUAL"
-                    # Could enhance this by checking if TP/SL orders were filled
-                    
                     # Get additional Binance parameters from entry and exit orders
                     entry_order = order_id_to_order.get(short_entry_order_id)
                     exit_order = order_id_to_order.get(trade.order_id)
+                    
+                    # Determine exit reason from exit order (preferred) or fallback to entry
+                    exit_reason = None
+                    if exit_order and hasattr(exit_order, 'exit_reason') and exit_order.exit_reason:
+                        exit_reason = exit_order.exit_reason
+                    elif exit_order and exit_order.order_type:
+                        # Check if it's a Binance native TP/SL order
+                        if exit_order.order_type == "TAKE_PROFIT_MARKET":
+                            exit_reason = "TP"
+                        elif exit_order.order_type == "STOP_MARKET":
+                            exit_reason = "SL"
+                    # Fallback to stored exit_reason in entry (legacy) or "MANUAL"
+                    if not exit_reason:
+                        exit_reason = short_exit_reason or "MANUAL"
                     
                     # Extract initial margin and margin type from entry order (proportional to close_qty)
                     initial_margin = None
@@ -211,12 +221,23 @@ def _match_trades_to_completed_positions(
                     entry_notional = long_price * close_qty
                     pnl_pct = (net_pnl / entry_notional) * 100 if entry_notional > 0 else 0
                     
-                    # Determine exit reason if not already set
-                    exit_reason = long_exit_reason or "MANUAL"
-                    
                     # Get additional Binance parameters from entry and exit orders
                     entry_order = order_id_to_order.get(long_entry_order_id)
                     exit_order = order_id_to_order.get(trade.order_id)
+                    
+                    # Determine exit reason from exit order (preferred) or fallback to entry
+                    exit_reason = None
+                    if exit_order and hasattr(exit_order, 'exit_reason') and exit_order.exit_reason:
+                        exit_reason = exit_order.exit_reason
+                    elif exit_order and exit_order.order_type:
+                        # Check if it's a Binance native TP/SL order
+                        if exit_order.order_type == "TAKE_PROFIT_MARKET":
+                            exit_reason = "TP"
+                        elif exit_order.order_type == "STOP_MARKET":
+                            exit_reason = "SL"
+                    # Fallback to stored exit_reason in entry (legacy) or "MANUAL"
+                    if not exit_reason:
+                        exit_reason = long_exit_reason or "MANUAL"
                     
                     # Extract initial margin and margin type from entry order (proportional to close_qty)
                     initial_margin = None

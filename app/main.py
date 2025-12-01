@@ -51,6 +51,7 @@ from app.core.exceptions import (
 from app.risk.manager import RiskManager
 from app.services.order_executor import OrderExecutor
 from app.services.strategy_runner import StrategyRunner
+from app.services.notifier import TelegramNotifier, NotificationService
 
 
 def create_app() -> FastAPI:
@@ -73,12 +74,27 @@ def create_app() -> FastAPI:
             enabled=settings.redis_enabled
         )
     
+    # Initialize Telegram notification service if enabled
+    notification_service = None
+    if settings.telegram_enabled:
+        telegram_notifier = TelegramNotifier(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            enabled=settings.telegram_enabled,
+        )
+        notification_service = NotificationService(
+            telegram_notifier=telegram_notifier,
+            profit_threshold_usd=settings.telegram_profit_threshold_usd,
+            loss_threshold_usd=settings.telegram_loss_threshold_usd,
+        )
+    
     runner = StrategyRunner(
         client=client,
         risk=risk,
         executor=executor,
         max_concurrent=settings.max_concurrent_strategies,
         redis_storage=redis_storage,
+        notification_service=notification_service,
     )
 
     app = FastAPI(title="Binance Trading Bot", version="0.1.0")

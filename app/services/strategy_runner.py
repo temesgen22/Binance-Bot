@@ -23,6 +23,7 @@ from app.core.exceptions import (
 from app.risk.manager import RiskManager, PositionSizingResult
 from app.models.strategy import CreateStrategyRequest, StrategyState, StrategySummary, StrategyType, StrategyStats, OverallStats
 from app.services.order_executor import OrderExecutor
+from app.services.notifier import NotificationService
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
@@ -68,6 +69,7 @@ class StrategyRunner:
         executor: OrderExecutor,
         max_concurrent: int,
         redis_storage: Optional[RedisStorage] = None,
+        notification_service: Optional[NotificationService] = None,
     ) -> None:
         self.client = client
         self.risk = risk
@@ -75,12 +77,85 @@ class StrategyRunner:
         self.registry = StrategyRegistry()
         self.max_concurrent = max_concurrent
         self.redis = redis_storage
+        self.notifications = notification_service
         self._strategies: Dict[str, StrategySummary] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
         
         # Load strategies from Redis on startup
         self._load_from_redis()
+
+    def _cleanup_dead_tasks(self) -> None:
+        """Remove completed/cancelled tasks from _tasks dictionary.
+        
+        This ensures dead tasks don't count toward the concurrent limit.
+        """
+        dead_tasks = []
+        for strategy_id, task in list(self._tasks.items()):
+            if task.done():
+                dead_tasks.append(strategy_id)
+                # Update strategy status if it's still marked as running
+                if strategy_id in self._strategies:
+                    summary = self._strategies[strategy_id]
+                    if summary.status == StrategyState.running:
+                        summary.status = StrategyState.error
+                        self._save_to_redis(strategy_id, summary)
+                        logger.warning(
+                            f"Strategy {strategy_id} task completed unexpectedly. "
+                            f"Marking as error status."
+                        )
+        
+        # Remove dead tasks
+        for strategy_id in dead_tasks:
+            self._tasks.pop(strategy_id, None)
+            logger.debug(f"Cleaned up dead task for strategy {strategy_id}")
+        
+        if dead_tasks:
+            logger.info(f"Cleaned up {len(dead_tasks)} dead task(s) from active tasks")
+
+    def _extract_error_details(self, exc: Exception, order_type: str, summary: StrategySummary, stop_price: float) -> dict:
+        """Extract detailed error information from exception for better debugging.
+        
+        Args:
+            exc: The exception that was raised
+            order_type: "TP" or "SL" for logging
+            summary: Strategy summary for context
+            stop_price: The stop price that was attempted
+        
+        Returns:
+            Dictionary with error details
+        """
+        try:
+            from tenacity import RetryError
+        except ImportError:
+            RetryError = None
+        
+        # Extract underlying error from RetryError if present
+        underlying_error = exc
+        if RetryError and isinstance(exc, RetryError):
+            if hasattr(exc, 'last_attempt') and exc.last_attempt:
+                underlying_error = exc.last_attempt.exception()
+        
+        # Get error details
+        error_details = {
+            "order_type": order_type,
+            "error_type": type(underlying_error).__name__,
+            "error_message": str(underlying_error),
+            "symbol": summary.symbol,
+            "stop_price": stop_price,
+            "entry_price": summary.entry_price,
+            "current_price": summary.current_price,
+            "position_side": summary.position_side,
+            "position_size": summary.position_size,
+        }
+        
+        # Extract Binance error code if available
+        if hasattr(underlying_error, 'error_code'):
+            error_details["binance_error_code"] = underlying_error.error_code
+        if hasattr(underlying_error, 'status_code'):
+            error_details["status_code"] = underlying_error.status_code
+        
+        return error_details
 
     def register(self, payload: CreateStrategyRequest) -> StrategySummary:
         # Validate leverage is explicitly provided (Pydantic should catch this, but double-check)
@@ -123,9 +198,42 @@ class StrategyRunner:
         # auto_start is handled by the API layer to avoid double-starting the same strategy.
         return summary
 
+    def _cleanup_dead_tasks(self) -> None:
+        """Remove completed/cancelled tasks from _tasks dictionary.
+        
+        This ensures dead tasks don't count toward the concurrent limit.
+        """
+        dead_tasks = []
+        for strategy_id, task in list(self._tasks.items()):
+            if task.done():
+                dead_tasks.append(strategy_id)
+                # Update strategy status if it's still marked as running
+                if strategy_id in self._strategies:
+                    summary = self._strategies[strategy_id]
+                    if summary.status == StrategyState.running:
+                        summary.status = StrategyState.error
+                        self._save_to_redis(strategy_id, summary)
+                        logger.warning(
+                            f"Strategy {strategy_id} task completed unexpectedly. "
+                            f"Marking as error status."
+                        )
+        
+        # Remove dead tasks
+        for strategy_id in dead_tasks:
+            self._tasks.pop(strategy_id, None)
+            logger.debug(f"Cleaned up dead task for strategy {strategy_id}")
+        
+        if dead_tasks:
+            logger.info(f"Cleaned up {len(dead_tasks)} dead task(s) from active tasks")
+
     async def start(self, strategy_id: str) -> StrategySummary:
         if strategy_id not in self._strategies:
             raise StrategyNotFoundError(strategy_id)
+        
+        # Clean up any dead/completed tasks before checking limit
+        # This prevents dead tasks from counting toward concurrent limit
+        self._cleanup_dead_tasks()
+        
         if len(self._tasks) >= self.max_concurrent:
             raise MaxConcurrentStrategiesError(
                 current=len(self._tasks),
@@ -164,6 +272,13 @@ class StrategyRunner:
         self._tasks[strategy_id] = task
         summary.status = StrategyState.running
         self._save_to_redis(strategy_id, summary)
+        
+        # Send notification that strategy started
+        if self.notifications:
+            asyncio.create_task(
+                self.notifications.notify_strategy_started(summary, reason="Strategy started manually")
+            )
+        
         return summary
 
     async def stop(self, strategy_id: str) -> StrategySummary:
@@ -208,6 +323,22 @@ class StrategyRunner:
             task.cancel()
         summary.status = StrategyState.stopped
         self._save_to_redis(strategy_id, summary)
+        
+        # Get final PnL before sending notification
+        final_pnl = None
+        if summary.unrealized_pnl is not None:
+            final_pnl = summary.unrealized_pnl
+        
+        # Send notification that strategy stopped
+        if self.notifications:
+            asyncio.create_task(
+                self.notifications.notify_strategy_stopped(
+                    summary, 
+                    reason="Strategy stopped manually",
+                    final_pnl=final_pnl,
+                )
+            )
+        
         return summary
 
     def list_strategies(self) -> list[StrategySummary]:
@@ -498,17 +629,55 @@ class StrategyRunner:
                 except Exception as exc:
                     logger.warning(f"Failed to get current price for {summary.symbol}: {exc}")
                 
-                # 5) Execute order based on synced state + fresh signal
+                # 5) Check PnL thresholds and notify if reached
+                if self.notifications and summary.unrealized_pnl is not None:
+                    await self.notifications.check_and_notify_pnl_threshold(
+                        summary,
+                        summary.unrealized_pnl,
+                    )
+                
+                # 6) Execute order based on synced state + fresh signal
                 await self._execute(signal, summary)
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
             logger.info(f"Strategy {summary.id} cancelled")
+            
+            # Get final PnL before sending notification
+            final_pnl = None
+            if summary.unrealized_pnl is not None:
+                final_pnl = summary.unrealized_pnl
+            
+            # Send notification that strategy stopped
+            if self.notifications:
+                asyncio.create_task(
+                    self.notifications.notify_strategy_stopped(
+                        summary,
+                        reason="Strategy cancelled",
+                        final_pnl=final_pnl,
+                    )
+                )
+            
             await strategy.teardown()
             raise
         except Exception as exc:
             summary.status = StrategyState.error
             self._save_to_redis(summary.id, summary)
             logger.exception(f"Strategy {summary.id} failed: {exc}")
+            
+            # Send notification about strategy error
+            if self.notifications:
+                asyncio.create_task(
+                    self.notifications.notify_strategy_error(
+                        summary,
+                        exc,
+                        error_type=type(exc).__name__,
+                    )
+                )
+        finally:
+            # CRITICAL: Always remove task from _tasks when loop exits
+            # This prevents dead tasks from counting toward concurrent limit
+            self._tasks.pop(summary.id, None)
+            logger.debug(f"Removed strategy {summary.id} from active tasks")
     
     def _load_from_redis(self) -> None:
         """Load all strategies and trades from Redis on startup."""
@@ -724,7 +893,13 @@ class StrategyRunner:
                 # Track the executed trade in memory (always, regardless of Redis)
                 if summary.id not in self._trades:
                     self._trades[summary.id] = []
-                self._trades[summary.id].append(order_response)
+                
+                # Store exit_reason from signal in the order response
+                # Create a copy with exit_reason to preserve the original data
+                order_with_exit_reason = order_response.model_copy(
+                    update={"exit_reason": signal.exit_reason} if signal.exit_reason else {}
+                )
+                self._trades[summary.id].append(order_with_exit_reason)
                 
                 # Log trade tracking with position direction and exit reason
                 trades_count = len(self._trades[summary.id])
@@ -910,7 +1085,12 @@ class StrategyRunner:
             tp_order_id = tp_response.get("orderId")
             logger.info(f"[{summary.id}] TP order placed: orderId={tp_order_id}")
         except Exception as exc:
-            logger.error(f"[{summary.id}] Failed to place TP order: {exc}")
+            # Extract underlying error details for better debugging
+            error_details = self._extract_error_details(exc, "TP", summary, tp_price)
+            logger.error(
+                f"[{summary.id}] Failed to place TP order: {error_details}",
+                exc_info=True
+            )
         
         try:
             # Place stop loss order
@@ -924,7 +1104,12 @@ class StrategyRunner:
             sl_order_id = sl_response.get("orderId")
             logger.info(f"[{summary.id}] SL order placed: orderId={sl_order_id}")
         except Exception as exc:
-            logger.error(f"[{summary.id}] Failed to place SL order: {exc}")
+            # Extract underlying error details for better debugging
+            error_details = self._extract_error_details(exc, "SL", summary, sl_price)
+            logger.error(
+                f"[{summary.id}] Failed to place SL order: {error_details}",
+                exc_info=True
+            )
         
         # Store order IDs in meta for later cancellation
         if "tp_sl_orders" not in summary.meta:

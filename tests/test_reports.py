@@ -410,7 +410,9 @@ class TestReportGeneration:
         client = MagicMock()
         
         # Filter by recent date (should exclude past strategy)
-        recent_date = (now.replace(year=now.year - 1, month=now.month + 1)).isoformat()
+        # Calculate date 11 months ago (avoiding month overflow)
+        from dateutil.relativedelta import relativedelta
+        recent_date = (now - relativedelta(months=11)).isoformat()
         future_date = now.isoformat()
         
         with patch('app.api.routes.reports.get_strategy_runner', return_value=runner):

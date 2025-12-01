@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")
+    
+    # Telegram Notification Configuration
+    telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
+    telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
+    telegram_profit_threshold_usd: Optional[float] = Field(default=None, alias="TELEGRAM_PROFIT_THRESHOLD_USD")
+    telegram_loss_threshold_usd: Optional[float] = Field(default=None, alias="TELEGRAM_LOSS_THRESHOLD_USD")
 
     @field_validator("base_symbols", mode="after")
     @classmethod
