@@ -340,7 +340,7 @@ If Jenkins is on a host/server:
                                             # Try to copy from volume first (most reliable)
                                             # Copy to temp file first, then rename to avoid quote issues
                                             TEMP_FILE=\"\$BACKUP_DIR/temp-backup.rdb\"
-                                            if docker run --rm -v \"\$REDIS_VOLUME\":/data:ro -v \"\$BACKUP_DIR\":/backup alpine sh -c \"cp /data/dump.rdb /backup/temp-backup.rdb 2>/dev/null && chmod 644 /backup/temp-backup.rdb\"; then
+                                            if docker run --rm -v \"\$REDIS_VOLUME\":/data:ro -v \"\$BACKUP_DIR\":/backup alpine sh -c 'cp /data/dump.rdb /backup/temp-backup.rdb 2>/dev/null && chmod 644 /backup/temp-backup.rdb'; then
                                                 mv \"\$TEMP_FILE\" \"\$BACKUP_FILE\" && echo \"✅ Backup saved to: \$BACKUP_FILE\"
                                             else
                                                 echo '⚠️  Volume backup failed, trying redis-cli --rdb method...'
