@@ -122,7 +122,17 @@ class TelegramCommandHandler:
         """
         command = command.lower().strip()
         
-        if command == "start" or command == "help":
+        # Handle /start command - check if it's start_strategy with args, otherwise show help
+        if command == "start":
+            if args:
+                # /start with args is treated as start_strategy
+                strategy_id = args[0]
+                return await self._handle_start_strategy(chat_id, strategy_id)
+            else:
+                # /start without args shows help
+                return self._format_help_message()
+        
+        elif command == "help":
             return self._format_help_message()
         
         elif command == "status" or command == "stats":
@@ -131,7 +141,7 @@ class TelegramCommandHandler:
         elif command == "list" or command == "strategies":
             return await self._handle_list_strategies()
         
-        elif command == "start_strategy" or command == "start":
+        elif command == "start_strategy":
             if not args:
                 return "❌ Usage: /start_strategy <strategy_id>\nExample: /start_strategy abc123"
             strategy_id = args[0]
@@ -333,7 +343,7 @@ class TelegramCommandHandler:
                     pnl_emoji = "📈" if trade.realized_pnl and trade.realized_pnl >= 0 else "📉"
                     pnl_str = f"${trade.realized_pnl:,.2f}" if trade.realized_pnl else "N/A"
                     message += (
-                        f"{pnl_emoji} {trade.side} {trade.quantity} @ ${trade.price:,.2f}\n"
+                        f"{pnl_emoji} {trade.side} {trade.executed_qty} @ ${trade.price:,.2f}\n"
                         f"   PnL: {pnl_str}\n\n"
                     )
                 return message
@@ -352,7 +362,7 @@ class TelegramCommandHandler:
                     pnl_emoji = "📈" if trade.realized_pnl and trade.realized_pnl >= 0 else "📉"
                     pnl_str = f"${trade.realized_pnl:,.2f}" if trade.realized_pnl else "N/A"
                     message += (
-                        f"{pnl_emoji} {trade.symbol} {trade.side} @ ${trade.price:,.2f}\n"
+                        f"{pnl_emoji} {trade.symbol} {trade.side} {trade.executed_qty} @ ${trade.price:,.2f}\n"
                         f"   PnL: {pnl_str}\n\n"
                     )
                 return message

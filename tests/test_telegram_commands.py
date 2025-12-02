@@ -422,19 +422,21 @@ class TestTradesCommand:
         
         mock_trades = [
             OrderResponse(
-                order_id="order1",
+                order_id=12345,
                 symbol="BTCUSDT",
+                status="FILLED",
                 side="BUY",
-                quantity=0.1,
+                executed_qty=0.1,
                 price=50000.0,
                 realized_pnl=25.0,
                 timestamp=datetime.now(timezone.utc),
             ),
             OrderResponse(
-                order_id="order2",
+                order_id=12346,
                 symbol="BTCUSDT",
+                status="FILLED",
                 side="SELL",
-                quantity=0.1,
+                executed_qty=0.1,
                 price=50100.0,
                 realized_pnl=-5.0,
                 timestamp=datetime.now(timezone.utc),
@@ -458,10 +460,11 @@ class TestTradesCommand:
         mock_strategy_runner.list_strategies.return_value = [mock_strategy_summary]
         mock_strategy_runner.get_trades.return_value = [
             OrderResponse(
-                order_id="order1",
+                order_id=12345,
                 symbol="BTCUSDT",
+                status="FILLED",
                 side="BUY",
-                quantity=0.1,
+                executed_qty=0.1,
                 price=50000.0,
                 realized_pnl=25.0,
                 timestamp=datetime.now(timezone.utc),
