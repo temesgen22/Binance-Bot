@@ -486,6 +486,7 @@ class TestTradesCommand:
 class TestMessageSending:
     """Test message sending functionality."""
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_send_message_success(self, command_handler):
         """Test successful message sending."""
@@ -500,6 +501,7 @@ class TestMessageSending:
             
             assert result is True
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_send_message_disabled(self):
         """Test message sending when handler is disabled."""
@@ -513,6 +515,7 @@ class TestMessageSending:
         
         assert result is False
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_send_message_error(self, command_handler):
         """Test message sending with error."""
@@ -527,6 +530,7 @@ class TestMessageSending:
 class TestUpdateProcessing:
     """Test update processing and long polling."""
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_get_updates_success(self, command_handler):
         """Test getting updates from Telegram."""
@@ -553,6 +557,7 @@ class TestUpdateProcessing:
             assert updates["ok"] is True
             assert len(updates["result"]) == 1
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_get_updates_error(self, command_handler):
         """Test getting updates with error."""
@@ -563,6 +568,7 @@ class TestUpdateProcessing:
             
             assert updates["ok"] is False
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_process_updates_with_command(self, command_handler):
         """Test processing updates with a command."""
@@ -603,6 +609,7 @@ class TestUpdateProcessing:
 class TestHandlerLifecycle:
     """Test handler start/stop lifecycle."""
     
+    @pytest.mark.slow
     def test_start_handler(self, command_handler):
         """Test starting the handler."""
         assert command_handler._running is False
@@ -610,6 +617,7 @@ class TestHandlerLifecycle:
         assert command_handler._running is True
         assert command_handler._task is not None
     
+    @pytest.mark.slow
     def test_start_handler_already_running(self, command_handler):
         """Test starting handler when already running."""
         command_handler.start()
@@ -619,6 +627,7 @@ class TestHandlerLifecycle:
         command_handler.start()
         assert command_handler._running is True
     
+    @pytest.mark.slow
     def test_stop_handler(self, command_handler):
         """Test stopping the handler."""
         command_handler.start()
@@ -627,6 +636,7 @@ class TestHandlerLifecycle:
         command_handler.stop()
         assert command_handler._running is False
     
+    @pytest.mark.slow
     def test_stop_handler_not_running(self, command_handler):
         """Test stopping handler when not running."""
         assert command_handler._running is False
