@@ -303,7 +303,70 @@ If Jenkins is on a host/server:
                                 echo '📦 Checking Redis volume...'
                                 docker volume ls | grep redis-data || echo '⚠️  Warning: redis-data volume not found'
                                 
+                                # Create backup BEFORE stopping containers
+                                echo ''
+                                echo '💾 Creating backup before deployment...'
+                                BACKUP_DIR=\${BACKUP_DIR:-/home/jenkins-deploy/redis-backups}
+                                mkdir -p \"\$BACKUP_DIR\"
+                                
+                                # Ensure backup directory is writable
+                                if [ ! -w \"\$BACKUP_DIR\" ]; then
+                                    echo \"⚠️  Warning: Backup directory is not writable: \$BACKUP_DIR\"
+                                    echo \"   Attempting to fix permissions...\"
+                                    chmod 755 \"\$BACKUP_DIR\" 2>/dev/null || echo \"   Could not fix permissions\"
+                                fi
+                                
+                                echo \"📁 Backup directory: \$BACKUP_DIR\"
+                                
+                                # Check if Redis container is running and has data
+                                if docker ps | grep -q binance-bot-redis; then
+                                    KEY_COUNT_BEFORE=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo \"0\")
+                                    echo \"📊 Redis keys before backup: \$KEY_COUNT_BEFORE\"
+                                    
+                                    if [ \"\$KEY_COUNT_BEFORE\" -gt \"0\" ]; then
+                                        TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
+                                        BACKUP_FILE=\"\$BACKUP_DIR/redis-backup-\$TIMESTAMP.rdb\"
+                                        
+                                        # Create RDB snapshot
+                                        echo '💾 Creating RDB snapshot...'
+                                        docker exec binance-bot-redis redis-cli BGSAVE
+                                        sleep 3
+                                        
+                                        # Copy RDB file from container
+                                        REDIS_VOLUME=\$(docker volume ls | grep redis-data | awk '{print \$2}' | head -1)
+                                        BACKUP_BASENAME=\$(basename \"\$BACKUP_FILE\")
+                                        
+                                        if [ -n \"\$REDIS_VOLUME\" ]; then
+                                            # Try to copy from volume first (most reliable)
+                                            docker run --rm -v \"\$REDIS_VOLUME\":/data:ro -v \"\$BACKUP_DIR\":/backup alpine sh -c \"cp /data/dump.rdb /backup/\$BACKUP_BASENAME 2>/dev/null && chmod 644 /backup/\$BACKUP_BASENAME\" && echo \"✅ Backup saved to: \$BACKUP_FILE\" || {
+                                                echo '⚠️  Volume backup failed, trying redis-cli --rdb method...'
+                                                docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
+                                                sleep 1
+                                                docker cp binance-bot-redis:/tmp/redis-backup.rdb \"\$BACKUP_FILE\" 2>/dev/null && echo \"✅ Backup saved to: \$BACKUP_FILE\" || echo '⚠️  Backup failed'
+                                            }
+                                        else
+                                            echo '⚠️  Redis volume not found, using redis-cli --rdb method...'
+                                            docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
+                                            sleep 1
+                                            docker cp binance-bot-redis:/tmp/redis-backup.rdb \"\$BACKUP_FILE\" 2>/dev/null && echo \"✅ Backup saved to: \$BACKUP_FILE\" || echo '⚠️  Backup failed'
+                                        fi
+                                        
+                                        # Verify backup was created
+                                        if [ -f \"\$BACKUP_FILE\" ]; then
+                                            BACKUP_SIZE=\$(ls -lh \"\$BACKUP_FILE\" | awk '{print \$5}')
+                                            echo \"✅ Backup created successfully: \$BACKUP_FILE (\$BACKUP_SIZE)\"
+                                        else
+                                            echo '⚠️  Warning: Backup file was not created'
+                                        fi
+                                    else
+                                        echo '⚠️  Redis is empty - skipping backup'
+                                    fi
+                                else
+                                    echo '⚠️  Redis container is not running - skipping backup'
+                                fi
+                                
                                 # Stop containers WITHOUT removing volumes (volumes persist data)
+                                echo ''
                                 echo '🛑 Stopping containers (volumes will be preserved)...'
                                 docker-compose down --remove-orphans || true
                                 
