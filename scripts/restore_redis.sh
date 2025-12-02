@@ -118,16 +118,11 @@ if docker ps | grep -q redis-temp-restore; then
         echo "   Sample keys:"
         docker exec redis-temp-restore redis-cli --scan --pattern "*" | head -10 | sed 's/^/      /'
         
-        # Stop temp Redis
-        echo ""
-        echo "🔄 Stopping temp Redis..."
-        docker stop redis-temp-restore
-        docker rm redis-temp-restore
-        
         # Save the data to RDB before stopping (so normal Redis can load it)
+        echo ""
         echo "💾 Saving data to RDB for normal Redis..."
         docker exec redis-temp-restore redis-cli BGSAVE
-        sleep 2
+        sleep 3
         
         # Stop temp Redis
         echo "🛑 Stopping temp Redis..."

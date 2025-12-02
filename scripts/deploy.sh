@@ -133,18 +133,88 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                     REDIS_VOLUME=$(docker volume ls | grep redis-data | awk '{print $2}' | head -1)
                     if [ -n "$REDIS_VOLUME" ]; then
                         BACKUP_BASENAME=$(basename "$LATEST_BACKUP")
-                        docker run --rm -v "$REDIS_VOLUME":/data -v "$BACKUP_DIR":/backup:ro alpine sh -c "cd /data && rm -rf appendonly.aof appendonlydir dump.rdb && cp /backup/$BACKUP_BASENAME dump.rdb && chmod 644 dump.rdb && ls -lh dump.rdb"
+                        echo "📥 Copying backup and removing AOF files..."
+                        docker run --rm -v "$REDIS_VOLUME":/data -v "$BACKUP_DIR":/backup:ro alpine sh -c "
+                            cd /data
+                            echo 'Removing ALL AOF files and directories...'
+                            rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof
+                            echo 'Removing old RDB...'
+                            rm -f dump.rdb
+                            echo 'Copying RDB backup...'
+                            cp /backup/$BACKUP_BASENAME dump.rdb
+                            chmod 644 dump.rdb
+                            echo ''
+                            echo 'Files in /data after restore:'
+                            ls -lah /data
+                            echo ''
+                            echo 'RDB file size:'
+                            ls -lh dump.rdb
+                            echo ''
+                            echo 'Verifying RDB is not empty:'
+                            [ -s dump.rdb ] && echo '  ✅ RDB has content' || echo '  ❌ RDB is empty!'
+                        "
                         echo '✅ Backup copied to Redis volume'
-                    fi
-                    
-                    docker-compose up -d redis
-                    sleep 5
-                    
-                    KEY_COUNT_AFTER=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo '0')
-                    if [ "$KEY_COUNT_AFTER" -gt "0" ]; then
-                        echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER"
+                        
+                        # Start Redis with AOF disabled temporarily to force RDB load
+                        echo "🚀 Starting Redis with AOF disabled to force RDB load..."
+                        docker run -d --name redis-temp-restore \
+                            -v "$REDIS_VOLUME":/data \
+                            redis:7-alpine \
+                            redis-server --appendonly no --dir /data --dbfilename dump.rdb 2>/dev/null || {
+                            echo "   ⚠️  Could not start temp Redis, trying normal start..."
+                            docker rm -f redis-temp-restore 2>/dev/null || true
+                            docker-compose up -d redis
+                            sleep 8
+                            KEY_COUNT_AFTER=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo '0')
+                            if [ "$KEY_COUNT_AFTER" -gt "0" ]; then
+                                echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER"
+                            else
+                                echo "⚠️  Restore completed but Redis still empty"
+                                echo "   This might be because AOF is enabled in redis.conf"
+                                echo "   Check Redis logs: docker logs binance-bot-redis"
+                            fi
+                        }
+                        
+                        # If temp Redis started, check if it loaded data
+                        if docker ps | grep -q redis-temp-restore; then
+                            sleep 5
+                            KEY_COUNT_TEMP=$(docker exec redis-temp-restore redis-cli DBSIZE 2>/dev/null || echo '0')
+                            echo "   📊 Keys loaded in temp Redis: $KEY_COUNT_TEMP"
+                            
+                            if [ "$KEY_COUNT_TEMP" -gt "0" ]; then
+                                echo "   ✅ Data loaded successfully!"
+                                # Save to RDB before stopping
+                                echo "   💾 Saving data to RDB..."
+                                docker exec redis-temp-restore redis-cli BGSAVE
+                                sleep 3
+                                
+                                # Stop temp Redis
+                                docker stop redis-temp-restore
+                                docker rm redis-temp-restore
+                                
+                                # Start normal Redis (should load the RDB)
+                                echo "🚀 Starting normal Redis container..."
+                                docker-compose up -d redis
+                                sleep 8
+                                
+                                KEY_COUNT_AFTER=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo '0')
+                                if [ "$KEY_COUNT_AFTER" -gt "0" ]; then
+                                    echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER"
+                                else
+                                    echo "⚠️  Restore completed but Redis still empty"
+                                    echo "   Redis might be loading from AOF instead of RDB"
+                                    echo "   Check Redis logs: docker logs binance-bot-redis | grep -i 'loading\|aof\|rdb'"
+                                fi
+                            else
+                                echo "   ❌ No keys loaded - backup might be empty or corrupted"
+                                docker stop redis-temp-restore 2>/dev/null || true
+                                docker rm redis-temp-restore 2>/dev/null || true
+                                docker-compose up -d redis
+                            fi
+                        fi
                     else
-                        echo "⚠️  Restore completed but Redis still empty"
+                        echo "⚠️  Redis volume not found"
+                        docker-compose up -d redis
                     fi
                 }
             else
