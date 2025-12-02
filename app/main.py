@@ -33,6 +33,7 @@ from app.api.exception_handlers import (
 from app.core.my_binance_client import BinanceClient
 from app.core.config import get_settings
 from app.core.logger import configure_logging
+from loguru import logger
 from app.core.redis_storage import RedisStorage
 from app.core.exceptions import (
     BinanceAPIError,
@@ -52,6 +53,7 @@ from app.risk.manager import RiskManager
 from app.services.order_executor import OrderExecutor
 from app.services.strategy_runner import StrategyRunner
 from app.services.notifier import TelegramNotifier, NotificationService
+from app.services.telegram_commands import TelegramCommandHandler
 
 
 def create_app() -> FastAPI:
@@ -96,6 +98,15 @@ def create_app() -> FastAPI:
         redis_storage=redis_storage,
         notification_service=notification_service,
     )
+    
+    # Initialize Telegram command handler if enabled
+    telegram_command_handler = None
+    if settings.telegram_enabled and settings.telegram_bot_token:
+        telegram_command_handler = TelegramCommandHandler(
+            bot_token=settings.telegram_bot_token,
+            strategy_runner=runner,
+            enabled=settings.telegram_enabled,
+        )
 
     app = FastAPI(title="Binance Trading Bot", version="0.1.0")
 
@@ -120,9 +131,18 @@ def create_app() -> FastAPI:
         app.state.binance_client = client
         app.state.strategy_runner = runner
         app.state.background_tasks: list[asyncio.Task] = []
+        
+        # Start Telegram command handler if enabled
+        if telegram_command_handler:
+            telegram_command_handler.start()
+            logger.info("Telegram command handler started")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:  # pragma: no cover
+        # Stop Telegram command handler
+        if telegram_command_handler:
+            telegram_command_handler.stop()
+        
         for task in app.state.background_tasks:
             task.cancel()
 
