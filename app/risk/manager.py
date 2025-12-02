@@ -45,7 +45,31 @@ class RiskManager:
         min_notional = self.client.get_min_notional(symbol)
         
         # Determine which sizing method to use
-        use_fixed_amount = fixed_amount is not None and fixed_amount > 0
+        # fixed_amount takes priority if it's set and greater than 0
+        # Explicitly check for None and ensure it's a positive number
+        use_fixed_amount = False
+        if fixed_amount is not None:
+            try:
+                fixed_amount_float = float(fixed_amount)
+                use_fixed_amount = fixed_amount_float > 0
+                if not use_fixed_amount:
+                    logger.debug(
+                        f"fixed_amount is set but invalid ({fixed_amount_float}), "
+                        f"will use risk_per_trade={risk_per_trade} for {symbol}"
+                    )
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    f"Invalid fixed_amount value ({fixed_amount}) for {symbol}, "
+                    f"will use risk_per_trade={risk_per_trade}: {e}"
+                )
+                use_fixed_amount = False
+        
+        # Log the decision for debugging
+        logger.debug(
+            f"Position sizing decision for {symbol}: "
+            f"fixed_amount={fixed_amount}, use_fixed_amount={use_fixed_amount}, "
+            f"risk_per_trade={risk_per_trade}"
+        )
         
         if use_fixed_amount:
             # Use FIXED AMOUNT - completely ignore risk_per_trade
