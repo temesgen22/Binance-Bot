@@ -192,8 +192,19 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                                 docker stop redis-temp-restore
                                 docker rm redis-temp-restore
                                 
-                                # Start normal Redis (should load the RDB)
-                                echo "🚀 Starting normal Redis container..."
+                                # CRITICAL: Remove AOF files again before starting normal Redis
+                                # Normal Redis has appendonly=yes in redis.conf, so if AOF files exist,
+                                # Redis will load from empty AOF instead of the RDB we just saved
+                                echo "🧹 Removing AOF files before starting normal Redis (to force RDB load)..."
+                                docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
+                                    cd /data
+                                    rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
+                                    echo 'Files in /data:'
+                                    ls -lah /data
+                                "
+                                
+                                # Start normal Redis (should load the RDB since AOF is removed)
+                                echo "🚀 Starting normal Redis container (will load from RDB)..."
                                 docker-compose up -d redis
                                 sleep 8
                                 
