@@ -320,11 +320,11 @@ If Jenkins is on a host/server:
                                 
                                 # Check if Redis container is running and has data
                                 if docker ps | grep -q binance-bot-redis; then
-                                    KEY_COUNT_BEFORE=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo \"0\")
+                                    KEY_COUNT_BEFORE=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
                                     echo \"📊 Redis keys before backup: \$KEY_COUNT_BEFORE\"
                                     
                                     if [ \"\$KEY_COUNT_BEFORE\" -gt \"0\" ]; then
-                                        TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
+                                        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
                                         BACKUP_FILE=\"\$BACKUP_DIR/redis-backup-\$TIMESTAMP.rdb\"
                                         
                                         # Create RDB snapshot
@@ -333,8 +333,8 @@ If Jenkins is on a host/server:
                                         sleep 3
                                         
                                         # Copy RDB file from container
-                                        REDIS_VOLUME=\$(docker volume ls | grep redis-data | awk '{print \$2}' | head -1)
-                                        BACKUP_BASENAME=\$(basename \"\$BACKUP_FILE\")
+                                        REDIS_VOLUME=$(docker volume ls | grep redis-data | awk '{print $2}' | head -1)
+                                        BACKUP_BASENAME=$(basename "$BACKUP_FILE")
                                         
                                         if [ -n \"\$REDIS_VOLUME\" ]; then
                                             # Try to copy from volume first (most reliable)
@@ -357,7 +357,7 @@ If Jenkins is on a host/server:
                                         
                                         # Verify backup was created
                                         if [ -f \"\$BACKUP_FILE\" ]; then
-                                            BACKUP_SIZE=\$(ls -lh \"\$BACKUP_FILE\" | awk '{print \$5}')
+                                            BACKUP_SIZE=$(ls -lh "$BACKUP_FILE" | awk '{print $5}')
                                             echo \"✅ Backup created successfully: \$BACKUP_FILE (\$BACKUP_SIZE)\"
                                         else
                                             echo '⚠️  Warning: Backup file was not created'
@@ -394,7 +394,7 @@ If Jenkins is on a host/server:
                                 sleep 5
                                 
                                 # Check if Redis has data
-                                KEY_COUNT=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+                                KEY_COUNT=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
                                 echo "📊 Redis keys after restart: \$KEY_COUNT"
                                 
                                 # If Redis is empty, try to restore from backup
@@ -405,7 +405,7 @@ If Jenkins is on a host/server:
                                     
                                     BACKUP_DIR=\${BACKUP_DIR:-/home/jenkins-deploy/redis-backups}
                                     if [ -d "\$BACKUP_DIR" ]; then
-                                        LATEST_BACKUP=\$(ls -t "\$BACKUP_DIR"/redis-backup-*.rdb 2>/dev/null | head -1)
+                                        LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/redis-backup-*.rdb 2>/dev/null | head -1)
                                         if [ -n "\$LATEST_BACKUP" ] && [ -f "\$LATEST_BACKUP" ]; then
                                             echo "📦 Found latest backup: \$LATEST_BACKUP"
                                             echo "🔄 Attempting to restore from backup..."
@@ -418,9 +418,9 @@ If Jenkins is on a host/server:
                                                     docker-compose stop redis
                                                     sleep 2
                                                     
-                                                    REDIS_VOLUME=\$(docker volume ls | grep redis-data | awk '{print \$2}' | head -1)
+                                                    REDIS_VOLUME=$(docker volume ls | grep redis-data | awk '{print $2}' | head -1)
                                                     if [ -n "\$REDIS_VOLUME" ]; then
-                                                        BACKUP_BASENAME=\$(basename "\$LATEST_BACKUP")
+                                                        BACKUP_BASENAME=$(basename "$LATEST_BACKUP")
                                                         docker run --rm -v "\$REDIS_VOLUME":/data -v "\$BACKUP_DIR":/backup:ro alpine sh -c "cd /data && rm -rf appendonly.aof appendonlydir dump.rdb && cp /backup/\$BACKUP_BASENAME dump.rdb && chmod 644 dump.rdb && ls -lh dump.rdb"
                                                         echo '✅ Backup copied to Redis volume'
                                                     fi
@@ -429,7 +429,7 @@ If Jenkins is on a host/server:
                                                     sleep 5
                                                     
                                                     # Verify restore
-                                                    KEY_COUNT_AFTER=\$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+                                                    KEY_COUNT_AFTER=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
                                                     if [ "\$KEY_COUNT_AFTER" -gt "0" ]; then
                                                         echo "✅ Redis restored! Keys: \$KEY_COUNT_AFTER"
                                                     else
