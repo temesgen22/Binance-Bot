@@ -354,7 +354,7 @@ If Jenkins is on a host/server:
                                                     REDIS_VOLUME=\$(docker volume ls | grep redis-data | awk '{print \$2}' | head -1)
                                                     if [ -n "\$REDIS_VOLUME" ]; then
                                                         BACKUP_FILE=\$(basename \$LATEST_BACKUP)
-                                                        docker run --rm -e BACKUP_FILE=\${BACKUP_FILE} -v "\$REDIS_VOLUME":/data -v "\$BACKUP_DIR":/backup:ro alpine sh -c 'cd /data && rm -rf appendonly.aof appendonlydir dump.rdb && cp /backup/$BACKUP_FILE dump.rdb && chmod 644 dump.rdb && ls -lh dump.rdb'
+                                                        docker run --rm -e BACKUP_FILE="\$BACKUP_FILE" -v "\$REDIS_VOLUME":/data -v "\$BACKUP_DIR":/backup:ro alpine sh -c 'cd /data && rm -rf appendonly.aof appendonlydir dump.rdb && cp /backup/$BACKUP_FILE dump.rdb && chmod 644 dump.rdb && ls -lh dump.rdb'
                                                         echo '✅ Backup copied to Redis volume'
                                                     fi
                                                     
