@@ -338,7 +338,9 @@ If Jenkins is on a host/server:
                                         
                                         if [ -n \"\$REDIS_VOLUME\" ]; then
                                             # Try to copy from volume first (most reliable)
-                                            docker run --rm -v \"\$REDIS_VOLUME\":/data:ro -v \"\$BACKUP_DIR\":/backup alpine sh -c \"cp /data/dump.rdb /backup/\$BACKUP_BASENAME 2>/dev/null && chmod 644 /backup/\$BACKUP_BASENAME\" && echo \"✅ Backup saved to: \$BACKUP_FILE\" || {
+                                            # Copy to temp file first, then rename to avoid quote issues
+                                            TEMP_BACKUP=\"/backup/temp-backup.rdb\"
+                                            docker run --rm -v \"\$REDIS_VOLUME\":/data:ro -v \"\$BACKUP_DIR\":/backup alpine sh -c \"cp /data/dump.rdb \$TEMP_BACKUP 2>/dev/null && chmod 644 \$TEMP_BACKUP\" && mv \"\$BACKUP_DIR/temp-backup.rdb\" \"\$BACKUP_FILE\" && echo \"✅ Backup saved to: \$BACKUP_FILE\" || {
                                                 echo '⚠️  Volume backup failed, trying redis-cli --rdb method...'
                                                 docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
                                                 sleep 1
