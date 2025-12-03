@@ -326,6 +326,18 @@ def get_trading_report(
                 logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
                 end_datetime = None
         
+        # Normalize Query objects to their actual values (handles direct function calls in tests)
+        # When called directly, Query(default=None) becomes Query(None) which is truthy
+        # Check if account_id is a Query object and extract its default value
+        if account_id is not None and not isinstance(account_id, str):
+            # Likely a Query object - extract the default value
+            if hasattr(account_id, 'default'):
+                account_id = account_id.default
+            elif 'Query' in str(type(account_id)):
+                account_id = None  # Query object with no accessible default - treat as None
+            else:
+                account_id = None  # Not a string and not a Query - treat as None
+        
         # Get all strategies
         all_strategies = runner.list_strategies()
         
@@ -435,14 +447,20 @@ def get_trading_report(
         overall_win_rate = (total_winning / total_completed_trades * 100) if total_completed_trades > 0 else 0.0
         overall_net_pnl = total_profit - total_loss
         
-        # Build filters dict
+        # Build filters dict - normalize Query objects here too
+        normalized_account_id = account_id
+        if hasattr(normalized_account_id, '__class__') and 'Query' in str(type(normalized_account_id)):
+            normalized_account_id = getattr(normalized_account_id, 'default', None) if hasattr(normalized_account_id, 'default') else None
+        if normalized_account_id is not None and not isinstance(normalized_account_id, str):
+            normalized_account_id = None
+        
         filters = {
             "strategy_id": strategy_id,
             "strategy_name": strategy_name,
             "symbol": symbol,
             "start_date": start_date,
             "end_date": end_date,
-            "account_id": account_id,
+            "account_id": normalized_account_id,
         }
         filters = {k: v for k, v in filters.items() if v is not None}
         
