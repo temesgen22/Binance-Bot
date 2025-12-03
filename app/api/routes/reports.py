@@ -294,8 +294,8 @@ def get_trading_report(
     start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO format)"),
     end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO format)"),
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
-    runner: StrategyRunner = Depends(get_strategy_runner),
-    client: BinanceClient = Depends(get_binance_client),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
+    client: Optional[BinanceClient] = Depends(get_binance_client),
 ) -> TradingReport:
     """Generate comprehensive trading report with strategy summaries and trade details.
     
@@ -339,6 +339,7 @@ def get_trading_report(
             if symbol and strategy.symbol.upper() != symbol.upper():
                 continue
             # Filter by account_id if provided (only filter if account_id is explicitly set)
+            # When account_id is None (not provided), don't filter by account
             if account_id:
                 # Handle case where strategy.account_id might be None or missing
                 strategy_account_id = getattr(strategy, 'account_id', None) or "default"
@@ -441,6 +442,7 @@ def get_trading_report(
             "symbol": symbol,
             "start_date": start_date,
             "end_date": end_date,
+            "account_id": account_id,
         }
         filters = {k: v for k, v in filters.items() if v is not None}
         
