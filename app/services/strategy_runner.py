@@ -8,6 +8,7 @@ import uuid
 from loguru import logger
 
 from app.core.my_binance_client import BinanceClient
+from app.core.binance_client_manager import BinanceClientManager
 from app.models.order import OrderResponse
 from app.core.redis_storage import RedisStorage
 from app.core.exceptions import (
@@ -64,16 +65,47 @@ class StrategyRunner:
     def __init__(
         self,
         *,
-        client: BinanceClient,
-        risk: RiskManager,
-        executor: OrderExecutor,
-        max_concurrent: int,
+        client: Optional[BinanceClient] = None,
+        client_manager: Optional[BinanceClientManager] = None,
+        risk: Optional[RiskManager] = None,
+        executor: Optional[OrderExecutor] = None,
+        max_concurrent: int = 3,
         redis_storage: Optional[RedisStorage] = None,
         notification_service: Optional[NotificationService] = None,
     ) -> None:
-        self.client = client
-        self.risk = risk
-        self.executor = executor
+        """Initialize StrategyRunner.
+        
+        Args:
+            client: Single BinanceClient (for backward compatibility)
+            client_manager: BinanceClientManager for multi-account support (preferred)
+            risk: RiskManager (for backward compatibility, will be created per account if using client_manager)
+            executor: OrderExecutor (for backward compatibility, will be created per account if using client_manager)
+            max_concurrent: Maximum concurrent strategies
+            redis_storage: Redis storage for persistence
+            notification_service: Notification service
+        """
+        # Support both single client (backward compatibility) and client manager (multi-account)
+        if client_manager:
+            self.client_manager = client_manager
+            self.client = client_manager.get_default_client()  # Default client for backward compatibility
+        elif client:
+            self.client = client
+            # Create a simple client manager with just the default client
+            from app.core.config import get_settings
+            settings = get_settings()
+            self.client_manager = BinanceClientManager(settings)
+            # If default account doesn't exist, add it
+            if not self.client_manager.account_exists("default"):
+                # We'll use the provided client as default
+                self.client_manager._clients["default"] = client
+        else:
+            raise ValueError("Either client or client_manager must be provided")
+        
+        # For backward compatibility, use provided risk/executor if available
+        # Otherwise, they'll be created per strategy based on account_id
+        self.default_risk = risk
+        self.default_executor = executor
+        
         self.registry = StrategyRegistry()
         self.max_concurrent = max_concurrent
         self.redis = redis_storage
@@ -170,6 +202,15 @@ class StrategyRunner:
                 reason="Must be between 1 and 50. Binance futures default is 20x - ensure you explicitly set your desired leverage."
             )
         
+        # Validate account_id exists
+        account_id = payload.account_id.lower() if payload.account_id else "default"
+        if not self.client_manager.account_exists(account_id):
+            available_accounts = list(self.client_manager.list_accounts().keys())
+            raise ValueError(
+                f"Binance account '{account_id}' not found. "
+                f"Available accounts: {', '.join(available_accounts)}"
+            )
+        
         strategy_id = str(uuid.uuid4())
         summary = StrategySummary(
             id=strategy_id,
@@ -182,6 +223,7 @@ class StrategyRunner:
             fixed_amount=payload.fixed_amount,
             params=payload.params,
             created_at=datetime.utcnow(),
+            account_id=account_id,
             last_signal=None,
             entry_price=None,
             current_price=None,
@@ -191,9 +233,13 @@ class StrategyRunner:
         )
         self._strategies[strategy_id] = summary
         self._save_to_redis(strategy_id, summary)
+        
+        account_name = self.client_manager.get_account_config(account_id)
+        account_display = account_name.name if account_name else account_id
         logger.info(
             f"Registered strategy {strategy_id} ({payload.strategy_type}) "
-            f"with explicit leverage={payload.leverage}x for {payload.symbol}"
+            f"with explicit leverage={payload.leverage}x for {payload.symbol} "
+            f"using account '{account_id}' ({account_display})"
         )
         # auto_start is handled by the API layer to avoid double-starting the same strategy.
         return summary
@@ -244,6 +290,16 @@ class StrategyRunner:
 
         summary = self._strategies[strategy_id]
         
+        # Get account-specific client, risk manager, and executor
+        account_id = getattr(summary, 'account_id', 'default') or 'default'
+        account_client = self.client_manager.get_client(account_id)
+        if not account_client:
+            raise ValueError(f"Binance client not found for account '{account_id}'")
+        
+        # Create account-specific risk manager and executor
+        account_risk = RiskManager(client=account_client)
+        account_executor = OrderExecutor(client=account_client)
+        
         # For backward compatibility: if ema_crossover type, set default 5/20 EMA
         params = summary.params.model_dump()
         if summary.strategy_type == StrategyType.ema_crossover:
@@ -267,8 +323,8 @@ class StrategyRunner:
             interval_seconds=summary.params.interval_seconds,
             metadata={},
         )
-        strategy = self.registry.build(summary.strategy_type, context, self.client)
-        task = asyncio.create_task(self._run_loop(strategy, summary))
+        strategy = self.registry.build(summary.strategy_type, context, account_client)
+        task = asyncio.create_task(self._run_loop(strategy, summary, account_risk, account_executor))
         self._tasks[strategy_id] = task
         summary.status = StrategyState.running
         self._save_to_redis(strategy_id, summary)
@@ -294,7 +350,9 @@ class StrategyRunner:
         
         # Check for open positions and close them
         try:
-            position = self.client.get_open_position(summary.symbol)
+            account_id = summary.account_id or "default"
+            account_client = self.client_manager.get_client(account_id) or self.client
+            position = account_client.get_open_position(summary.symbol)
             if position:
                 position_side = "LONG" if float(position['positionAmt']) > 0 else "SHORT"
                 logger.info(
@@ -585,8 +643,19 @@ class StrategyRunner:
             worst_performing_strategy=worst_strategy.strategy_name if worst_strategy else None
         )
 
-    async def _run_loop(self, strategy: Strategy, summary: StrategySummary) -> None:
-        logger.info(f"Starting loop for {summary.id}")
+    async def _run_loop(
+        self, 
+        strategy: Strategy, 
+        summary: StrategySummary,
+        risk: Optional[RiskManager] = None,
+        executor: Optional[OrderExecutor] = None
+    ) -> None:
+        # Use account-specific risk/executor if provided, otherwise fall back to defaults
+        account_id = summary.account_id or "default"
+        account_client = self.client_manager.get_client(account_id) or self.client
+        account_risk = risk or self.default_risk or RiskManager(client=account_client)
+        account_executor = executor or self.default_executor or OrderExecutor(client=account_client)
+        logger.info(f"Starting loop for {summary.id} (account: {account_id})")
         try:
             while True:
                 # CRITICAL ORDER: Sync with Binance BEFORE evaluating strategy
@@ -747,7 +816,19 @@ class StrategyRunner:
         except Exception as exc:
             logger.warning(f"Failed to save trades for {strategy_id} to Redis: {exc}")
 
-    async def _execute(self, signal: StrategySignal, summary: StrategySummary) -> None:
+    async def _execute(
+        self, 
+        signal: StrategySignal, 
+        summary: StrategySummary,
+        risk: Optional[RiskManager] = None,
+        executor: Optional[OrderExecutor] = None
+    ) -> None:
+        # Use account-specific risk/executor if provided, otherwise fall back to defaults
+        account_id = summary.account_id or "default"
+        account_client = self.client_manager.get_client(account_id) or self.client
+        account_risk = risk or self.default_risk or RiskManager(client=account_client)
+        account_executor = executor or self.default_executor or OrderExecutor(client=account_client)
+        
         if signal.action == "HOLD":
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
             return
@@ -767,21 +848,21 @@ class StrategyRunner:
             )
         
         try:
-            current_leverage = self.client.get_current_leverage(summary.symbol)
+            current_leverage = account_client.get_current_leverage(summary.symbol)
             if current_leverage != summary.leverage:
                 logger.warning(
                     f"[{summary.id}] Leverage mismatch detected for {summary.symbol}: "
                     f"current={current_leverage}x (may be Binance default), target={summary.leverage}x. "
                     f"Resetting to {summary.leverage}x"
                 )
-                self.client.adjust_leverage(summary.symbol, summary.leverage)
+                account_client.adjust_leverage(summary.symbol, summary.leverage)
             elif current_leverage is None:
                 # No position yet, set leverage proactively to prevent Binance default
                 logger.info(
                     f"[{summary.id}] Setting leverage {summary.leverage}x for {summary.symbol} "
                     f"(no existing position - preventing Binance 20x default)"
                 )
-                self.client.adjust_leverage(summary.symbol, summary.leverage)
+                account_client.adjust_leverage(summary.symbol, summary.leverage)
             else:
                 logger.debug(
                     f"[{summary.id}] Leverage already correct: {current_leverage}x for {summary.symbol}"
@@ -801,7 +882,7 @@ class StrategyRunner:
             ) from exc
         
         # Get current position from Binance to ensure accurate size for closing
-        current_position = self.client.get_open_position(summary.symbol)
+        current_position = account_client.get_open_position(summary.symbol)
         current_side = summary.position_side
         current_size = float(summary.position_size or 0)
         
@@ -818,7 +899,7 @@ class StrategyRunner:
 
         try:
             if is_closing_long or is_closing_short:
-                price = signal.price or self.client.get_price(signal.symbol)
+                price = signal.price or account_client.get_price(signal.symbol)
                 force_close_quantity = current_size
                 sizing = PositionSizingResult(
                     quantity=force_close_quantity,
@@ -831,13 +912,13 @@ class StrategyRunner:
                 )
             else:
                 # Log sizing parameters for debugging
-                price = signal.price or self.client.get_price(signal.symbol)
+                price = signal.price or account_client.get_price(signal.symbol)
                 logger.info(
                     f"[{summary.id}] Calculating position size: "
                     f"fixed_amount={summary.fixed_amount}, risk_per_trade={summary.risk_per_trade}, "
                     f"price={price}, symbol={signal.symbol}"
                 )
-                sizing = self.risk.size_position(
+                sizing = account_risk.size_position(
                     symbol=signal.symbol, 
                     risk_per_trade=summary.risk_per_trade, 
                     price=price,
@@ -861,7 +942,7 @@ class StrategyRunner:
             raise
         
         try:
-            order_response = self.executor.execute(
+            order_response = account_executor.execute(
                 signal=signal,
                 sizing=sizing,
                 reduce_only_override=reduce_only_override,
@@ -1142,7 +1223,9 @@ class StrategyRunner:
         
         if sl_order_id:
             try:
-                self.client.cancel_order(summary.symbol, sl_order_id)
+                account_id = summary.account_id or "default"
+                account_client = self.client_manager.get_client(account_id) or self.client
+                account_client.cancel_order(summary.symbol, sl_order_id)
                 logger.info(f"[{summary.id}] Cancelled SL order: {sl_order_id}")
             except Exception as exc:
                 logger.warning(f"[{summary.id}] Failed to cancel SL order {sl_order_id}: {exc}")
@@ -1155,8 +1238,11 @@ class StrategyRunner:
     async def _update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy."""
         try:
+            # Get account-specific client
+            account_id = summary.account_id or "default"
+            account_client = self.client_manager.get_client(account_id) or self.client
             # Get current position from Binance
-            position = self.client.get_open_position(summary.symbol)
+            position = account_client.get_open_position(summary.symbol)
             
             if position and abs(float(position["positionAmt"])) > 0:
                 # Update position info from Binance
@@ -1171,7 +1257,7 @@ class StrategyRunner:
                 else:
                     # Fallback to getting current price if markPrice not available
                     try:
-                        summary.current_price = self.client.get_price(summary.symbol)
+                        summary.current_price = account_client.get_price(summary.symbol)
                     except Exception:
                         pass  # Keep existing current_price if update fails
             else:
@@ -1190,7 +1276,7 @@ class StrategyRunner:
                     if has_existing_orders:
                         # Check if any TP/SL orders were filled (by checking if they're still open)
                         try:
-                            open_orders = self.client.get_open_orders(summary.symbol)
+                            open_orders = account_client.get_open_orders(summary.symbol)
                             open_order_ids = {o.get("orderId") for o in open_orders}
                             tp_order_id = summary.meta.get("tp_sl_orders", {}).get("tp_order_id")
                             sl_order_id = summary.meta.get("tp_sl_orders", {}).get("sl_order_id")
@@ -1225,7 +1311,7 @@ class StrategyRunner:
             if summary.entry_price and summary.current_price and summary.position_size:
                 # Update current price for manual calculation
                 try:
-                    summary.current_price = self.client.get_price(summary.symbol)
+                    summary.current_price = account_client.get_price(summary.symbol)
                 except Exception as price_exc:
                     logger.debug(f"Failed to get current price for {summary.symbol}: {price_exc}")
                 

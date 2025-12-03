@@ -430,6 +430,12 @@
             <h2>Filters</h2>
             <div class="filter-grid">
                 <div class="filter-group">
+                    <label for="accountFilter">Binance Account</label>
+                    <select id="accountFilter">
+                        <option value="">All Accounts</option>
+                    </select>
+                </div>
+                <div class="filter-group">
                     <label for="symbolFilter">Cryptocurrency</label>
                     <select id="symbolFilter">
                         <option value="">All Symbols</option>
@@ -534,6 +540,30 @@
     <script>
         let autoRefreshInterval = null;
         let allSymbols = [];
+        let availableAccounts = {};
+
+        async function loadAccounts() {
+            try {
+                const response = await fetch('/accounts/list');
+                if (!response.ok) throw new Error('Failed to load accounts');
+                availableAccounts = await response.json();
+                
+                const select = document.getElementById('accountFilter');
+                select.innerHTML = '<option value="">All Accounts</option>';
+                for (const accountId in availableAccounts) {
+                    if (Object.prototype.hasOwnProperty.call(availableAccounts, accountId)) {
+                        const accountInfo = availableAccounts[accountId];
+                        const option = document.createElement('option');
+                        option.value = accountId;
+                        const testnetLabel = accountInfo.testnet === 'True' || accountInfo.testnet === true ? ' [TESTNET]' : '';
+                        option.textContent = `${accountInfo.name} (${accountId})${testnetLabel}`;
+                        select.appendChild(option);
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading accounts:', error);
+            }
+        }
 
         async function loadSymbols() {
             try {
@@ -556,7 +586,12 @@
 
         async function loadData() {
             try {
-                const response = await fetch('/trades/pnl/overview');
+                const accountId = document.getElementById('accountFilter').value;
+                let url = '/trades/pnl/overview';
+                if (accountId) {
+                    url += `?account_id=${encodeURIComponent(accountId)}`;
+                }
+                const response = await fetch(url);
                 if (!response.ok) throw new Error('Failed to load PnL data');
                 const pnlData = await response.json();
                 
@@ -674,12 +709,14 @@
         }
 
         async function loadTrades() {
+            const accountId = document.getElementById('accountFilter').value;
             const symbol = document.getElementById('symbolFilter').value;
             const side = document.getElementById('sideFilter').value;
             const startDate = document.getElementById('startDateFilter').value;
             const endDate = document.getElementById('endDateFilter').value;
             
             const params = new URLSearchParams();
+            if (accountId) params.append('account_id', accountId);
             if (symbol) params.append('symbol', symbol);
             if (side) params.append('side', side);
             if (startDate) {
@@ -832,6 +869,7 @@
         }
 
         function clearFilters() {
+            document.getElementById('accountFilter').value = '';
             document.getElementById('symbolFilter').value = '';
             document.getElementById('startDateFilter').value = '';
             document.getElementById('endDateFilter').value = '';
@@ -863,6 +901,7 @@
 
         // Initialize on page load
         window.addEventListener('load', () => {
+            loadAccounts();
             loadSymbols();
             loadData();
         });

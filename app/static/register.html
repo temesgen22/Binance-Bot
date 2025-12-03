@@ -407,9 +407,22 @@
                             <div class="help-text">Choose the trading strategy to use</div>
                         </div>
                         <div class="form-group">
+                            <label>Binance Account <span class="required">*</span></label>
+                            <select id="account_id" name="account_id" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                            <div class="help-text" id="account-help-text">Select the Binance account to use for this strategy</div>
+                            <div id="account-loading-status" class="help-text" style="color: #667eea; font-style: italic;"></div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
                             <label>Leverage <span class="required">*</span></label>
                             <input type="number" id="leverage" name="leverage" required min="1" max="50" value="5">
                             <div class="help-text">Leverage multiplier (1-50). Higher leverage = higher risk</div>
+                        </div>
+                        <div class="form-group">
+                            <!-- Empty space for alignment -->
                         </div>
                     </div>
                 </div>
@@ -493,14 +506,26 @@
                         </div>
                         <div class="form-row">
                             <div class="form-group">
+                                <label>Binance Account <span class="required">*</span></label>
+                                <select id="reuse-account_id" name="account_id" required>
+                                    <option value="default">Loading accounts...</option>
+                                </select>
+                                <div class="help-text">Select the Binance account to use for this strategy</div>
+                            </div>
+                            <div class="form-group">
                                 <label>Leverage <span class="required">*</span></label>
                                 <input type="number" id="reuse-leverage" name="leverage" required min="1" max="50">
                             </div>
+                        </div>
+                        <div class="form-row">
                             <div class="form-group">
                                 <div class="checkbox-group" style="margin-top: 32px;">
                                     <input type="checkbox" id="reuse-auto_start" name="auto_start">
                                     <label for="reuse-auto_start">Auto-start strategy after creation</label>
                                 </div>
+                            </div>
+                            <div class="form-group">
+                                <!-- Empty space for alignment -->
                             </div>
                         </div>
                     </div>
@@ -529,6 +554,7 @@
     <script>
         let existingStrategies = [];
         let selectedStrategy = null;
+        let availableAccounts = [];
 
         // Tab switching
         function switchTab(tab) {
@@ -717,6 +743,15 @@
             document.getElementById('reuse-symbol').value = strategy.symbol;
             document.getElementById('reuse-leverage').value = strategy.leverage;
             
+            // Set account_id if available in strategy, otherwise use default
+            const reuseAccountSelect = document.getElementById('reuse-account_id');
+            const strategyAccountId = strategy.account_id || 'default';
+            if (reuseAccountSelect.querySelector(`option[value="${strategyAccountId}"]`)) {
+                reuseAccountSelect.value = strategyAccountId;
+            } else {
+                reuseAccountSelect.value = 'default';
+            }
+            
             // Display strategy parameters
             displayStrategyParams(strategy, 'reuse-strategy-params-container');
             
@@ -764,6 +799,7 @@
                     risk_per_trade: parseFloat(formData.get('risk_per_trade')) || 0.01,
                     max_positions: parseInt(formData.get('max_positions')) || 1,
                     auto_start: formData.get('auto_start') === 'on',
+                    account_id: formData.get('account_id') || 'default',
                     params: {}
                 };
                 
@@ -838,6 +874,7 @@
                     risk_per_trade: selectedStrategy.risk_per_trade,
                     max_positions: selectedStrategy.max_positions || 1,
                     auto_start: formData.get('auto_start') === 'on',
+                    account_id: formData.get('account_id') || 'default',
                     params: selectedStrategy.params,
                     fixed_amount: selectedStrategy.fixed_amount
                 };
@@ -869,8 +906,123 @@
             }
         });
 
+        // Load available Binance accounts
+        async function loadAccounts() {
+            const accountSelect = document.getElementById('account_id');
+            const reuseAccountSelect = document.getElementById('reuse-account_id');
+            const statusDiv = document.getElementById('account-loading-status');
+            const helpText = document.getElementById('account-help-text');
+            
+            if (statusDiv) {
+                statusDiv.textContent = 'Loading accounts...';
+                statusDiv.style.display = 'block';
+            }
+            
+            try {
+                console.log('[Account Loader] Fetching accounts from /accounts/list...');
+                const response = await fetch('/accounts/list', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                    },
+                });
+                
+                console.log('[Account Loader] Response status:', response.status);
+                console.log('[Account Loader] Response headers:', Object.fromEntries(response.headers.entries()));
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('[Account Loader] HTTP Error:', response.status, errorText);
+                    throw new Error(`HTTP ${response.status}: ${errorText.substring(0, 100)}`);
+                }
+                
+                const accounts = await response.json();
+                console.log('[Account Loader] Accounts received:', accounts);
+                console.log('[Account Loader] Account count:', Object.keys(accounts || {}).length);
+                console.log('[Account Loader] Account keys:', Object.keys(accounts || {}));
+                
+                availableAccounts = accounts || {};
+                
+                // Check if accounts object is empty or invalid
+                if (!accounts || typeof accounts !== 'object' || Object.keys(accounts).length === 0) {
+                    console.warn('[Account Loader] No accounts found in response');
+                    if (statusDiv) {
+                        statusDiv.textContent = '⚠️ No accounts configured. Please configure accounts in .env file.';
+                        statusDiv.style.color = '#e74c3c';
+                    }
+                    accountSelect.innerHTML = '<option value="default">Default Account (No accounts configured)</option>';
+                    reuseAccountSelect.innerHTML = '<option value="default">Default Account (No accounts configured)</option>';
+                    return;
+                }
+                
+                // Populate account dropdowns
+                accountSelect.innerHTML = '';
+                reuseAccountSelect.innerHTML = '';
+                
+                let hasDefault = false;
+                let accountCount = 0;
+                for (const [accountId, accountInfo] of Object.entries(accounts)) {
+                    if (!accountInfo || typeof accountInfo !== 'object') {
+                        console.warn(`[Account Loader] Skipping invalid account entry: ${accountId}`, accountInfo);
+                        continue;
+                    }
+                    
+                    const option = document.createElement('option');
+                    option.value = accountId;
+                    const displayName = accountInfo.name || accountId;
+                    const testnetValue = accountInfo.testnet;
+                    const isTestnet = testnetValue === 'True' || testnetValue === true || testnetValue === 'true';
+                    const testnetLabel = isTestnet ? ' [TESTNET]' : '';
+                    option.textContent = `${displayName} (${accountId})${testnetLabel}`;
+                    
+                    // Select default account if it exists, otherwise select first account
+                    if (accountId === 'default') {
+                        option.selected = true;
+                        hasDefault = true;
+                    } else if (!hasDefault && accountCount === 0) {
+                        option.selected = true;
+                    }
+                    
+                    accountSelect.appendChild(option.cloneNode(true));
+                    reuseAccountSelect.appendChild(option);
+                    accountCount++;
+                }
+                
+                console.log(`[Account Loader] Successfully loaded ${accountCount} account(s)`);
+                
+                if (statusDiv) {
+                    statusDiv.textContent = `✅ Loaded ${accountCount} account(s)`;
+                    statusDiv.style.color = '#28a745';
+                    setTimeout(() => {
+                        statusDiv.style.display = 'none';
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('[Account Loader] Error loading accounts:', error);
+                console.error('[Account Loader] Error stack:', error.stack);
+                
+                if (statusDiv) {
+                    statusDiv.textContent = `❌ Error: ${error.message}`;
+                    statusDiv.style.color = '#e74c3c';
+                }
+                
+                // Show error message in dropdown
+                accountSelect.innerHTML = `<option value="default">Error: ${error.message.substring(0, 50)}</option>`;
+                reuseAccountSelect.innerHTML = `<option value="default">Error: ${error.message.substring(0, 50)}</option>`;
+                
+                // Also show alert to user
+                const alertDiv = document.getElementById('create-alert');
+                if (alertDiv) {
+                    alertDiv.innerHTML = `<div class="alert alert-error">Failed to load Binance accounts: ${error.message}. Check browser console for details. Using default account.</div>`;
+                }
+            }
+        }
+
         // Load existing strategies on page load if reuse tab is active
         window.addEventListener('DOMContentLoaded', () => {
+            // Load accounts first
+            loadAccounts();
+            
             // Auto-uppercase symbol inputs
             document.getElementById('symbol').addEventListener('input', (e) => {
                 e.target.value = e.target.value.toUpperCase();

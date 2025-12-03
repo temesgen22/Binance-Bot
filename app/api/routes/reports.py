@@ -293,6 +293,7 @@ def get_trading_report(
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
     start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO format)"),
     end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO format)"),
+    account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
 ) -> TradingReport:
@@ -336,6 +337,8 @@ def get_trading_report(
             if strategy_name and strategy_name.lower() not in strategy.name.lower():
                 continue
             if symbol and strategy.symbol.upper() != symbol.upper():
+                continue
+            if account_id and strategy.account_id != account_id:
                 continue
             filtered_strategies.append(strategy)
         

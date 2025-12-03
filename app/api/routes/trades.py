@@ -68,6 +68,7 @@ def list_all_trades(
     end_date: Optional[str] = Query(default=None, description="Filter until date (ISO format or YYYY-MM-DD)"),
     side: Optional[str] = Query(default=None, description="Filter by side (BUY/SELL)"),
     strategy_id: Optional[str] = Query(default=None, description="Filter by strategy ID"),
+    account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> List[TradeWithTimestamp]:
     """Get all trades across all strategies with optional filtering."""
@@ -105,6 +106,10 @@ def list_all_trades(
         for strategy in strategies:
             # Apply strategy_id filter
             if strategy_id and strategy.id != strategy_id:
+                continue
+            
+            # Apply account_id filter
+            if account_id and strategy.account_id != account_id:
                 continue
             
             # Apply symbol filter
@@ -174,6 +179,7 @@ def list_symbols(runner: StrategyRunner = Depends(get_strategy_runner)) -> List[
 @router.get("/symbol/{symbol}/pnl", response_model=SymbolPnL)
 def get_symbol_pnl(
     symbol: str,
+    account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
 ) -> SymbolPnL:
@@ -183,6 +189,10 @@ def get_symbol_pnl(
     # Get all strategies for this symbol
     strategies = runner.list_strategies()
     symbol_strategies = [s for s in strategies if s.symbol.upper() == symbol]
+    
+    # Apply account_id filter
+    if account_id:
+        symbol_strategies = [s for s in symbol_strategies if s.account_id == account_id]
     
     if not symbol_strategies:
         # Return empty PnL if no strategies found
@@ -346,6 +356,7 @@ def get_symbol_pnl(
 
 @router.get("/pnl/overview", response_model=List[SymbolPnL])
 def get_pnl_overview(
+    account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
 ) -> List[SymbolPnL]:
@@ -354,6 +365,9 @@ def get_pnl_overview(
     symbols = set()
     strategies = runner.list_strategies()
     for strategy in strategies:
+        # Apply account_id filter
+        if account_id and strategy.account_id != account_id:
+            continue
         trades = runner.get_trades(strategy.id)
         if trades:
             symbols.add(strategy.symbol)
@@ -362,7 +376,7 @@ def get_pnl_overview(
     pnl_list = []
     for symbol in sorted(symbols):
         try:
-            pnl = get_symbol_pnl(symbol, runner, client)
+            pnl = get_symbol_pnl(symbol, account_id=account_id, runner=runner, client=client)
             pnl_list.append(pnl)
         except Exception as exc:
             logger.warning(f"Failed to get PnL for {symbol}: {exc}")

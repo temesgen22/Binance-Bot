@@ -24,6 +24,7 @@ def get_strategy_performance(
     rank_by: Optional[str] = Query(default="total_pnl", description="Rank by field (total_pnl, win_rate, completed_trades)"),
     start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO datetime) - not yet implemented"),
     end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO datetime) - not yet implemented"),
+    account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> StrategyPerformanceList:
     """Get performance metrics for all strategies, ranked by profitability.
@@ -43,6 +44,8 @@ def get_strategy_performance(
         if symbol and strategy.symbol.upper() != symbol.upper():
             continue
         if status and strategy.status.value.lower() != status.lower():
+            continue
+        if account_id and strategy.account_id != account_id:
             continue
         
         try:

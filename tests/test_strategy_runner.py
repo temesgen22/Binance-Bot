@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from app.models.strategy import CreateStrategyRequest, StrategyParams, StrategyType, StrategyState
 from app.services.strategy_runner import StrategyRunner
+from app.core.binance_client_manager import BinanceClientManager
+from app.core.config import get_settings
 
 
 class DummyRedis:
@@ -13,16 +15,32 @@ class DummyRedis:
 
 
 def make_runner():
+    """Create a StrategyRunner for testing (backward compatible)."""
     client = MagicMock()
     risk = MagicMock()
     executor = MagicMock()
-    return StrategyRunner(
-        client=client,
-        risk=risk,
-        executor=executor,
-        max_concurrent=2,
-        redis_storage=DummyRedis(),
-    )
+    
+    # Create a minimal client manager for backward compatibility
+    # The StrategyRunner will create one automatically if not provided,
+    # but we'll provide it to ensure tests work with new code
+    with patch.dict('os.environ', {
+        'BINANCE_API_KEY': 'test_key',
+        'BINANCE_API_SECRET': 'test_secret',
+    }, clear=False):
+        get_settings.cache_clear()
+        settings = get_settings()
+        manager = BinanceClientManager(settings)
+        manager._clients = {'default': client}
+        manager._accounts = settings.get_binance_accounts()
+        
+        return StrategyRunner(
+            client=client,
+            client_manager=manager,
+            risk=risk,
+            executor=executor,
+            max_concurrent=2,
+            redis_storage=DummyRedis(),
+        )
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,7 @@ class CreateStrategyRequest(BaseModel):
     max_positions: int = Field(default=1, ge=1, le=5)
     params: StrategyParams = Field(default_factory=StrategyParams)
     auto_start: bool = False
+    account_id: str = Field(default="default", description="Binance account ID to use for this strategy (e.g., 'default', 'account1', 'main')")
 
     @field_validator("symbol")
     @classmethod
@@ -98,6 +99,7 @@ class StrategySummary(BaseModel):
     fixed_amount: Optional[float] = None  # Fixed USDT amount (if set, overrides risk_per_trade)
     params: StrategyParams
     created_at: datetime
+    account_id: str = Field(default="default", description="Binance account ID used by this strategy")
     last_signal: Optional[Literal["BUY", "SELL", "HOLD"]]
     entry_price: Optional[float] = None  # Price when position was opened
     current_price: Optional[float] = None  # Latest market price

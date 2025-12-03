@@ -16,6 +16,7 @@ from app.api.routes.logs import router as logs_router
 from app.api.routes.trades import router as trades_router
 from app.api.routes.strategy_performance import router as strategy_performance_router
 from app.api.routes.reports import router as reports_router
+from app.api.routes.accounts import router as accounts_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -31,6 +32,7 @@ from app.api.exception_handlers import (
     general_exception_handler,
 )
 from app.core.my_binance_client import BinanceClient
+from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import get_settings
 from app.core.logger import configure_logging
 from loguru import logger
@@ -58,15 +60,67 @@ from app.services.telegram_commands import TelegramCommandHandler
 
 def create_app() -> FastAPI:
     configure_logging()
+    
+    # CRITICAL: Load .env file explicitly before creating Settings
+    # This ensures BINANCE_ACCOUNT_* variables are in os.environ
+    # pydantic-settings only loads fields defined in Settings class,
+    # so custom variables like BINANCE_ACCOUNT_* won't be loaded automatically
+    from dotenv import load_dotenv
+    from pathlib import Path
+    
+    # Try multiple possible locations for .env file
+    # __file__ is app/main.py, so parent.parent is project root
+    project_root = Path(__file__).parent.parent
+    env_file = None
+    possible_paths = [
+        project_root / ".env",  # Project root (most reliable - prioritize this)
+        Path(".env"),  # Current directory
+        Path.cwd() / ".env",  # Current working directory
+    ]
+    
+    for env_path in possible_paths:
+        if env_path.exists() and env_path.is_file():
+            env_file = env_path
+            logger.info(f"Loading .env file from: {env_file.absolute()}")
+            load_dotenv(env_file, override=False)  # Don't override existing env vars
+            break
+    
+    if not env_file:
+        logger.warning(
+            f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
+            "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded."
+        )
+    
+    # Clear settings cache to ensure fresh load from .env file
+    get_settings.cache_clear()
     settings = get_settings()
-    client = BinanceClient(
-        api_key=settings.binance_api_key,
-        api_secret=settings.binance_api_secret,
-        testnet=settings.binance_testnet,
-    )
-
-    risk = RiskManager(client=client)
-    executor = OrderExecutor(client=client)
+    # Force reload of accounts to ensure all accounts from .env are loaded
+    settings._binance_accounts = None
+    
+    # Initialize Binance client manager (supports multiple accounts)
+    client_manager = BinanceClientManager(settings)
+    
+    # Log loaded accounts for debugging
+    accounts = client_manager.list_accounts()
+    logger.info(f"Initialized BinanceClientManager with {len(accounts)} account(s): {list(accounts.keys())}")
+    for account_id, account_config in accounts.items():
+        logger.info(f"  - Account '{account_id}': {account_config.name} (Testnet: {account_config.testnet})")
+    
+    # Get default client for backward compatibility
+    default_client = client_manager.get_default_client()
+    if not default_client:
+        # Fallback: create default client if no accounts configured
+        default_client = BinanceClient(
+            api_key=settings.binance_api_key,
+            api_secret=settings.binance_api_secret,
+            testnet=settings.binance_testnet,
+        )
+        # Add to manager
+        client_manager._clients["default"] = default_client
+    
+    # Create default risk manager and executor for backward compatibility
+    risk = RiskManager(client=default_client)
+    executor = OrderExecutor(client=default_client)
     
     # Initialize Redis storage if enabled
     redis_storage = None
@@ -91,7 +145,8 @@ def create_app() -> FastAPI:
         )
     
     runner = StrategyRunner(
-        client=client,
+        client_manager=client_manager,
+        client=default_client,  # For backward compatibility
         risk=risk,
         executor=executor,
         max_concurrent=settings.max_concurrent_strategies,
@@ -128,7 +183,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:  # pragma: no cover
-        app.state.binance_client = client
+        app.state.binance_client = default_client  # For backward compatibility
+        app.state.binance_client_manager = client_manager
         app.state.strategy_runner = runner
         app.state.background_tasks: list[asyncio.Task] = []
         
@@ -234,6 +290,7 @@ def create_app() -> FastAPI:
     # Include API routers FIRST to ensure API endpoints take precedence
     # This ensures /trades/list matches before /trades GUI route
     app.include_router(health_router)
+    app.include_router(accounts_router)
     app.include_router(trades_router)  # Must be before /trades GUI route
     app.include_router(strategies_router)  # Must be before /strategies GUI route
     app.include_router(logs_router)

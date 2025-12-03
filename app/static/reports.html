@@ -447,6 +447,12 @@
             <h2>Filters</h2>
             <div class="filter-grid">
                 <div class="filter-group">
+                    <label for="accountFilter">Binance Account</label>
+                    <select id="accountFilter">
+                        <option value="">All Accounts</option>
+                    </select>
+                </div>
+                <div class="filter-group">
                     <label for="strategyIdFilter">Strategy ID</label>
                     <input type="text" id="strategyIdFilter" placeholder="Filter by strategy ID">
                 </div>
@@ -488,6 +494,31 @@
     </div>
 
     <script>
+        let availableAccounts = {};
+
+        async function loadAccounts() {
+            try {
+                const response = await fetch('/accounts/list');
+                if (!response.ok) throw new Error('Failed to load accounts');
+                availableAccounts = await response.json();
+                
+                const select = document.getElementById('accountFilter');
+                select.innerHTML = '<option value="">All Accounts</option>';
+                for (const accountId in availableAccounts) {
+                    if (Object.prototype.hasOwnProperty.call(availableAccounts, accountId)) {
+                        const accountInfo = availableAccounts[accountId];
+                        const option = document.createElement('option');
+                        option.value = accountId;
+                        const testnetLabel = accountInfo.testnet === 'True' || accountInfo.testnet === true ? ' [TESTNET]' : '';
+                        option.textContent = `${accountInfo.name} (${accountId})${testnetLabel}`;
+                        select.appendChild(option);
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading accounts:', error);
+            }
+        }
+
         function formatCurrency(value) {
             const sign = value >= 0 ? '+' : '';
             return sign + '$' + value.toFixed(2);
@@ -505,6 +536,7 @@
         }
 
         function getFilters() {
+            const accountId = document.getElementById('accountFilter').value;
             const strategyId = document.getElementById('strategyIdFilter').value.trim();
             const strategyName = document.getElementById('strategyNameFilter').value.trim();
             const symbol = document.getElementById('symbolFilter').value.trim();
@@ -512,6 +544,7 @@
             const endDate = document.getElementById('endDateFilter').value;
 
             const params = new URLSearchParams();
+            if (accountId) params.append('account_id', accountId);
             if (strategyId) params.append('strategy_id', strategyId);
             if (strategyName) params.append('strategy_name', strategyName);
             if (symbol) params.append('symbol', symbol.toUpperCase());
@@ -710,6 +743,7 @@
         }
 
         function clearFilters() {
+            document.getElementById('accountFilter').value = '';
             document.getElementById('strategyIdFilter').value = '';
             document.getElementById('strategyNameFilter').value = '';
             document.getElementById('symbolFilter').value = '';
@@ -719,6 +753,7 @@
 
         // Initialize - load report on page load
         window.addEventListener('load', () => {
+            loadAccounts();
             // Optionally load report automatically, or wait for user to click button
             // loadReport();
         });
