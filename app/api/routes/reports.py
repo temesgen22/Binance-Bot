@@ -338,8 +338,12 @@ def get_trading_report(
                 continue
             if symbol and strategy.symbol.upper() != symbol.upper():
                 continue
-            if account_id and strategy.account_id != account_id:
-                continue
+            # Filter by account_id if provided (only filter if account_id is explicitly set)
+            if account_id:
+                # Handle case where strategy.account_id might be None or missing
+                strategy_account_id = getattr(strategy, 'account_id', None) or "default"
+                if strategy_account_id != account_id:
+                    continue
             filtered_strategies.append(strategy)
         
         # Build strategy reports

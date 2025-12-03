@@ -90,14 +90,29 @@ class StrategyRunner:
             self.client = client_manager.get_default_client()  # Default client for backward compatibility
         elif client:
             self.client = client
-            # Create a simple client manager with just the default client
+            # Create a simple client manager with just the provided client
+            # This ensures mock clients in tests are always used instead of real clients from settings
             from app.core.config import get_settings
             settings = get_settings()
             self.client_manager = BinanceClientManager(settings)
-            # If default account doesn't exist, add it
-            if not self.client_manager.account_exists("default"):
-                # We'll use the provided client as default
-                self.client_manager._clients["default"] = client
+            # CRITICAL: Replace all clients with just the provided client
+            # This ensures mock clients in tests are always used instead of real clients
+            self.client_manager._clients = {"default": client}
+            # Also update accounts to only include default (for consistency)
+            accounts = settings.get_binance_accounts()
+            if "default" in accounts:
+                self.client_manager._accounts = {"default": accounts["default"]}
+            else:
+                from app.core.config import BinanceAccountConfig
+                self.client_manager._accounts = {
+                    "default": BinanceAccountConfig(
+                        account_id="default",
+                        api_key="mock",
+                        api_secret="mock",
+                        testnet=True,
+                        name="Mock Account"
+                    )
+                }
         else:
             raise ValueError("Either client or client_manager must be provided")
         
@@ -114,8 +129,26 @@ class StrategyRunner:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
         
+        # Track if we're using a directly provided client (for tests with mock clients)
+        self._has_direct_client = client is not None and client_manager is None
+        
         # Load strategies from Redis on startup
         self._load_from_redis()
+    
+    def _get_account_client(self, account_id: str) -> BinanceClient:
+        """Get client for an account, preferring directly provided client for default account.
+        
+        This ensures mock clients in tests are always used instead of real clients.
+        """
+        account_id = account_id or "default"
+        
+        # If we have a directly provided client and account_id is "default", use it
+        # This ensures mock clients in tests override real clients from manager
+        if account_id == "default" and self._has_direct_client and self.client:
+            return self.client
+        
+        # Otherwise, get from manager or fall back to directly provided client
+        return self.client_manager.get_client(account_id) or self.client
 
     def _cleanup_dead_tasks(self) -> None:
         """Remove completed/cancelled tasks from _tasks dictionary.
@@ -292,7 +325,7 @@ class StrategyRunner:
         
         # Get account-specific client, risk manager, and executor
         account_id = getattr(summary, 'account_id', 'default') or 'default'
-        account_client = self.client_manager.get_client(account_id)
+        account_client = self._get_account_client(account_id)
         if not account_client:
             raise ValueError(f"Binance client not found for account '{account_id}'")
         
@@ -351,7 +384,7 @@ class StrategyRunner:
         # Check for open positions and close them
         try:
             account_id = summary.account_id or "default"
-            account_client = self.client_manager.get_client(account_id) or self.client
+            account_client = self._get_account_client(account_id)
             position = account_client.get_open_position(summary.symbol)
             if position:
                 position_side = "LONG" if float(position['positionAmt']) > 0 else "SHORT"
@@ -652,7 +685,7 @@ class StrategyRunner:
     ) -> None:
         # Use account-specific risk/executor if provided, otherwise fall back to defaults
         account_id = summary.account_id or "default"
-        account_client = self.client_manager.get_client(account_id) or self.client
+        account_client = self._get_account_client(account_id)
         account_risk = risk or self.default_risk or RiskManager(client=account_client)
         account_executor = executor or self.default_executor or OrderExecutor(client=account_client)
         logger.info(f"Starting loop for {summary.id} (account: {account_id})")
@@ -825,7 +858,7 @@ class StrategyRunner:
     ) -> None:
         # Use account-specific risk/executor if provided, otherwise fall back to defaults
         account_id = summary.account_id or "default"
-        account_client = self.client_manager.get_client(account_id) or self.client
+        account_client = self._get_account_client(account_id)
         account_risk = risk or self.default_risk or RiskManager(client=account_client)
         account_executor = executor or self.default_executor or OrderExecutor(client=account_client)
         
@@ -1214,17 +1247,18 @@ class StrategyRunner:
             f"[{summary.id}] Cancelling TP/SL orders: TP={tp_order_id}, SL={sl_order_id}"
         )
         
+        account_id = summary.account_id or "default"
+        account_client = self._get_account_client(account_id)
+        
         if tp_order_id:
             try:
-                self.client.cancel_order(summary.symbol, tp_order_id)
+                account_client.cancel_order(summary.symbol, tp_order_id)
                 logger.info(f"[{summary.id}] Cancelled TP order: {tp_order_id}")
             except Exception as exc:
                 logger.warning(f"[{summary.id}] Failed to cancel TP order {tp_order_id}: {exc}")
         
         if sl_order_id:
             try:
-                account_id = summary.account_id or "default"
-                account_client = self.client_manager.get_client(account_id) or self.client
                 account_client.cancel_order(summary.symbol, sl_order_id)
                 logger.info(f"[{summary.id}] Cancelled SL order: {sl_order_id}")
             except Exception as exc:
@@ -1240,7 +1274,7 @@ class StrategyRunner:
         try:
             # Get account-specific client
             account_id = summary.account_id or "default"
-            account_client = self.client_manager.get_client(account_id) or self.client
+            account_client = self._get_account_client(account_id)
             # Get current position from Binance
             position = account_client.get_open_position(summary.symbol)
             
