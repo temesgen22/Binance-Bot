@@ -139,7 +139,7 @@ def get_strategy_performance(
             "total_pnl": round(total_pnl_sum, 4),
             "total_realized_pnl": round(total_realized_sum, 4),
             "total_unrealized_pnl": round(total_unrealized_sum, 4),
-            "total_trades": total_trades_sum,
+            "total_trades": total_completed_sum,  # Use completed trades for consistency with win rate calculation
             "completed_trades": total_completed_sum,
             "overall_win_rate": round(overall_win_rate, 2),
             "winning_trades": total_winning,

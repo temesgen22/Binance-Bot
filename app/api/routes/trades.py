@@ -9,7 +9,8 @@ from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_binance_client
+from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager
+from app.core.binance_client_manager import BinanceClientManager
 from app.models.trade import (
     TradeWithTimestamp,
     PositionSummary,
@@ -182,6 +183,7 @@ def get_symbol_pnl(
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
+    client_manager: BinanceClientManager = Depends(get_client_manager),
 ) -> SymbolPnL:
     """Get profit and loss summary for a specific symbol."""
     symbol = symbol.upper()
@@ -308,12 +310,22 @@ def get_symbol_pnl(
     losing_trades = len([t for t in completed_trades if t.realized_pnl < 0])
     win_rate = (winning_trades / len(completed_trades) * 100) if completed_trades else 0
     
-    # Get open positions from Binance
+    # Get open positions from Binance - use account-specific client if filtering by account_id
     open_positions = []
     total_unrealized_pnl = 0.0
     
+    # Use account-specific client when filtering by account_id
+    position_client = client
+    if account_id:
+        try:
+            account_client = client_manager.get_client(account_id)
+            if account_client:
+                position_client = account_client
+        except Exception as exc:
+            logger.warning(f"Could not get account-specific client for {account_id}, using default: {exc}")
+    
     try:
-        position_data = client.get_open_position(symbol)
+        position_data = position_client.get_open_position(symbol)
         if position_data:
             position_side = "LONG" if position_data["positionAmt"] > 0 else "SHORT"
             
@@ -346,7 +358,7 @@ def get_symbol_pnl(
         total_pnl=round(total_realized_pnl + total_unrealized_pnl, 4),
         open_positions=open_positions,
         closed_trades=completed_trades,
-        total_trades=len(all_trades),
+        total_trades=len(completed_trades),  # Use completed trades for consistency with win rate calculation
         completed_trades=len(completed_trades),
         win_rate=round(win_rate, 2),
         winning_trades=winning_trades,

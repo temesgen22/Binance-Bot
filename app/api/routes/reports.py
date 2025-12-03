@@ -361,7 +361,7 @@ def get_trading_report(
         
         # Build strategy reports
         strategy_reports = []
-        total_trades_count = 0  # Total ALL trades (not just completed)
+        total_trades_count = 0  # Total completed trades (for consistency with win rate calculation)
         total_winning = 0
         total_losing = 0
         total_profit = 0.0
@@ -419,7 +419,7 @@ def get_trading_report(
                     symbol=strategy.symbol,
                     created_at=strategy.created_at,
                     stopped_at=stopped_at,
-                    total_trades=len(trades),  # All trades (open + closed)
+                    total_trades=len(completed_trades_list),  # Count completed trades to match wins/losses
                     wins=wins,
                     losses=losses,
                     win_rate=round(win_rate, 2),
@@ -430,8 +430,9 @@ def get_trading_report(
                 )
                 
                 strategy_reports.append(strategy_report)
-                # BUG FIX #1: Count ALL trades (not just completed) for total_trades consistency
-                total_trades_count += len(trades)  # Fixed: was len(completed_trades_list)
+                # Count completed trades for consistency with win rate and profit/loss calculations
+                # This ensures total_trades matches the actual trades used in statistics
+                total_trades_count += len(completed_trades_list)
                 total_winning += wins
                 total_losing += losses
                 total_profit += total_profit_usd

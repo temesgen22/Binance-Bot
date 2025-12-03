@@ -277,7 +277,7 @@ class TestReportGeneration:
         
         strategy_report = report.strategies[0]
         assert strategy_report.strategy_id == strategy_id, "Strategy ID should match"
-        assert strategy_report.total_trades == 2, "Should have 2 total trades"
+        assert strategy_report.total_trades == 1, "Should have 1 completed trade (2 orders form 1 completed trade)"
         assert len(strategy_report.trades) == 1, "Should have 1 completed trade"
         assert strategy_report.net_pnl > 0, "Net PnL should be positive"
         assert strategy_report.wins == 1, "Should have 1 win"

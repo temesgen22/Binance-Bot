@@ -393,7 +393,7 @@ class StrategyRunner:
                     f"{position['positionAmt']} {summary.symbol} @ {position['entryPrice']} "
                     f"(Unrealized PnL: {position['unRealizedProfit']:.2f} USDT)"
                 )
-                close_order = self.client.close_position(summary.symbol)
+                close_order = account_client.close_position(summary.symbol)
                 if close_order:
                     logger.info(
                         f"[{strategy_id}] 🔴 Position CLOSED (reason: MANUAL/STOP): "
@@ -727,7 +727,7 @@ class StrategyRunner:
                 
                 # 4) Update current price for UI/stats (not critical to logic)
                 try:
-                    summary.current_price = self.client.get_price(summary.symbol)
+                    summary.current_price = account_client.get_price(summary.symbol)
                 except Exception as exc:
                     logger.warning(f"Failed to get current price for {summary.symbol}: {exc}")
                 
@@ -799,6 +799,10 @@ class StrategyRunner:
                         data["created_at"] = datetime.fromisoformat(data["created_at"])
                     if "last_trade_at" in data and isinstance(data["last_trade_at"], str):
                         data["last_trade_at"] = datetime.fromisoformat(data["last_trade_at"])
+                    
+                    # Ensure account_id exists (for backward compatibility with old strategies)
+                    if "account_id" not in data or data.get("account_id") is None:
+                        data["account_id"] = "default"
                     
                     # Reconstruct StrategySummary from dict
                     summary = StrategySummary(**data)
@@ -1104,7 +1108,10 @@ class StrategyRunner:
             has_valid_orders = False
             if tp_order_id or sl_order_id:
                 try:
-                    open_orders = self.client.get_open_orders(summary.symbol)
+                    # Use account-specific client to check orders
+                    account_id = summary.account_id or "default"
+                    account_client = self._get_account_client(account_id)
+                    open_orders = account_client.get_open_orders(summary.symbol)
                     open_order_ids = {o.get("orderId") for o in open_orders}
                     has_valid_orders = (tp_order_id in open_order_ids) or (sl_order_id in open_order_ids)
                     
@@ -1184,12 +1191,16 @@ class StrategyRunner:
             f"TP={tp_price:.8f} ({tp_side}), SL={sl_price:.8f} ({sl_side})"
         )
         
+        # Get account-specific client
+        account_id = summary.account_id or "default"
+        account_client = self._get_account_client(account_id)
+        
         tp_order_id = None
         sl_order_id = None
         
         try:
             # Place take profit order
-            tp_response = self.client.place_take_profit_order(
+            tp_response = account_client.place_take_profit_order(
                 symbol=summary.symbol,
                 side=tp_side,
                 quantity=summary.position_size,
@@ -1208,7 +1219,7 @@ class StrategyRunner:
         
         try:
             # Place stop loss order
-            sl_response = self.client.place_stop_loss_order(
+            sl_response = account_client.place_stop_loss_order(
                 symbol=summary.symbol,
                 side=sl_side,
                 quantity=summary.position_size,
