@@ -759,7 +759,8 @@ class StrategyRunner:
                     )
                 
                 # 6) Execute order based on synced state + fresh signal
-                await self._execute(signal, summary)
+                # CRITICAL: Pass account-specific risk and executor to ensure orders go to correct account
+                await self._execute(signal, summary, risk=account_risk, executor=account_executor)
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
             # Get final PnL before sending notification
@@ -904,6 +905,12 @@ class StrategyRunner:
         account_client = self._get_account_client(account_id)
         account_risk = risk or self.default_risk or RiskManager(client=account_client)
         account_executor = executor or self.default_executor or OrderExecutor(client=account_client)
+        
+        # Log account being used for order execution (critical for multi-account debugging)
+        logger.debug(
+            f"[{summary.id}] Executing order using account: {account_id} "
+            f"(strategy account_id: {summary.account_id})"
+        )
         
         if signal.action == "HOLD":
             logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
