@@ -180,8 +180,8 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                     "
                     echo '✅ Backup copied to Redis volume'
                     
-                    # Start Redis with AOF disabled temporarily to force RDB load
-                    echo "🚀 Starting Redis with AOF disabled to force RDB load..."
+                    # Start Redis with AOF disabled (RDB-only mode)
+                    echo "🚀 Starting Redis with AOF disabled (RDB-only mode)..."
                     docker run -d --name redis-temp-restore \
                         -v "$REDIS_VOLUME":/data \
                         redis:7-alpine \
@@ -195,8 +195,8 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                             echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER"
                         else
                             echo "⚠️  Restore completed but Redis still empty"
-                            echo "   This might be because AOF is enabled in redis.conf"
                             echo "   Check Redis logs: docker logs binance-bot-redis"
+                            echo "   Verify redis.conf has 'appendonly no'"
                         fi
                     }
                     
@@ -217,10 +217,9 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                             docker stop redis-temp-restore
                             docker rm redis-temp-restore
                             
-                            # CRITICAL: Remove AOF files again before starting normal Redis
-                            # Normal Redis has appendonly=yes in redis.conf, so if AOF files exist,
-                            # Redis will load from empty AOF instead of the RDB we just saved
-                            echo "🧹 Removing AOF files before starting normal Redis (to force RDB load)..."
+                            # Remove AOF files before starting normal Redis (RDB-only mode)
+                            # Even though redis.conf should have appendonly=no, remove AOF files to be safe
+                            echo "🧹 Removing AOF files before starting normal Redis (RDB-only mode)..."
                             docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
                                 cd /data
                                 rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
@@ -228,18 +227,18 @@ if [ "$KEY_COUNT" -eq "0" ]; then
                                 ls -lah /data
                             "
                             
-                            # Start normal Redis (should load the RDB since AOF is removed)
-                            echo "🚀 Starting normal Redis container (will load from RDB)..."
+                            # Start normal Redis (will load from RDB, AOF disabled in redis.conf)
+                            echo "🚀 Starting normal Redis container (RDB-only mode)..."
                             docker-compose up -d redis
                             sleep 8
                             
                             KEY_COUNT_AFTER=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo '0')
                             if [ "$KEY_COUNT_AFTER" -gt "0" ]; then
-                                echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER"
+                                echo "✅ Redis restored! Keys: $KEY_COUNT_AFTER (RDB-only mode)"
                             else
                                 echo "⚠️  Restore completed but Redis still empty"
-                                echo "   Redis might be loading from AOF instead of RDB"
                                 echo "   Check Redis logs: docker logs binance-bot-redis | grep -i 'loading\|aof\|rdb'"
+                                echo "   Verify redis.conf has 'appendonly no'"
                             fi
                         else
                             echo "   ❌ No keys loaded - backup might be empty or corrupted"

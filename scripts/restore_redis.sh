@@ -107,9 +107,8 @@ docker run -d --name redis-temp-restore \
     if [ -f "$DEPLOY_DIR/redis.conf" ]; then
         REDIS_CONF="$DEPLOY_DIR/redis.conf"
         echo "   Found redis.conf at: $REDIS_CONF"
-        # Backup original
-        cp "$REDIS_CONF" "$REDIS_CONF.backup"
-        # Disable AOF temporarily
+        # Disable AOF permanently (RDB-only mode)
+        # Note: We don't backup the config because we're keeping AOF disabled
         sed -i 's/^appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || \
         sed -i 's/appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || true
         
@@ -151,29 +150,14 @@ docker run -d --name redis-temp-restore \
             echo "   🔑 Sample keys:"
             docker exec binance-bot-redis redis-cli --scan --pattern "*" | head -5 | sed 's/^/      /'
             
-            # Restore original config
-            mv "$REDIS_CONF.backup" "$REDIS_CONF"
+            # Keep AOF disabled permanently (RDB-only mode)
+            # Don't restore the config backup - keep appendonly no
+            echo "   ✅ Restore complete with AOF disabled (RDB-only mode)."
+            echo "   ℹ️  Redis is configured for RDB-only persistence (appendonly no)."
+            echo "   ℹ️  This is the recommended setup for snapshot-based backups."
             
-            # CRITICAL: Remove AOF files before re-enabling AOF
-            echo "   🧹 Removing AOF files before re-enabling AOF..."
-            docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
-                cd /data
-                rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
-                echo 'Files in /data before restart:'
-                ls -lah /data
-            "
-            
-            echo "   🔄 Restarting Redis with AOF enabled..."
-            docker-compose restart redis
-            sleep 8
-            
-            # Final verification
-            KEY_COUNT_FINAL=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
-            if [ "$KEY_COUNT_FINAL" -gt 0 ]; then
-                echo "   ✅ Final key count: $KEY_COUNT_FINAL - Restore successful!"
-            else
-                echo "   ⚠️  Keys lost after re-enabling AOF"
-            fi
+            # Clean up backup file (we're keeping AOF disabled)
+            rm -f "$REDIS_CONF.backup" 2>/dev/null || true
         else
             echo "   ❌ No keys loaded"
             echo ""
@@ -195,8 +179,8 @@ docker run -d --name redis-temp-restore \
             echo "   Redis INFO persistence:"
             docker exec binance-bot-redis redis-cli INFO persistence 2>/dev/null | grep -E "(rdb_last_save_time|aof_enabled|loading)" | sed 's/^/      /' || echo "      Cannot get info"
             
-            # Restore original config
-            mv "$REDIS_CONF.backup" "$REDIS_CONF" 2>/dev/null || true
+            # Keep AOF disabled (don't restore config backup)
+            rm -f "$REDIS_CONF.backup" 2>/dev/null || true
         fi
     else
         echo "   ❌ redis.conf not found at $DEPLOY_DIR/redis.conf"
@@ -350,11 +334,10 @@ if docker ps | grep -q redis-temp-restore; then
                 done
                 
                 if [ -n "$REDIS_CONF" ]; then
-                    echo "   🔧 Temporarily disabling AOF in redis.conf..."
+                    echo "   🔧 Disabling AOF in redis.conf (RDB-only mode)..."
                     REDIS_CONF_DIR="$(dirname "$REDIS_CONF")"
-                    # Backup original config
-                    cp "$REDIS_CONF" "$REDIS_CONF_DIR/redis.conf.backup"
-                    # Temporarily disable AOF
+                    # No need to backup - we're keeping AOF disabled permanently
+                    # Disable AOF permanently
                     sed -i 's/^appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || \
                     sed -i 's/appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || true
                     
@@ -368,35 +351,17 @@ if docker ps | grep -q redis-temp-restore; then
                     
                     if [ "$KEY_COUNT_TEMP" -gt "0" ]; then
                         echo "   ✅ Data loaded from RDB!"
-                        # Restore original config
-                        mv "$REDIS_CONF_DIR/redis.conf.backup" "$REDIS_CONF"
-                        # CRITICAL: Remove any AOF files that might have been created
-                        # before restarting with AOF enabled
-                        echo "   🧹 Removing any AOF files before re-enabling AOF..."
-                        docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
-                            cd /data
-                            rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
-                            echo 'Files in /data before restart:'
-                            ls -lah /data
-                        "
-                        # Restart Redis with AOF enabled (data is already in RDB, so it will persist)
-                        echo "   🔄 Re-enabling AOF and restarting..."
-                        docker-compose restart redis
-                        sleep 8
+                        # Keep AOF disabled permanently (RDB-only mode)
+                        # Don't restore the config backup - keep appendonly no
+                        echo "   ✅ Restore complete with AOF disabled (RDB-only mode)."
+                        echo "   ℹ️  Redis is configured for RDB-only persistence (appendonly no)."
                         
-                        # Final verification
-                        KEY_COUNT_FINAL=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
-                        echo "   📊 Final key count after enabling AOF: $KEY_COUNT_FINAL"
-                        
-                        if [ "$KEY_COUNT_FINAL" -gt "0" ]; then
-                            echo "   ✅ Data successfully restored and persisted with AOF enabled!"
-                        else
-                            echo "   ⚠️  Data lost after enabling AOF"
-                            echo "   This is unexpected - data should persist in RDB"
-                        fi
+                        # Clean up backup file (we're keeping AOF disabled)
+                        rm -f "$REDIS_CONF_DIR/redis.conf.backup" 2>/dev/null || true
                     else
-                        echo "   ⚠️  Data not loaded, restoring original config"
-                        mv "$REDIS_CONF_DIR/redis.conf.backup" "$REDIS_CONF"
+                        echo "   ⚠️  Data not loaded"
+                        # Keep AOF disabled (don't restore config backup)
+                        rm -f "$REDIS_CONF_DIR/redis.conf.backup" 2>/dev/null || true
                     fi
                 else
                     echo "   ⚠️  redis.conf not found in any expected location"
@@ -437,13 +402,14 @@ if docker ps | grep -q redis-temp-restore; then
                         echo "   📊 Keys with AOF disabled: $KEY_COUNT_TEMP"
                         
                         if [ "$KEY_COUNT_TEMP" -gt "0" ]; then
-                            echo "   ✅ Data loaded! Now restarting with docker-compose..."
+                            echo "   ✅ Data loaded! Restarting with docker-compose (AOF disabled)..."
                             docker stop binance-bot-redis
                             docker rm binance-bot-redis
                             docker-compose up -d redis
                             sleep 8
                             KEY_COUNT_FINAL=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
                             echo "   📊 Final key count: $KEY_COUNT_FINAL"
+                            echo "   ✅ Restore complete with AOF disabled (RDB-only mode)."
                         else
                             echo "   ⚠️  Data not loaded"
                             docker stop binance-bot-redis 2>/dev/null || true
@@ -473,7 +439,7 @@ if docker ps | grep -q redis-temp-restore; then
         echo "   📊 Final key count in normal Redis: $KEY_COUNT_FINAL"
         
         if [ "$KEY_COUNT_FINAL" -gt 0 ]; then
-            echo "   ✅ Data successfully restored to normal Redis!"
+            echo "   ✅ Data successfully restored to normal Redis (RDB-only mode)!"
             echo ""
             echo "   Sample keys:"
             docker exec binance-bot-redis redis-cli --scan --pattern "*" | head -10 | sed 's/^/      /'
