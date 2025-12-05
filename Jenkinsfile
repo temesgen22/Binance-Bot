@@ -281,6 +281,7 @@ If Jenkins is on a host/server:
                             ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "mkdir -p \$DEPLOY_PATH/scripts"
                             scp \$SSH_OPTS -P \$SSH_PORT scripts/deploy.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  deploy.sh not found"
                             scp \$SSH_OPTS -P \$SSH_PORT scripts/restore_redis.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  restore_redis.sh not found"
+                            scp \$SSH_OPTS -P \$SSH_PORT scripts/restore_redis_simple.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  restore_redis_simple.sh not found"
                             scp \$SSH_OPTS -P \$SSH_PORT scripts/check_and_restore_redis.sh \$SSH_USER@\$SSH_HOST:\$DEPLOY_PATH/scripts/ 2>/dev/null || echo "   ⚠️  check_and_restore_redis.sh not found"
                             # Make scripts executable
                             ssh \$SSH_OPTS -p \$SSH_PORT \$SSH_USER@\$SSH_HOST "chmod +x \$DEPLOY_PATH/scripts/*.sh 2>/dev/null || true"
