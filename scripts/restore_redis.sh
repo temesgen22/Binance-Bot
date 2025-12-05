@@ -86,20 +86,121 @@ echo "🚀 Starting Redis with AOF disabled (to force RDB load)..."
 echo "   Using temporary config with appendonly=no"
 
 # Create a temporary Redis container with AOF disabled
+# Use a different port to avoid conflicts
+echo "   Starting temporary Redis on port 6380..."
 docker run -d --name redis-temp-restore \
     -v "$REDIS_VOLUME":/data \
+    -p 6380:6379 \
     redis:7-alpine \
-    redis-server --appendonly no --dir /data --dbfilename dump.rdb 2>/dev/null || {
+    redis-server --appendonly no --dir /data --dbfilename dump.rdb 2>&1 || {
     echo "   ⚠️  Could not start temp Redis"
+    # Check if container exists but failed to start
+    if docker ps -a | grep -q redis-temp-restore; then
+        echo "   Checking temp Redis logs..."
+        docker logs redis-temp-restore 2>&1 | tail -10 | sed 's/^/      /'
+    fi
     docker rm -f redis-temp-restore 2>/dev/null || true
-    echo "   Trying normal Redis start instead..."
-    docker-compose start redis
-    sleep 8
-    KEY_COUNT=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
-    if [ "$KEY_COUNT" -gt 0 ]; then
-        echo "   ✅ Keys loaded: $KEY_COUNT"
+    
+    # Try alternative: directly modify redis.conf and restart
+    echo "   Trying alternative restore method..."
+    DEPLOY_DIR="${DEPLOY_PATH:-/home/jenkins-deploy/binance-bot}"
+    if [ -f "$DEPLOY_DIR/redis.conf" ]; then
+        REDIS_CONF="$DEPLOY_DIR/redis.conf"
+        echo "   Found redis.conf at: $REDIS_CONF"
+        # Backup original
+        cp "$REDIS_CONF" "$REDIS_CONF.backup"
+        # Disable AOF temporarily
+        sed -i 's/^appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || \
+        sed -i 's/appendonly yes/appendonly no/' "$REDIS_CONF" 2>/dev/null || true
+        
+        # Ensure AOF is disabled
+        if ! grep -q "^appendonly no" "$REDIS_CONF"; then
+            # Remove any appendonly line and add new one
+            sed -i '/^appendonly/d' "$REDIS_CONF"
+            echo "appendonly no" >> "$REDIS_CONF"
+        fi
+        
+        # CRITICAL: Remove AOF files before starting Redis
+        echo "   🧹 Removing AOF files before starting Redis..."
+        docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
+            cd /data
+            echo 'Removing all AOF files...'
+            rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
+            echo 'Files in /data before starting:'
+            ls -lah /data
+        "
+        
+        # Start Redis with modified config
+        cd "$DEPLOY_DIR" 2>/dev/null || cd "$(dirname "$0")/.."
+        echo "   Starting Redis with AOF disabled..."
+        docker-compose up -d redis
+        sleep 10
+        
+        # Wait a bit more for Redis to fully load
+        sleep 5
+        
+        # Check Redis logs to see what it loaded
+        echo "   📋 Checking Redis logs..."
+        docker logs --tail 30 binance-bot-redis 2>&1 | grep -E "(Loading|DB loaded|RDB|AOF|Error)" | sed 's/^/      /' || echo "      No loading messages found"
+        
+        KEY_COUNT=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+        echo "   📊 Keys loaded: $KEY_COUNT"
+        
+        if [ "$KEY_COUNT" -gt 0 ]; then
+            echo "   ✅ Keys loaded successfully!"
+            echo "   🔑 Sample keys:"
+            docker exec binance-bot-redis redis-cli --scan --pattern "*" | head -5 | sed 's/^/      /'
+            
+            # Restore original config
+            mv "$REDIS_CONF.backup" "$REDIS_CONF"
+            
+            # CRITICAL: Remove AOF files before re-enabling AOF
+            echo "   🧹 Removing AOF files before re-enabling AOF..."
+            docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
+                cd /data
+                rm -rf appendonly.aof appendonlydir appendonly.aof.* *.aof 2>/dev/null || true
+                echo 'Files in /data before restart:'
+                ls -lah /data
+            "
+            
+            echo "   🔄 Restarting Redis with AOF enabled..."
+            docker-compose restart redis
+            sleep 8
+            
+            # Final verification
+            KEY_COUNT_FINAL=$(docker exec binance-bot-redis redis-cli DBSIZE 2>/dev/null || echo "0")
+            if [ "$KEY_COUNT_FINAL" -gt 0 ]; then
+                echo "   ✅ Final key count: $KEY_COUNT_FINAL - Restore successful!"
+            else
+                echo "   ⚠️  Keys lost after re-enabling AOF"
+            fi
+        else
+            echo "   ❌ No keys loaded"
+            echo ""
+            echo "   🔍 Diagnostic information:"
+            echo "   Checking RDB file in volume..."
+            docker run --rm -v "$REDIS_VOLUME":/data alpine sh -c "
+                cd /data
+                echo 'RDB file:'
+                ls -lh dump.rdb 2>/dev/null || echo '   dump.rdb not found!'
+                [ -s dump.rdb ] && echo '   ✅ RDB file has content' || echo '   ❌ RDB file is empty!'
+                echo ''
+                echo 'All files in /data:'
+                ls -lah
+            "
+            echo ""
+            echo "   Checking Redis configuration..."
+            docker exec binance-bot-redis redis-cli CONFIG GET appendonly 2>/dev/null | sed 's/^/      /' || echo "      Cannot get config"
+            echo ""
+            echo "   Redis INFO persistence:"
+            docker exec binance-bot-redis redis-cli INFO persistence 2>/dev/null | grep -E "(rdb_last_save_time|aof_enabled|loading)" | sed 's/^/      /' || echo "      Cannot get info"
+            
+            # Restore original config
+            mv "$REDIS_CONF.backup" "$REDIS_CONF" 2>/dev/null || true
+        fi
     else
-        echo "   ❌ No keys loaded"
+        echo "   ❌ redis.conf not found at $DEPLOY_DIR/redis.conf"
+        echo "   Cannot proceed with alternative method"
     fi
     exit 0
 }
@@ -108,34 +209,41 @@ docker run -d --name redis-temp-restore \
 echo "⏳ Waiting for Redis to load RDB file..."
 sleep 8
 
-# Check if temp Redis loaded data
+# Check if temp Redis is running
 if docker ps | grep -q redis-temp-restore; then
-    KEY_COUNT=$(docker exec redis-temp-restore redis-cli DBSIZE 2>/dev/null || echo "0")
+    # Use port 6380 for temp Redis
+    KEY_COUNT=$(docker exec redis-temp-restore redis-cli -p 6379 DBSIZE 2>/dev/null || echo "0")
     echo "   📊 Keys loaded in temp Redis: $KEY_COUNT"
     
     if [ "$KEY_COUNT" -gt 0 ]; then
         echo "   ✅ Data loaded successfully!"
         echo ""
         echo "   Sample keys:"
-        docker exec redis-temp-restore redis-cli --scan --pattern "*" | head -10 | sed 's/^/      /'
+        docker exec redis-temp-restore redis-cli -p 6379 --scan --pattern "*" | head -10 | sed 's/^/      /'
         
         # Save the data to RDB before stopping (so normal Redis can load it)
         echo ""
         echo "💾 Saving data to RDB for normal Redis..."
-        docker exec redis-temp-restore redis-cli BGSAVE
+        docker exec redis-temp-restore redis-cli -p 6379 BGSAVE
         
         # Wait for BGSAVE to complete
         echo "⏳ Waiting for BGSAVE to complete..."
-        while [ "$(docker exec redis-temp-restore redis-cli LASTSAVE)" = "$(docker exec redis-temp-restore redis-cli LASTSAVE)" ]; do
+        LAST_SAVE=$(docker exec redis-temp-restore redis-cli -p 6379 LASTSAVE 2>/dev/null || echo "0")
+        sleep 2
+        while true; do
+            CURRENT_SAVE=$(docker exec redis-temp-restore redis-cli -p 6379 LASTSAVE 2>/dev/null || echo "0")
+            if [ "$CURRENT_SAVE" != "$LAST_SAVE" ]; then
+                break
+            fi
             sleep 1
         done
         
         # Check if save is in progress
-        SAVE_IN_PROGRESS=$(docker exec redis-temp-restore redis-cli INFO persistence | grep -o "rdb_bgsave_in_progress:1" || echo "")
+        SAVE_IN_PROGRESS=$(docker exec redis-temp-restore redis-cli -p 6379 INFO persistence 2>/dev/null | grep -o "rdb_bgsave_in_progress:1" || echo "")
         while [ -n "$SAVE_IN_PROGRESS" ]; do
             echo "   Still saving... waiting..."
-            sleep 1
-            SAVE_IN_PROGRESS=$(docker exec redis-temp-restore redis-cli INFO persistence | grep -o "rdb_bgsave_in_progress:1" || echo "")
+            sleep 2
+            SAVE_IN_PROGRESS=$(docker exec redis-temp-restore redis-cli -p 6379 INFO persistence 2>/dev/null | grep -o "rdb_bgsave_in_progress:1" || echo "")
         done
         
         echo "✅ BGSAVE completed"
@@ -209,7 +317,7 @@ if docker ps | grep -q redis-temp-restore; then
             
             # Check if data loaded
             sleep 5
-            KEY_COUNT_LOAD=$(docker exec binance-bot-redis-load redis-cli DBSIZE 2>/dev/null || echo "0")
+            KEY_COUNT_LOAD=$(docker exec binance-bot-redis-load redis-cli -p 6379 DBSIZE 2>/dev/null || echo "0")
             echo "   📊 Keys loaded with AOF disabled: $KEY_COUNT_LOAD"
             
             if [ "$KEY_COUNT_LOAD" -gt "0" ]; then
