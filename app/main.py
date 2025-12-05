@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from app.api.routes.trades import router as trades_router
 from app.api.routes.strategy_performance import router as strategy_performance_router
 from app.api.routes.reports import router as reports_router
 from app.api.routes.accounts import router as accounts_router
+from app.api.routes.test_accounts import router as test_accounts_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -86,10 +88,22 @@ def create_app() -> FastAPI:
             break
     
     if not env_file:
-        logger.warning(
-            f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
-            "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded."
-        )
+        # Check if environment variables are already set (e.g., from Docker env_file or system env)
+        has_env_vars = bool(os.environ.get('BINANCE_API_KEY') or any(
+            key.startswith('BINANCE_ACCOUNT_') for key in os.environ.keys()
+        ))
+        if has_env_vars:
+            logger.debug(
+                f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}, "
+                "but environment variables are already set (likely from Docker or system environment). "
+                "Continuing with existing environment variables."
+            )
+        else:
+            logger.warning(
+                f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
+                "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded. "
+                "If running in Docker, ensure env_file is configured in docker-compose.yml."
+            )
     
     # Clear settings cache to ensure fresh load from .env file
     get_settings.cache_clear()
@@ -291,6 +305,7 @@ def create_app() -> FastAPI:
     # This ensures /trades/list matches before /trades GUI route
     app.include_router(health_router)
     app.include_router(accounts_router)
+    app.include_router(test_accounts_router)  # Test accounts API
     app.include_router(trades_router)  # Must be before /trades GUI route
     app.include_router(strategies_router)  # Must be before /strategies GUI route
     app.include_router(logs_router)
@@ -353,6 +368,51 @@ def create_app() -> FastAPI:
     async def strategies_gui_with_slash():
         """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
         return await _serve_strategies_gui()
+    
+    # Serve test-accounts.html for API Account Testing
+    async def _serve_test_accounts_gui():
+        """Helper function to serve the Test API Accounts GUI."""
+        test_accounts_path = static_dir / "test-accounts.html"
+        abs_test_accounts_path = test_accounts_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_test_accounts_path,
+            test_accounts_path,
+            abs_static_dir / "test-accounts.html",
+            static_dir / "test-accounts.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Test API Accounts GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # GUI routes for test accounts
+    @app.get("/test-accounts", tags=["gui"], include_in_schema=False)
+    async def test_accounts_gui():
+        """Serve the Test API Accounts GUI (without trailing slash)."""
+        return await _serve_test_accounts_gui()
+    
+    @app.get("/test-accounts/", tags=["gui"], include_in_schema=False)
+    async def test_accounts_gui_with_slash():
+        """Serve the Test API Accounts GUI (with trailing slash)."""
+        return await _serve_test_accounts_gui()
     
     # Serve reports.html for Trading Reports
     async def _serve_reports_gui():

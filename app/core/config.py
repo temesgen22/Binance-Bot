@@ -108,10 +108,22 @@ class Settings(BaseSettings):
             logger.debug(f"Loading .env file from: {env_file.absolute()}")
             load_dotenv(env_file, override=False)  # Don't override existing env vars
         else:
-            logger.warning(
-                f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
-                "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded."
-            )
+            # Check if environment variables are already set (e.g., from Docker env_file or system env)
+            has_env_vars = bool(os.environ.get('BINANCE_API_KEY') or any(
+                key.startswith('BINANCE_ACCOUNT_') for key in os.environ.keys()
+            ))
+            if has_env_vars:
+                logger.debug(
+                    f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}, "
+                    "but environment variables are already set (likely from Docker or system environment). "
+                    "Continuing with existing environment variables."
+                )
+            else:
+                logger.warning(
+                    f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
+                    "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded. "
+                    "If running in Docker, ensure env_file is configured in docker-compose.yml."
+                )
         
         accounts: Dict[str, BinanceAccountConfig] = {}
         

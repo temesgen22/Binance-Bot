@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Test API Accounts</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .test-form {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .test-form h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.95em;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+            font-family: 'Courier New', monospace;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group input[type="password"] {
+            font-size: 0.9em;
+            letter-spacing: 2px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            cursor: pointer;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .result-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 20px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result-card.success {
+            border-color: #28a745;
+            background: #f8fff9;
+        }
+
+        .result-card.error {
+            border-color: #dc3545;
+            background: #fff8f8;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .result-header h3 {
+            color: #333;
+            font-size: 1.3em;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .status-badge.success {
+            background: #28a745;
+            color: white;
+        }
+
+        .status-badge.error {
+            background: #dc3545;
+            color: white;
+        }
+
+        .status-badge.warning {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .result-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .detail-item {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .detail-item label {
+            display: block;
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .detail-item .value {
+            font-size: 1.1em;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .detail-item .value.success {
+            color: #28a745;
+        }
+
+        .detail-item .value.error {
+            color: #dc3545;
+        }
+
+        .permissions-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .permission-badge {
+            padding: 4px 10px;
+            background: #667eea;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.85em;
+        }
+
+        .error-message {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            color: #856404;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .info-box p {
+            margin: 5px 0;
+            color: #0c5460;
+        }
+
+        .info-box strong {
+            color: #004085;
+        }
+
+        .existing-accounts {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .existing-accounts h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .accounts-list {
+            display: grid;
+            gap: 15px;
+        }
+
+        .account-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .account-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+        }
+
+        .account-info {
+            flex: 1;
+        }
+
+        .account-info h3 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 1.1em;
+        }
+
+        .account-info p {
+            margin: 4px 0;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .account-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .account-badge.testnet {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .account-badge.production {
+            background: #28a745;
+            color: white;
+        }
+
+        .account-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-test-account {
+            padding: 8px 16px;
+            font-size: 0.9em;
+        }
+
+        .loading-accounts {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .no-accounts {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Test Binance API Accounts</h1>
+            <p>Verify your API keys and account connectivity</p>
+            <div class="nav-links">
+                <a href="/">📊 Log Viewer</a>
+                <a href="/strategies/">📈 Strategies</a>
+                <a href="/trades/">💰 Trades</a>
+                <a href="/reports/">📋 Reports</a>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="info-box">
+                <p><strong>ℹ️ Security Note:</strong> Your API keys are sent directly to the Binance API for testing. They are not stored or logged by this application.</p>
+                <p><strong>💡 Tip:</strong> Use testnet mode to safely test your API keys without risking real funds.</p>
+            </div>
+
+            <div class="existing-accounts">
+                <h2>📋 Existing Accounts from .env</h2>
+                <div id="existingAccountsList" class="loading-accounts">
+                    <span class="loading"></span> Loading accounts...
+                </div>
+            </div>
+
+            <div class="test-form">
+                <h2>🧪 Test New Account Credentials</h2>
+                <form id="testForm">
+                    <div class="form-group">
+                        <label for="accountName">Account Name (Optional)</label>
+                        <input type="text" id="accountName" placeholder="e.g., Main Account, Test Account">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="apiKey">API Key *</label>
+                        <input type="text" id="apiKey" required placeholder="Enter your Binance API key">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="apiSecret">API Secret *</label>
+                        <input type="password" id="apiSecret" required placeholder="Enter your Binance API secret">
+                    </div>
+
+                    <div class="form-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="testnet" checked>
+                            <label for="testnet">Use Testnet (Recommended for testing)</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="submit" class="btn btn-primary" id="testBtn">
+                            <span id="testBtnText">🧪 Test Account</span>
+                            <span class="loading hidden" id="loadingSpinner"></span>
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="clearBtn" style="margin-left: 10px;">
+                            🗑️ Clear
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="results" id="results"></div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('testForm');
+        const testBtn = document.getElementById('testBtn');
+        const testBtnText = document.getElementById('testBtnText');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const clearBtn = document.getElementById('clearBtn');
+        const resultsDiv = document.getElementById('results');
+        const existingAccountsList = document.getElementById('existingAccountsList');
+
+        // Load existing accounts on page load
+        async function loadExistingAccounts() {
+            try {
+                const response = await fetch('/accounts/list');
+                const accounts = await response.json();
+                
+                if (!accounts || Object.keys(accounts).length === 0) {
+                    existingAccountsList.innerHTML = '<div class="no-accounts">No accounts found in .env file. Add accounts using the form below.</div>';
+                    return;
+                }
+                
+                let html = '<div class="accounts-list">';
+                for (const [accountId, account] of Object.entries(accounts)) {
+                    const isTestnet = account.testnet === 'True' || account.testnet === true;
+                    html += `
+                        <div class="account-card">
+                            <div class="account-info">
+                                <h3>${account.name || accountId}</h3>
+                                <p>
+                                    <span class="account-badge ${isTestnet ? 'testnet' : 'production'}">
+                                        ${isTestnet ? '🧪 Testnet' : '🌐 Production'}
+                                    </span>
+                                    <span style="color: #999;">ID: ${accountId}</span>
+                                </p>
+                            </div>
+                            <div class="account-actions">
+                                <button class="btn btn-primary btn-test-account" onclick="testExistingAccount('${accountId}')">
+                                    🧪 Test
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+                existingAccountsList.innerHTML = html;
+            } catch (error) {
+                existingAccountsList.innerHTML = `<div class="error-message">Error loading accounts: ${error.message}</div>`;
+            }
+        }
+
+        // Test an existing account by account_id
+        async function testExistingAccount(accountId) {
+            // Find the button and disable it
+            const buttons = document.querySelectorAll('.btn-test-account');
+            buttons.forEach(btn => {
+                if (btn.textContent.includes('Test') && btn.onclick.toString().includes(accountId)) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="loading"></span> Testing...';
+                }
+            });
+
+            try {
+                const response = await fetch(`/api/test-account/${accountId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const result = await response.json();
+                displayResult(result);
+
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                // Re-enable all test buttons
+                buttons.forEach(btn => {
+                    btn.disabled = false;
+                    btn.innerHTML = '🧪 Test';
+                });
+            }
+        }
+
+        // Load accounts when page loads
+        loadExistingAccounts();
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const apiSecret = document.getElementById('apiSecret').value.trim();
+            const accountName = document.getElementById('accountName').value.trim();
+            const testnet = document.getElementById('testnet').checked;
+
+            if (!apiKey || !apiSecret) {
+                alert('Please enter both API Key and API Secret');
+                return;
+            }
+
+            // Show loading state
+            testBtn.disabled = true;
+            testBtnText.textContent = 'Testing...';
+            loadingSpinner.classList.remove('hidden');
+
+            try {
+                const response = await fetch('/api/test-account', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        api_key: apiKey,
+                        api_secret: apiSecret,
+                        testnet: testnet,
+                        account_name: accountName || null
+                    })
+                });
+
+                const result = await response.json();
+
+                // Display result
+                displayResult(result);
+
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                // Reset button state
+                testBtn.disabled = false;
+                testBtnText.textContent = '🧪 Test Account';
+                loadingSpinner.classList.add('hidden');
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            form.reset();
+            resultsDiv.innerHTML = '';
+        });
+
+        function displayResult(result) {
+            const card = document.createElement('div');
+            card.className = `result-card ${result.success ? 'success' : 'error'}`;
+
+            const statusBadge = result.success 
+                ? '<span class="status-badge success">✅ Success</span>'
+                : '<span class="status-badge error">❌ Failed</span>';
+
+            const accountNameDisplay = result.account_name 
+                ? `<h3>${result.account_name}</h3>`
+                : '<h3>Account Test Result</h3>';
+
+            let detailsHtml = `
+                <div class="result-header">
+                    ${accountNameDisplay}
+                    ${statusBadge}
+                </div>
+                <div class="result-details">
+                    <div class="detail-item">
+                        <label>Environment</label>
+                        <div class="value">${result.testnet ? '🧪 Testnet' : '🌐 Production'}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Connection</label>
+                        <div class="value ${result.connection_status.includes('✅') ? 'success' : 'error'}">
+                            ${result.connection_status}
+                        </div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Authentication</label>
+                        <div class="value ${result.authentication_status.includes('✅') ? 'success' : 'error'}">
+                            ${result.authentication_status}
+                        </div>
+                    </div>
+            `;
+
+            if (result.success && result.account_info) {
+                detailsHtml += `
+                    <div class="detail-item">
+                        <label>Total Wallet Balance</label>
+                        <div class="value">${formatCurrency(result.account_info.total_wallet_balance)}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Available Balance</label>
+                        <div class="value">${formatCurrency(result.account_info.available_balance)}</div>
+                    </div>
+                    <div class="detail-item">
+                        <label>Unrealized PnL</label>
+                        <div class="value ${result.account_info.total_unrealized_profit >= 0 ? 'success' : 'error'}">
+                            ${formatCurrency(result.account_info.total_unrealized_profit)}
+                        </div>
+                    </div>
+                `;
+
+                if (result.balance !== null && result.balance !== undefined) {
+                    detailsHtml += `
+                        <div class="detail-item">
+                            <label>USDT Balance</label>
+                            <div class="value">${formatCurrency(result.balance)}</div>
+                        </div>
+                    `;
+                }
+
+                if (result.permissions && result.permissions.length > 0) {
+                    detailsHtml += `
+                        <div class="detail-item" style="grid-column: 1 / -1;">
+                            <label>Permissions</label>
+                            <div class="permissions-list">
+                                ${result.permissions.map(p => `<span class="permission-badge">${p}</span>`).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (result.details) {
+                    detailsHtml += `
+                        <div class="detail-item">
+                            <label>Can Trade</label>
+                            <div class="value ${result.details.can_trade ? 'success' : 'error'}">
+                                ${result.details.can_trade ? '✅ Yes' : '❌ No'}
+                            </div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Can Deposit</label>
+                            <div class="value ${result.details.can_deposit ? 'success' : 'error'}">
+                                ${result.details.can_deposit ? '✅ Yes' : '❌ No'}
+                            </div>
+                        </div>
+                        <div class="detail-item">
+                            <label>Can Withdraw</label>
+                            <div class="value ${result.details.can_withdraw ? 'success' : 'error'}">
+                                ${result.details.can_withdraw ? '✅ Yes' : '❌ No'}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            detailsHtml += '</div>';
+
+            if (result.error) {
+                detailsHtml += `
+                    <div class="error-message">
+                        <strong>Error:</strong> ${result.error}
+                    </div>
+                `;
+            }
+
+            card.innerHTML = detailsHtml;
+            resultsDiv.insertBefore(card, resultsDiv.firstChild);
+        }
+
+        function displayError(message) {
+            const card = document.createElement('div');
+            card.className = 'result-card error';
+            card.innerHTML = `
+                <div class="result-header">
+                    <h3>Test Failed</h3>
+                    <span class="status-badge error">❌ Error</span>
+                </div>
+                <div class="error-message">
+                    ${message}
+                </div>
+            `;
+            resultsDiv.insertBefore(card, resultsDiv.firstChild);
+        }
+
+        function formatCurrency(value) {
+            if (value === null || value === undefined) return 'N/A';
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(value);
+        }
+    </script>
+</body>
+</html>
+

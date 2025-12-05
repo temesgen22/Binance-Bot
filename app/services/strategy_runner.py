@@ -362,6 +362,15 @@ class StrategyRunner:
         summary.status = StrategyState.running
         self._save_to_redis(strategy_id, summary)
         
+        # Log strategy start
+        account_name = self.client_manager.get_account_config(account_id)
+        account_display = account_name.name if account_name else account_id
+        logger.info(
+            f"✅ Strategy STARTED: {summary.id} ({summary.name}) | "
+            f"Symbol: {summary.symbol} | Type: {summary.strategy_type.value} | "
+            f"Leverage: {summary.leverage}x | Account: {account_id} ({account_display})"
+        )
+        
         # Send notification that strategy started
         if self.notifications:
             asyncio.create_task(
@@ -419,6 +428,17 @@ class StrategyRunner:
         final_pnl = None
         if summary.unrealized_pnl is not None:
             final_pnl = summary.unrealized_pnl
+        
+        # Log strategy stop
+        account_id = summary.account_id or "default"
+        account_name = self.client_manager.get_account_config(account_id)
+        account_display = account_name.name if account_name else account_id
+        pnl_str = f" | Final PnL: ${final_pnl:.2f}" if final_pnl is not None else ""
+        logger.info(
+            f"⏹️ Strategy STOPPED: {summary.id} ({summary.name}) | "
+            f"Symbol: {summary.symbol} | Account: {account_id} ({account_display})"
+            f"{pnl_str} | Reason: Manual stop"
+        )
         
         # Send notification that strategy stopped
         if self.notifications:
@@ -742,12 +762,21 @@ class StrategyRunner:
                 await self._execute(signal, summary)
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
-            logger.info(f"Strategy {summary.id} cancelled")
-            
             # Get final PnL before sending notification
             final_pnl = None
             if summary.unrealized_pnl is not None:
                 final_pnl = summary.unrealized_pnl
+            
+            # Log strategy cancellation
+            account_id = summary.account_id or "default"
+            account_name = self.client_manager.get_account_config(account_id)
+            account_display = account_name.name if account_name else account_id
+            pnl_str = f" | Final PnL: ${final_pnl:.2f}" if final_pnl is not None else ""
+            logger.info(
+                f"⏹️ Strategy CANCELLED: {summary.id} ({summary.name}) | "
+                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display})"
+                f"{pnl_str} | Reason: Task cancelled"
+            )
             
             # Send notification that strategy stopped
             if self.notifications:
@@ -764,6 +793,16 @@ class StrategyRunner:
         except Exception as exc:
             summary.status = StrategyState.error
             self._save_to_redis(summary.id, summary)
+            
+            # Log strategy failure with details
+            account_id = summary.account_id or "default"
+            account_name = self.client_manager.get_account_config(account_id)
+            account_display = account_name.name if account_name else account_id
+            logger.error(
+                f"❌ Strategy FAILED: {summary.id} ({summary.name}) | "
+                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
+                f"Error: {type(exc).__name__}: {exc}"
+            )
             logger.exception(f"Strategy {summary.id} failed: {exc}")
             
             # Send notification about strategy error

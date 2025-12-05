@@ -68,11 +68,47 @@ class TelegramCommandHandler:
         try:
             async with httpx.AsyncClient(timeout=timeout + 5) as client:
                 response = await client.get(url, params=params)
+                
+                # Handle 409 Conflict specifically
+                if response.status_code == 409:
+                    logger.warning(
+                        "Telegram API 409 Conflict: Another instance may be polling for updates. "
+                        "This usually means multiple bot instances are running. "
+                        "Only one instance should poll for updates at a time. "
+                        "Will retry after a delay."
+                    )
+                    # Try to get updates with offset=-1 to clear pending updates
+                    # This helps resolve conflicts
+                    try:
+                        clear_params = {"timeout": 1, "offset": -1}
+                        await client.get(url, params=clear_params)
+                        logger.info("Cleared pending Telegram updates to resolve conflict")
+                    except Exception:
+                        pass  # Ignore errors when clearing
+                    return {"ok": False, "result": [], "error": "409 Conflict"}
+                
                 response.raise_for_status()
                 return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 409:
+                logger.warning(
+                    "Telegram API 409 Conflict detected. "
+                    "Another bot instance may be running. "
+                    "Ensure only one instance of the bot is polling for updates."
+                )
+                return {"ok": False, "result": [], "error": "409 Conflict"}
+            else:
+                logger.error(f"Telegram API HTTP error {e.response.status_code}: {e}")
+                return {"ok": False, "result": [], "error": f"HTTP {e.response.status_code}"}
+        except httpx.TimeoutException:
+            logger.warning("Telegram API request timeout (this is normal for long polling)")
+            return {"ok": False, "result": [], "error": "Timeout"}
+        except httpx.RequestError as e:
+            logger.error(f"Telegram API request error: {e}")
+            return {"ok": False, "result": [], "error": "RequestError"}
         except Exception as e:
-            logger.error(f"Error getting Telegram updates: {e}")
-            return {"ok": False, "result": []}
+            logger.error(f"Unexpected error getting Telegram updates: {e}")
+            return {"ok": False, "result": [], "error": str(e)}
     
     async def send_message(
         self,
@@ -401,14 +437,45 @@ class TelegramCommandHandler:
             return
         
         offset = None
+        conflict_retry_count = 0
+        max_conflict_retries = 3
         
         while self._running:
             try:
                 updates = await self.get_updates(offset=offset, timeout=30)
                 
                 if not updates.get("ok"):
-                    await asyncio.sleep(5)
-                    continue
+                    error_type = updates.get("error", "Unknown")
+                    
+                    # Handle 409 Conflict with exponential backoff
+                    if error_type == "409 Conflict":
+                        conflict_retry_count += 1
+                        if conflict_retry_count <= max_conflict_retries:
+                            wait_time = min(5 * (2 ** (conflict_retry_count - 1)), 60)  # Exponential backoff, max 60s
+                            logger.warning(
+                                f"Telegram conflict detected (attempt {conflict_retry_count}/{max_conflict_retries}). "
+                                f"Waiting {wait_time}s before retry. "
+                                f"Ensure only one bot instance is running."
+                            )
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            logger.error(
+                                f"Telegram conflict persists after {max_conflict_retries} retries. "
+                                f"Stopping update polling. Please ensure only one bot instance is running."
+                            )
+                            # Stop polling but don't crash - just log the issue
+                            await asyncio.sleep(60)  # Wait 1 minute before trying again
+                            conflict_retry_count = 0  # Reset counter
+                            continue
+                    else:
+                        # Reset conflict counter on other errors
+                        conflict_retry_count = 0
+                        await asyncio.sleep(5)
+                        continue
+                
+                # Reset conflict counter on successful update
+                conflict_retry_count = 0
                 
                 for update in updates.get("result", []):
                     offset = update.get("update_id", 0) + 1
