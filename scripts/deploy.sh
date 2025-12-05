@@ -58,18 +58,50 @@ if docker ps | grep -q binance-bot-redis; then
         if [ -n "$REDIS_VOLUME" ]; then
             TEMP_FILE="$BACKUP_DIR/temp-backup.rdb"
             if docker run --rm -v "$REDIS_VOLUME":/data:ro -v "$BACKUP_DIR":/backup alpine sh -c 'cp /data/dump.rdb /backup/temp-backup.rdb 2>/dev/null && chmod 644 /backup/temp-backup.rdb'; then
-                mv "$TEMP_FILE" "$BACKUP_FILE" && echo "✅ Backup saved to: $BACKUP_FILE"
+                # Verify backup file has content before moving
+                if [ -f "$TEMP_FILE" ] && [ -s "$TEMP_FILE" ]; then
+                    BACKUP_SIZE=$(stat -c%s "$TEMP_FILE" 2>/dev/null || stat -f%z "$TEMP_FILE" 2>/dev/null || echo "0")
+                    if [ "$BACKUP_SIZE" -gt 100 ]; then
+                        mv "$TEMP_FILE" "$BACKUP_FILE" && echo "✅ Backup saved to: $BACKUP_FILE ($BACKUP_SIZE bytes)"
+                    else
+                        echo "⚠️  Backup file is too small ($BACKUP_SIZE bytes) - might be empty"
+                        rm -f "$TEMP_FILE"
+                        echo '⚠️  Trying redis-cli --rdb method...'
+                        docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
+                        sleep 2
+                        docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && {
+                            BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+                            echo "✅ Backup saved to: $BACKUP_FILE ($BACKUP_SIZE bytes)"
+                        } || echo '⚠️  Backup failed'
+                    fi
+                else
+                    echo '⚠️  Volume backup file is empty or missing'
+                    rm -f "$TEMP_FILE"
+                    echo '⚠️  Trying redis-cli --rdb method...'
+                    docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
+                    sleep 2
+                    docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && {
+                        BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+                        echo "✅ Backup saved to: $BACKUP_FILE ($BACKUP_SIZE bytes)"
+                    } || echo '⚠️  Backup failed'
+                fi
             else
                 echo '⚠️  Volume backup failed, trying redis-cli --rdb method...'
                 docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
-                sleep 1
-                docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && echo "✅ Backup saved to: $BACKUP_FILE" || echo '⚠️  Backup failed'
+                sleep 2
+                docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && {
+                    BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+                    echo "✅ Backup saved to: $BACKUP_FILE ($BACKUP_SIZE bytes)"
+                } || echo '⚠️  Backup failed'
             fi
         else
             echo '⚠️  Redis volume not found, using redis-cli --rdb method...'
             docker exec binance-bot-redis redis-cli --rdb /tmp/redis-backup.rdb 2>/dev/null || true
-            sleep 1
-            docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && echo "✅ Backup saved to: $BACKUP_FILE" || echo '⚠️  Backup failed'
+            sleep 2
+            docker cp binance-bot-redis:/tmp/redis-backup.rdb "$BACKUP_FILE" 2>/dev/null && {
+                BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+                echo "✅ Backup saved to: $BACKUP_FILE ($BACKUP_SIZE bytes)"
+            } || echo '⚠️  Backup failed'
         fi
         
         if [ -f "$BACKUP_FILE" ]; then

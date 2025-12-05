@@ -28,8 +28,8 @@ class TestRedisPersistenceConfig:
         
         content = redis_conf_path.read_text()
         
-        # Verify AOF is enabled
-        assert "appendonly yes" in content, "AOF persistence should be enabled"
+        # Verify AOF is disabled (RDB-only mode)
+        assert "appendonly no" in content, "AOF should be disabled for RDB-only mode"
         
         # Verify RDB snapshots are configured
         assert "save " in content, "RDB snapshots should be configured"
@@ -247,11 +247,11 @@ class TestRedisPersistenceVerification:
         
         content = redis_conf.read_text()
         
-        # Required settings
+        # Required settings for RDB-only mode
         required_settings = {
-            "appendonly yes": "AOF persistence must be enabled",
+            "appendonly no": "AOF should be disabled for RDB-only mode",
             "dir /data": "Data directory must be /data",
-            "appendfilename": "AOF filename must be specified",
+            "dbfilename": "RDB filename must be specified",
         }
         
         for setting, message in required_settings.items():

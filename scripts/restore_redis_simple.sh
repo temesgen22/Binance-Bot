@@ -20,12 +20,40 @@ fi
 
 BACKUP_FILE="$1"
 
+# Convert to absolute path if relative
 if [ ! -f "$BACKUP_FILE" ]; then
     echo "❌ Error: Backup file not found: $BACKUP_FILE"
     exit 1
 fi
 
+# Get absolute path
+BACKUP_FILE=$(cd "$(dirname "$BACKUP_FILE")" 2>/dev/null && pwd)/$(basename "$BACKUP_FILE") || BACKUP_FILE="$1"
+
+# Verify file exists and has reasonable size
+if [ ! -f "$BACKUP_FILE" ]; then
+    echo "❌ Error: Backup file not found: $BACKUP_FILE"
+    exit 1
+fi
+
+BACKUP_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo "0")
+if [ "$BACKUP_SIZE" -lt 100 ]; then
+    echo "⚠️  WARNING: Backup file is very small ($BACKUP_SIZE bytes)"
+    echo "   A valid Redis RDB file should be at least several KB."
+    echo "   This backup might be empty or corrupted."
+    echo ""
+    echo "   File: $BACKUP_FILE"
+    echo "   Size: $BACKUP_SIZE bytes"
+    echo ""
+    read -p "   Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "   ❌ Restore cancelled by user"
+        exit 1
+    fi
+fi
+
 echo "🔄 Restoring Redis from backup: $BACKUP_FILE"
+echo "   📊 Backup file size: $BACKUP_SIZE bytes"
 
 # Find deploy directory
 DEPLOY_DIR="$DEPLOY_PATH"
@@ -55,11 +83,18 @@ fi
 
 echo "   ✅ Found volume: $REDIS_VOLUME"
 
+# Get absolute path for backup directory (required for Docker volume mount)
+BACKUP_DIR_ABS=$(cd "$(dirname "$BACKUP_FILE")" 2>/dev/null && pwd || dirname "$BACKUP_FILE")
+BACKUP_FILENAME=$(basename "$BACKUP_FILE")
+
+echo "   📁 Backup directory: $BACKUP_DIR_ABS"
+echo "   📄 Backup filename: $BACKUP_FILENAME"
+
 # Remove AOF + old RDB and copy new RDB
 echo "🧹 Removing ALL AOF files and old RDB, then copying backup..."
 docker run --rm \
     -v "$REDIS_VOLUME":/data \
-    -v "$(dirname "$BACKUP_FILE")":/backup:ro \
+    -v "$BACKUP_DIR_ABS":/backup:ro \
     alpine sh -c "
         cd /data
         echo 'Removing AOF files and directories...'
@@ -67,7 +102,17 @@ docker run --rm \
         echo 'Removing old RDB...'
         rm -f dump.rdb
         echo 'Copying backup RDB...'
-        cp /backup/$(basename "$BACKUP_FILE") dump.rdb
+        echo 'Checking backup file exists...'
+        ls -lh /backup/$BACKUP_FILENAME || {
+            echo '❌ ERROR: Backup file not found in /backup/'
+            echo 'Files in /backup/:'
+            ls -lah /backup/ || echo '  (directory not accessible)'
+            exit 1
+        }
+        cp /backup/$BACKUP_FILENAME dump.rdb || {
+            echo '❌ ERROR: Failed to copy backup file'
+            exit 1
+        }
         chmod 644 dump.rdb
         chown 999:1000 dump.rdb 2>/dev/null || true
         echo ''
