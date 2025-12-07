@@ -322,6 +322,54 @@
             color: white;
         }
 
+        .btn-start {
+            background: #28a745;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-start:hover {
+            background: #218838;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+        }
+
+        .btn-start:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-stop {
+            background: #dc3545;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-stop:hover {
+            background: #c82333;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+        }
+
+        .btn-stop:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
         .expand-btn {
             background: none;
             border: none;
@@ -454,6 +502,7 @@
             <div class="nav-links">
                 <a href="/">📋 Log Viewer</a>
                 <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/market-analyzer">📈 Market Analyzer</a>
                 <a href="/reports">📊 Trading Reports</a>
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
@@ -661,6 +710,7 @@
             html += '<th style="width: 100px;">Win Rate</th>';
             html += '<th style="width: 100px;">Completed</th>';
             html += '<th style="width: 100px;">Percentile</th>';
+            html += '<th style="width: 100px;">Action</th>';
             html += '<th style="width: 50px;"></th>';
             html += '</tr></thead><tbody>';
 
@@ -701,13 +751,19 @@
                 const percentileClass = strategy.percentile >= 75 ? 'top' : strategy.percentile >= 50 ? 'mid' : 'low';
                 html += `<td><span class="percentile-badge ${percentileClass}">${strategy.percentile?.toFixed(0) || 0}%</span></td>`;
                 
+                // Action button (Start/Stop)
+                const isRunning = strategy.status === 'running';
+                const actionButtonText = isRunning ? 'Stop' : 'Start';
+                const actionButtonClass = isRunning ? 'btn-stop' : 'btn-start';
+                html += `<td><button class="btn ${actionButtonClass}" onclick="toggleStrategy('${strategy.strategy_id}', ${isRunning})" id="action-btn-${strategy.strategy_id}">${actionButtonText}</button></td>`;
+                
                 // Expand button
                 html += `<td><button class="expand-btn" onclick="toggleDetails('${strategy.strategy_id}')">${isExpanded ? '▼' : '▶'}</button></td>`;
                 
                 html += '</tr>';
                 
                 // Details row
-                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="11">`;
+                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="12">`;
                 html += `<div class="strategy-details ${isExpanded ? 'show' : ''}" id="details-${strategy.strategy_id}">`;
                 html += generateStrategyDetails(strategy);
                 html += '</div></td></tr>';
@@ -855,6 +911,112 @@
             const date = new Date(dateString);
             return date.toLocaleString();
         }
+
+        async function toggleStrategy(strategyId, isCurrentlyRunning) {
+            const button = document.getElementById(`action-btn-${strategyId}`);
+            if (!button) return;
+
+            // Disable button during request
+            button.disabled = true;
+            button.textContent = isCurrentlyRunning ? 'Stopping...' : 'Starting...';
+
+            try {
+                const endpoint = isCurrentlyRunning 
+                    ? `/strategies/${strategyId}/stop`
+                    : `/strategies/${strategyId}/start`;
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || `Failed to ${isCurrentlyRunning ? 'stop' : 'start'} strategy`);
+                }
+
+                // Success - reload data to reflect new status
+                await loadData();
+                
+                // Show success message
+                const message = isCurrentlyRunning 
+                    ? `Strategy "${strategyId}" stopped successfully`
+                    : `Strategy "${strategyId}" started successfully`;
+                showNotification(message, 'success');
+            } catch (error) {
+                console.error(`Error ${isCurrentlyRunning ? 'stopping' : 'starting'} strategy:`, error);
+                showNotification(`Failed to ${isCurrentlyRunning ? 'stop' : 'start'} strategy: ${error.message}`, 'error');
+                
+                // Re-enable button and restore text
+                button.disabled = false;
+                button.textContent = isCurrentlyRunning ? 'Stop' : 'Start';
+            }
+        }
+
+        function showNotification(message, type) {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 20px;
+                border-radius: 6px;
+                color: white;
+                font-weight: 600;
+                z-index: 10000;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            if (type === 'success') {
+                notification.style.background = '#28a745';
+            } else {
+                notification.style.background = '#dc3545';
+            }
+            
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            // Remove after 3 seconds
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
+        }
+
+        // Add CSS animations for notifications
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+            @keyframes slideOut {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+            }
+        `;
+        document.head.appendChild(style);
 
         // Initialize on page load
         window.addEventListener('load', () => {

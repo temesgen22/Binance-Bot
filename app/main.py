@@ -19,6 +19,7 @@ from app.api.routes.strategy_performance import router as strategy_performance_r
 from app.api.routes.reports import router as reports_router
 from app.api.routes.accounts import router as accounts_router
 from app.api.routes.test_accounts import router as test_accounts_router
+from app.api.routes.market_analyzer import router as market_analyzer_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -311,6 +312,7 @@ def create_app() -> FastAPI:
     app.include_router(logs_router)
     app.include_router(strategy_performance_router)
     app.include_router(reports_router)  # Must be before /reports GUI route
+    app.include_router(market_analyzer_router)  # Market analyzer API
     
     # GUI routes - registered AFTER API routers
     # FastAPI matches more specific routes first, so /trades/list will match before /trades
@@ -503,6 +505,51 @@ def create_app() -> FastAPI:
     async def register_gui_with_slash():
         """Serve the Strategy Registration GUI (with trailing slash)."""
         return await _serve_register_gui()
+    
+    # Serve market-analyzer.html for Market Analyzer
+    async def _serve_market_analyzer_gui():
+        """Helper function to serve the Market Analyzer GUI."""
+        market_analyzer_path = static_dir / "market-analyzer.html"
+        abs_market_analyzer_path = market_analyzer_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_market_analyzer_path,
+            market_analyzer_path,
+            abs_static_dir / "market-analyzer.html",
+            static_dir / "market-analyzer.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Market Analyzer GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # GUI routes for market analyzer - registered AFTER API routers
+    @app.get("/market-analyzer", tags=["gui"], include_in_schema=False)
+    async def market_analyzer_gui():
+        """Serve the Market Analyzer GUI (without trailing slash)."""
+        return await _serve_market_analyzer_gui()
+    
+    @app.get("/market-analyzer/", tags=["gui"], include_in_schema=False)
+    async def market_analyzer_gui_with_slash():
+        """Serve the Market Analyzer GUI (with trailing slash)."""
+        return await _serve_market_analyzer_gui()
     
     # Diagnostic endpoint to check if register.html exists (for debugging)
     @app.get("/debug/check-register-file", tags=["debug"], include_in_schema=False)

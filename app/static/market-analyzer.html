@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Market Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .filters {
+            padding: 25px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .filters h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 15px;
+            align-items: end;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .filter-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .filter-group input,
+        .filter-group select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .filter-group input:focus,
+        .filter-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 1.2em;
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c33;
+        }
+
+        .result-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .result-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .market-condition {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 1.1em;
+            margin-bottom: 15px;
+        }
+
+        .market-condition.TRENDING {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .market-condition.SIDEWAYS {
+            background: #4ecdc4;
+            color: white;
+        }
+
+        .market-condition.UNCERTAIN {
+            background: #ffd93d;
+            color: #333;
+        }
+
+        .market-condition.UNKNOWN {
+            background: #95a5a6;
+            color: white;
+        }
+
+        .recommendation {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #667eea;
+            font-weight: 500;
+        }
+
+        .confidence-bar {
+            width: 100%;
+            height: 25px;
+            background: #e9ecef;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+
+        .indicators-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .indicator-card {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+
+        .indicator-card h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .indicator-value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .indicator-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .range-info {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+
+        .range-info h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .range-visual {
+            height: 40px;
+            background: linear-gradient(90deg, #4ecdc4 0%, #95a5a6 50%, #ff6b6b 100%);
+            border-radius: 6px;
+            position: relative;
+            margin: 15px 0;
+        }
+
+        .range-marker {
+            position: absolute;
+            top: 0;
+            width: 3px;
+            height: 100%;
+            background: white;
+            box-shadow: 0 0 3px rgba(0,0,0,0.3);
+        }
+
+        .range-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .trend-info {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+
+        .trend-info h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .trend-direction {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .trend-direction.UP {
+            background: #4ecdc4;
+            color: white;
+        }
+
+        .trend-direction.DOWN {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .info-box h4 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+
+        .info-box ul {
+            margin-left: 20px;
+            color: #555;
+        }
+
+        .info-box li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Market Analyzer</h1>
+            <p>Analyze cryptocurrency markets to determine if they're trending or sideways</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/test-accounts/">🔐 Test Accounts</a>
+                <a href="/register">🚀 Register Strategy</a>
+                <a href="/docs">📖 API Docs</a>
+            </div>
+        </div>
+
+        <div class="filters">
+            <h2>Market Analysis Parameters</h2>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="symbol">Trading Symbol</label>
+                    <input type="text" id="symbol" placeholder="BTCUSDT" value="BTCUSDT">
+                </div>
+                <div class="filter-group">
+                    <label for="interval">Time Interval</label>
+                    <select id="interval">
+                        <option value="1m">1 Minute</option>
+                        <option value="5m" selected>5 Minutes</option>
+                        <option value="15m">15 Minutes</option>
+                        <option value="30m">30 Minutes</option>
+                        <option value="1h">1 Hour</option>
+                        <option value="4h">4 Hours</option>
+                        <option value="1d">1 Day</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="lookback">Lookback Period (candles)</label>
+                    <input type="number" id="lookback" value="150" min="50" max="500">
+                </div>
+                <div class="filter-group">
+                    <button class="btn" onclick="analyzeMarket()">🔍 Analyze Market</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="content" id="content">
+            <div class="info-box">
+                <h4>How to Use</h4>
+                <ul>
+                    <li><strong>Enter a symbol</strong> (e.g., BTCUSDT, ETHUSDT) and select a time interval</li>
+                    <li><strong>Click "Analyze Market"</strong> to get real-time analysis</li>
+                    <li><strong>Review the indicators</strong> to understand market conditions</li>
+                    <li><strong>Follow the recommendation</strong> to choose the right strategy</li>
+                </ul>
+                <p style="margin-top: 10px; color: #555;">
+                    <strong>TRENDING markets</strong> → Use <strong>EMA Scalping Strategy</strong><br>
+                    <strong>SIDEWAYS markets</strong> → Use <strong>Range Mean Reversion Strategy</strong>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function analyzeMarket() {
+            const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+            const interval = document.getElementById('interval').value;
+            const lookback = parseInt(document.getElementById('lookback').value);
+
+            if (!symbol) {
+                alert('Please enter a trading symbol');
+                return;
+            }
+
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '⏳ Analyzing...';
+
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading">⏳ Analyzing market data...</div>';
+
+            try {
+                const params = new URLSearchParams({
+                    symbol: symbol,
+                    interval: interval,
+                    lookback_period: lookback.toString()
+                });
+
+                const response = await fetch(`/market-analyzer/analyze?${params}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Analysis failed');
+                }
+
+                displayResults(data);
+            } catch (error) {
+                content.innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> ${error.message}
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔍 Analyze Market';
+            }
+        }
+
+        function formatNumber(num) {
+            if (num === null || num === undefined) return 'N/A';
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+            return num.toFixed(2);
+        }
+
+        function displayResults(data) {
+            const content = document.getElementById('content');
+            
+            const conditionClass = data.market_condition;
+            const confidencePercent = Math.round(data.confidence * 100);
+
+            let rangeHtml = '';
+            if (data.range_info) {
+                const range = data.range_info;
+                const pricePosition = range.current_price_in_range || 50;
+                const markerLeft = Math.max(0, Math.min(100, pricePosition));
+                
+                rangeHtml = `
+                    <div class="range-info">
+                        <h4>📈 Range Information</h4>
+                        <div class="range-visual">
+                            <div class="range-marker" style="left: ${markerLeft}%"></div>
+                        </div>
+                        <div class="range-labels">
+                            <span>Low: ${range.range_low}</span>
+                            <span>Mid: ${range.range_mid}</span>
+                            <span>High: ${range.range_high}</span>
+                        </div>
+                        <p style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            Range Size: ${range.range_size} (${range.range_size_pct}%) | 
+                            Current Price Position: ${range.current_price_in_range}% | 
+                            ATR Ratio: ${range.atr_ratio}
+                        </p>
+                    </div>
+                `;
+            }
+
+            let trendHtml = '';
+            if (data.trend_info) {
+                const trend = data.trend_info;
+                const direction = trend.trend_direction;
+                const directionClass = direction === 'UP' ? 'UP' : (direction === 'DOWN' ? 'DOWN' : '');
+                
+                trendHtml = `
+                    <div class="trend-info">
+                        <h4>📊 Trend Analysis</h4>
+                        <p><strong>Fast EMA:</strong> ${trend.fast_ema || 'N/A'}</p>
+                        <p><strong>Slow EMA:</strong> ${trend.slow_ema || 'N/A'}</p>
+                        <p><strong>EMA Spread:</strong> ${trend.ema_spread_pct || 'N/A'}%</p>
+                        <p><strong>Fast Above Slow:</strong> ${trend.fast_above_slow ? 'Yes' : 'No'}</p>
+                        ${direction ? `<span class="trend-direction ${directionClass}">Trend: ${direction}</span>` : ''}
+                    </div>
+                `;
+            }
+
+            content.innerHTML = `
+                <div class="result-card">
+                    <h3>Market Analysis Results</h3>
+                    <div>
+                        <span class="market-condition ${conditionClass}">${data.market_condition}</span>
+                        <div style="margin-top: 15px;">
+                            <strong>Symbol:</strong> ${data.symbol} | 
+                            <strong>Interval:</strong> ${data.interval} | 
+                            <strong>Current Price:</strong> ${data.current_price}
+                        </div>
+                        <div style="margin-top: 15px;">
+                            <strong>Confidence:</strong> ${confidencePercent}%
+                            <div class="confidence-bar">
+                                <div class="confidence-fill" style="width: ${confidencePercent}%">${confidencePercent}%</div>
+                            </div>
+                        </div>
+                        <div class="recommendation">
+                            <strong>💡 Recommendation:</strong> ${data.recommendation}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="result-card">
+                    <h3>Technical Indicators</h3>
+                    <div class="indicators-grid">
+                        <div class="indicator-card">
+                            <h4>Fast EMA (20)</h4>
+                            <div class="indicator-value">${data.indicators.fast_ema || 'N/A'}</div>
+                            <div class="indicator-label">Exponential Moving Average</div>
+                        </div>
+                        <div class="indicator-card">
+                            <h4>Slow EMA (50)</h4>
+                            <div class="indicator-value">${data.indicators.slow_ema || 'N/A'}</div>
+                            <div class="indicator-label">Exponential Moving Average</div>
+                        </div>
+                        <div class="indicator-card">
+                            <h4>RSI (14)</h4>
+                            <div class="indicator-value">${data.indicators.rsi || 'N/A'}</div>
+                            <div class="indicator-label">${data.indicators.rsi ? (data.indicators.rsi < 30 ? 'Oversold' : data.indicators.rsi > 70 ? 'Overbought' : 'Neutral') : 'N/A'}</div>
+                        </div>
+                        <div class="indicator-card">
+                            <h4>ATR (14)</h4>
+                            <div class="indicator-value">${data.indicators.atr || 'N/A'}</div>
+                            <div class="indicator-label">Average True Range (Volatility)</div>
+                        </div>
+                        <div class="indicator-card">
+                            <h4>EMA Spread</h4>
+                            <div class="indicator-value">${data.indicators.ema_spread_pct || 'N/A'}%</div>
+                            <div class="indicator-label">${data.indicators.ema_spread_pct ? (data.indicators.ema_spread_pct > 0.5 ? 'Trending' : 'Sideways') : 'N/A'}</div>
+                        </div>
+                        <div class="indicator-card">
+                            <h4>EMA Spread (Abs)</h4>
+                            <div class="indicator-value">${data.indicators.ema_spread_abs || 'N/A'}</div>
+                            <div class="indicator-label">Absolute difference</div>
+                        </div>
+                    </div>
+                </div>
+
+                ${trendHtml}
+
+                ${rangeHtml}
+
+                ${data.volume_analysis ? `
+                    <div class="result-card">
+                        <h3>📊 Volume Analysis</h3>
+                        <div style="margin-top: 15px;">
+                            <span class="market-condition ${data.volume_analysis.is_high_volume ? 'TRENDING' : (data.volume_analysis.is_low_volume ? 'SIDEWAYS' : 'UNCERTAIN')}" style="font-size: 1em; padding: 6px 12px;">
+                                ${data.volume_analysis.is_high_volume ? 'HIGH VOLUME' : (data.volume_analysis.is_low_volume ? 'LOW VOLUME' : 'NORMAL VOLUME')}
+                            </span>
+                            ${data.volume_analysis.volume_trend === 'INCREASING' ? '<span style="color: #4ecdc4; margin-left: 10px;">📈 Volume Increasing</span>' : ''}
+                            ${data.volume_analysis.volume_trend === 'DECREASING' ? '<span style="color: #ff6b6b; margin-left: 10px;">📉 Volume Decreasing</span>' : ''}
+                        </div>
+                        <div style="margin-top: 15px; background: white; padding: 15px; border-radius: 6px;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">Volume Metrics</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                                <div>
+                                    <strong>Current Volume:</strong> ${formatNumber(data.volume_analysis.current_volume)}<br>
+                                    <strong>Average Volume:</strong> ${formatNumber(data.volume_analysis.average_volume)}<br>
+                                    <strong>Volume EMA:</strong> ${formatNumber(data.volume_analysis.volume_ema)}
+                                </div>
+                                <div>
+                                    <strong>Volume Ratio:</strong> ${data.volume_analysis.volume_ratio || 'N/A'}x<br>
+                                    <strong>Volume Trend:</strong> ${data.volume_analysis.volume_trend || 'N/A'}<br>
+                                    <strong>Change:</strong> ${data.volume_analysis.volume_change_pct !== null ? (data.volume_analysis.volume_change_pct > 0 ? '+' : '') + data.volume_analysis.volume_change_pct + '%' : 'N/A'}
+                                </div>
+                                <div>
+                                    <strong>High Volume:</strong> ${data.volume_analysis.is_high_volume ? '✅ Yes (>1.5x avg)' : '❌ No'}<br>
+                                    <strong>Low Volume:</strong> ${data.volume_analysis.is_low_volume ? '✅ Yes (<0.5x avg)' : '❌ No'}<br>
+                                    <strong>Status:</strong> ${data.volume_analysis.is_high_volume ? 'Strong confirmation' : (data.volume_analysis.is_low_volume ? 'Weak signal' : 'Normal')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${data.market_structure ? `
+                    <div class="result-card">
+                        <h3>📐 Market Structure</h3>
+                        <div style="margin-top: 15px;">
+                            <span class="market-condition ${data.market_structure.structure === 'BULLISH' ? 'TRENDING' : (data.market_structure.structure === 'BEARISH' ? 'TRENDING' : 'SIDEWAYS')}" style="font-size: 1em; padding: 6px 12px;">
+                                ${data.market_structure.structure || 'NEUTRAL'}
+                            </span>
+                            ${data.market_structure.structure === 'BULLISH' ? '<span style="color: #4ecdc4; margin-left: 10px;">📈 HH/HL Pattern (Higher High / Higher Low)</span>' : ''}
+                            ${data.market_structure.structure === 'BEARISH' ? '<span style="color: #ff6b6b; margin-left: 10px;">📉 LH/LL Pattern (Lower High / Lower Low)</span>' : ''}
+                        </div>
+                        <div style="margin-top: 15px; background: white; padding: 15px; border-radius: 6px;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">Swing Points</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                                <div>
+                                    <strong>Last Swing High:</strong> ${data.market_structure.last_swing_high || 'N/A'}<br>
+                                    <strong>Previous Swing High:</strong> ${data.market_structure.previous_swing_high || 'N/A'}<br>
+                                    <strong>Higher High:</strong> ${data.market_structure.has_higher_high !== null ? (data.market_structure.has_higher_high ? '✅ Yes' : '❌ No') : 'N/A'}
+                                </div>
+                                <div>
+                                    <strong>Last Swing Low:</strong> ${data.market_structure.last_swing_low || 'N/A'}<br>
+                                    <strong>Previous Swing Low:</strong> ${data.market_structure.previous_swing_low || 'N/A'}<br>
+                                    <strong>Higher Low:</strong> ${data.market_structure.has_higher_low !== null ? (data.market_structure.has_higher_low ? '✅ Yes' : '❌ No') : 'N/A'}
+                                </div>
+                                <div>
+                                    <strong>Lower High:</strong> ${data.market_structure.has_lower_high !== null ? (data.market_structure.has_lower_high ? '✅ Yes' : '❌ No') : 'N/A'}<br>
+                                    <strong>Lower Low:</strong> ${data.market_structure.has_lower_low !== null ? (data.market_structure.has_lower_low ? '✅ Yes' : '❌ No') : 'N/A'}<br>
+                                    <strong>Swing Points Found:</strong> ${data.market_structure.swing_high_count || 0} highs, ${data.market_structure.swing_low_count || 0} lows
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+
+                <div class="info-box">
+                    <h4>📚 Understanding the Results</h4>
+                    <h5 style="color: #667eea; margin-top: 10px; margin-bottom: 5px;">Voting System</h5>
+                    <p style="margin-bottom: 10px; font-size: 0.9em;">
+                        The analyzer uses a <strong>voting system</strong> where 4 indicators vote for TRENDING or SIDEWAYS:
+                    </p>
+                    <ul style="margin-left: 20px; margin-bottom: 15px;">
+                        <li><strong>EMA Spread:</strong> > 0.5% = TRENDING vote, ≤ 0.5% = SIDEWAYS vote</li>
+                        <li><strong>Market Structure:</strong> BULLISH/BEARISH = TRENDING vote, NEUTRAL = SIDEWAYS vote</li>
+                        <li><strong>Volume:</strong> Ratio > 1.0 = TRENDING vote, < 1.0 = SIDEWAYS vote</li>
+                        <li><strong>Range/ATR:</strong> Ratio ≥ 5.0 = TRENDING vote, ≤ 2.0 = SIDEWAYS vote</li>
+                    </ul>
+                    <p style="margin-bottom: 10px; font-size: 0.9em;">
+                        <strong>Classification:</strong>
+                    </p>
+                    <ul style="margin-left: 20px; margin-bottom: 15px;">
+                        <li><strong>Strong TRENDING/SIDEWAYS:</strong> 3+ out of 4 votes agree</li>
+                        <li><strong>Moderate:</strong> EMA + Structure agree (2 votes)</li>
+                        <li><strong>Weak:</strong> Only EMA votes (1 vote)</li>
+                        <li><strong>UNCERTAIN:</strong> Mixed votes (2 vs 2) or conflicting signals</li>
+                    </ul>
+                    <h5 style="color: #667eea; margin-top: 15px; margin-bottom: 5px;">Indicator Details</h5>
+                    <ul>
+                        <li><strong>RSI:</strong> Used for confidence adjustment. 45-70 = healthy trend, >75 or <25 = extreme</li>
+                        <li><strong>ATR:</strong> Higher ATR = More volatility, Lower ATR = Less volatility</li>
+                        <li><strong>Range:</strong> Shows support (low) and resistance (high) levels for range trading</li>
+                        <li><strong>Market Structure:</strong> 
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li><strong>BULLISH (HH/HL):</strong> Higher High and Higher Low = Uptrend confirmed</li>
+                                <li><strong>BEARISH (LH/LL):</strong> Lower High and Lower Low = Downtrend confirmed</li>
+                                <li><strong>NEUTRAL:</strong> Mixed signals or insufficient swing points</li>
+                            </ul>
+                        </li>
+                        <li><strong>Volume Analysis:</strong> 
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li><strong>High Volume (>1.5x avg):</strong> Confirms trending moves, increases confidence</li>
+                                <li><strong>Low Volume (<0.5x avg):</strong> Suggests weak moves, may indicate sideways</li>
+                                <li><strong>Increasing Volume:</strong> Supports trend continuation</li>
+                                <li><strong>Decreasing Volume:</strong> Trend may be weakening</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            `;
+        }
+
+        // Allow Enter key to trigger analysis
+        document.addEventListener('DOMContentLoaded', function() {
+            const inputs = document.querySelectorAll('input, select');
+            inputs.forEach(input => {
+                input.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        analyzeMarket();
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
+
