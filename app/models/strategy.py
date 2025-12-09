@@ -32,6 +32,7 @@ class StrategyParams(BaseModel):
     cooldown_candles: int = Field(default=2, ge=0, le=10, description="Candles to wait after exit before new entry")
     trailing_stop_enabled: bool = Field(default=False, description="Enable dynamic trailing stop loss (trails TP/SL as price moves favorably)")
     trailing_stop_activation_pct: float = Field(default=0.0, ge=0, le=0.1, description="Percentage price must move before trailing activates (e.g., 0.01 = 1%). 0 = start immediately")
+    enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
     
     # Range Mean-Reversion Strategy parameters
     lookback_period: int = Field(default=150, ge=50, le=500, description="Number of candles to look back for range detection")

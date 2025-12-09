@@ -590,6 +590,7 @@
                     { name: 'min_ema_separation', label: 'Min EMA Separation', type: 'number', default: 0.0002, min: 0, step: 0.0001 },
                     { name: 'enable_htf_bias', label: 'Enable HTF Bias', type: 'checkbox', default: true },
                     { name: 'cooldown_candles', label: 'Cooldown Candles', type: 'number', default: 2, min: 0, max: 10 },
+                    { name: 'enable_ema_cross_exit', label: 'Enable EMA Cross Exits', type: 'checkbox', default: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                     { name: 'trailing_stop_enabled', label: 'Trailing Stop Enabled', type: 'checkbox', default: false },
                     { name: 'trailing_stop_activation_pct', label: 'Trailing Stop Activation %', type: 'number', default: 0.0, min: 0, max: 0.1, step: 0.001 },
                 ]
@@ -649,6 +650,7 @@
                             <input type="checkbox" id="param_${field.name}" name="params.${field.name}" ${field.default ? 'checked' : ''}>
                             <label for="param_${field.name}">${field.label}</label>
                         </div>
+                        ${field.help ? `<div class="help-text">${field.help}</div>` : ''}
                     `;
                 } else if (field.type === 'select') {
                     const options = field.options.map(opt => 
@@ -657,6 +659,7 @@
                     div.innerHTML = `
                         <label>${field.label}</label>
                         <select id="param_${field.name}" name="params.${field.name}">${options}</select>
+                        ${field.help ? `<div class="help-text">${field.help}</div>` : ''}
                     `;
                 } else {
                     div.innerHTML = `
@@ -666,6 +669,7 @@
                                ${field.min !== undefined ? `min="${field.min}"` : ''}
                                ${field.max !== undefined ? `max="${field.max}"` : ''}
                                ${field.step !== undefined ? `step="${field.step}"` : ''}>
+                        ${field.help ? `<div class="help-text">${field.help}</div>` : ''}
                     `;
                 }
                 

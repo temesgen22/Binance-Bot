@@ -59,6 +59,7 @@ class EmaScalpingStrategy(Strategy):
         self.min_ema_separation = float(context.params.get("min_ema_separation", 0.0002))  # 0.02% of price
         self.enable_htf_bias = bool(context.params.get("enable_htf_bias", True))  # Higher timeframe bias
         self.cooldown_candles = int(context.params.get("cooldown_candles", 2))  # Candles to wait after exit
+        self.enable_ema_cross_exit = bool(context.params.get("enable_ema_cross_exit", True))  # Enable EMA cross exits
         
         # Kline interval (default 1 minute for scalping)
         self.interval = str(context.params.get("kline_interval", "1m"))
@@ -669,7 +670,7 @@ class EmaScalpingStrategy(Strategy):
                         )
                     
                     # --- LONG Exit: Death Cross (when long) ---
-                    if death_cross and self.position == "LONG":
+                    if death_cross and self.position == "LONG" and self.enable_ema_cross_exit:
                         logger.info(
                             f"[{self.context.id}] Death Cross (exit long): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
@@ -761,7 +762,7 @@ class EmaScalpingStrategy(Strategy):
                         )
                     
                     # --- SHORT Exit: Golden Cross (2) - when short ---
-                    if golden_cross and self.position == "SHORT":
+                    if golden_cross and self.position == "SHORT" and self.enable_ema_cross_exit:
                         logger.info(
                             f"[{self.context.id}] Golden Cross (exit short): fast {fast_ema:.8f} > slow {slow_ema:.8f}"
                         )

@@ -448,6 +448,7 @@
                 min_ema_separation: { type: 'number', label: 'Min EMA Separation', value: 0.0002, min: 0, max: 0.01, step: 0.0001 },
                 enable_htf_bias: { type: 'checkbox', label: 'Enable HTF Bias', value: true },
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
+                enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
                 trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 }
             },
@@ -499,6 +500,11 @@
                     if (config.max !== undefined) html += ` max="${config.max}"`;
                     if (config.step !== undefined) html += ` step="${config.step}"`;
                     html += '>';
+                }
+                
+                // Add help text if available
+                if (config.help) {
+                    html += `<div style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">${config.help}</div>`;
                 }
                 
                 html += '</div>';
