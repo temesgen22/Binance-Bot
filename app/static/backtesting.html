@@ -636,45 +636,104 @@
             }
             
             // Create chart
-            chart = LightweightCharts.createChart(chartContainer, {
-                width: chartContainer.clientWidth,
-                height: 500,
-                layout: {
-                    background: { color: '#ffffff' },
-                    textColor: '#333',
-                },
-                grid: {
-                    vertLines: { color: '#e0e0e0' },
-                    horzLines: { color: '#e0e0e0' },
-                },
-                timeScale: {
-                    timeVisible: true,
-                    secondsVisible: false,
-                },
-                rightPriceScale: {
-                    borderColor: '#cccccc',
-                },
-            });
+            try {
+                chart = LightweightCharts.createChart(chartContainer, {
+                    width: chartContainer.clientWidth,
+                    height: 500,
+                    layout: {
+                        background: { color: '#ffffff' },
+                        textColor: '#333',
+                    },
+                    grid: {
+                        vertLines: { color: '#e0e0e0' },
+                        horzLines: { color: '#e0e0e0' },
+                    },
+                    timeScale: {
+                        timeVisible: true,
+                        secondsVisible: false,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#cccccc',
+                    },
+                });
+            } catch (e) {
+                console.error('Error creating chart:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart. Please refresh the page.</p>';
+                return;
+            }
             
             // Add candlestick series
-            candlestickSeries = chart.addCandlestickSeries({
-                upColor: '#26a69a',
-                downColor: '#ef5350',
-                borderVisible: false,
-                wickUpColor: '#26a69a',
-                wickDownColor: '#ef5350',
-            });
+            let candlestickSeries;
+            try {
+                candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                });
+            } catch (e) {
+                console.error('Error creating candlestick series:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart series. Please refresh the page.</p>';
+                chart.remove();
+                chart = null;
+                return;
+            }
             
-            // Prepare candlestick data
-            const candlestickData = result.klines.map(k => ({
-                time: Math.floor(k[0] / 1000), // Convert to seconds
-                open: k[1],
-                high: k[2],
-                low: k[3],
-                close: k[4],
-            }));
+            // Prepare candlestick data (filter out invalid entries)
+            // Backtesting klines format: [timestamp_ms, open, high, low, close, volume, ...]
+            const candlestickData = result.klines
+                .filter(k => k && Array.isArray(k) && k.length >= 5 && k[0] && k[1] && k[2] && k[3] && k[4])
+                .map(k => {
+                    // k[0] is timestamp in milliseconds
+                    const timestampMs = parseInt(k[0]);
+                    if (isNaN(timestampMs) || timestampMs <= 0) {
+                        console.warn('Invalid kline timestamp:', k[0]);
+                        return null;
+                    }
+                    
+                    const open = parseFloat(k[1]);
+                    const high = parseFloat(k[2]);
+                    const low = parseFloat(k[3]);
+                    const close = parseFloat(k[4]);
+                    
+                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+                        console.warn('Invalid kline price data:', k);
+                        return null;
+                    }
+                    
+                    // TradingView Lightweight Charts expects Unix timestamp in seconds
+                    // Convert milliseconds to seconds
+                    return {
+                        time: Math.floor(timestampMs / 1000),
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                    };
+                })
+                .filter(item => item !== null); // Remove null entries
             
-            candlestickSeries.setData(candlestickData);
+            if (candlestickData.length === 0) {
+                chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No valid chart data available.</p>';
+                if (chart) {
+                    chart.remove();
+                    chart = null;
+                }
+                return;
+            }
+            
+            try {
+                candlestickSeries.setData(candlestickData);
+            } catch (e) {
+                console.error('Error setting chart data:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error loading chart data. Please refresh the page.</p>';
+                if (chart) {
+                    chart.remove();
+                    chart = null;
+                }
+                return;
+            }
             
             // Add markers for buy/sell signals
             if (result.trades && result.trades.length > 0) {
@@ -682,36 +741,114 @@
                 
                 result.trades.forEach(trade => {
                     // Entry marker
-                    const entryTime = Math.floor(new Date(trade.entry_time).getTime() / 1000);
-                    markers.push({
-                        time: entryTime,
-                        position: trade.position_side === 'LONG' ? 'belowBar' : 'aboveBar',
-                        color: trade.position_side === 'LONG' ? '#26a69a' : '#ef5350',
-                        shape: trade.position_side === 'LONG' ? 'arrowUp' : 'arrowDown',
-                        text: trade.position_side === 'LONG' ? 'BUY' : 'SELL',
-                        size: 2,
-                    });
+                    if (trade.entry_time) {
+                        try {
+                            const entryDate = new Date(trade.entry_time);
+                            if (isNaN(entryDate.getTime())) {
+                                console.warn('Invalid entry_time:', trade.entry_time);
+                                return; // Skip this trade
+                            }
+                            const entryTime = Math.floor(entryDate.getTime() / 1000);
+                            const positionSide = trade.position_side || 'LONG'; // Default to LONG if missing
+                            const entryPrice = (trade.entry_price !== undefined && trade.entry_price !== null) 
+                                ? `$${parseFloat(trade.entry_price).toFixed(4)}` 
+                                : '';
+                            const entryText = `${positionSide === 'LONG' ? 'BUY' : 'SELL'}${entryPrice ? ' ' + entryPrice : ''}`;
+                            
+                            markers.push({
+                                time: entryTime,
+                                position: positionSide === 'LONG' ? 'belowBar' : 'aboveBar',
+                                color: positionSide === 'LONG' ? '#26a69a' : '#ef5350',
+                                shape: positionSide === 'LONG' ? 'arrowUp' : 'arrowDown',
+                                text: entryText,
+                                size: 2,
+                            });
+                        } catch (e) {
+                            console.warn('Error processing entry marker:', e, trade);
+                        }
+                    }
                     
                     // Exit marker (if trade is closed)
-                    if (trade.exit_time && trade.exit_price) {
-                        const exitTime = Math.floor(new Date(trade.exit_time).getTime() / 1000);
-                        const exitColor = (trade.net_pnl && trade.net_pnl >= 0) ? '#26a69a' : '#ef5350';
-                        markers.push({
-                            time: exitTime,
-                            position: trade.position_side === 'LONG' ? 'aboveBar' : 'belowBar',
-                            color: exitColor,
-                            shape: 'circle',
-                            text: 'EXIT',
-                            size: 1.5,
-                        });
+                    if (trade.exit_time && trade.exit_price !== undefined && trade.exit_price !== null) {
+                        try {
+                            const exitDate = new Date(trade.exit_time);
+                            if (isNaN(exitDate.getTime())) {
+                                console.warn('Invalid exit_time:', trade.exit_time);
+                                return; // Skip this trade exit
+                            }
+                            const exitTime = Math.floor(exitDate.getTime() / 1000);
+                            const positionSide = trade.position_side || 'LONG'; // Default to LONG if missing
+                            // Determine exit color based on PnL and exit reason
+                            let exitColor;
+                            if (trade.exit_reason === 'TP_TRAILING') {
+                                // Trailing TP - use bright green
+                                exitColor = '#00c853';
+                            } else if (trade.exit_reason === 'SL_TRAILING') {
+                                // Trailing SL - use orange (less severe than regular SL)
+                                exitColor = '#ff9800';
+                            } else if (trade.net_pnl !== undefined && trade.net_pnl !== null && trade.net_pnl >= 0) {
+                                // Regular profit
+                                exitColor = '#26a69a';
+                            } else {
+                                // Regular loss
+                                exitColor = '#ef5350';
+                            }
+                            
+                            // Build exit text with reason and price
+                            let exitText = 'EXIT';
+                            if (trade.exit_reason) {
+                                // Make trailing stops more visible
+                                const reason = trade.exit_reason;
+                                if (reason === 'TP_TRAILING' || reason === 'SL_TRAILING') {
+                                    exitText += ` (${reason.replace('_', ' ')} ⚡)`;
+                                } else {
+                                    exitText += ` (${reason})`;
+                                }
+                            }
+                            if (trade.exit_price !== undefined && trade.exit_price !== null) {
+                                exitText += ` @ $${parseFloat(trade.exit_price).toFixed(4)}`;
+                            }
+                            if (trade.net_pnl !== undefined && trade.net_pnl !== null) {
+                                const pnlSign = trade.net_pnl >= 0 ? '+' : '';
+                                exitText += ` ${pnlSign}$${parseFloat(trade.net_pnl).toFixed(2)}`;
+                            }
+                            
+                            // Truncate text if too long (chart library has limits)
+                            if (exitText.length > 50) {
+                                exitText = exitText.substring(0, 47) + '...';
+                            }
+                            
+                            markers.push({
+                                time: exitTime,
+                                position: positionSide === 'LONG' ? 'aboveBar' : 'belowBar',
+                                color: exitColor,
+                                shape: 'circle',
+                                text: exitText,
+                                size: 1.5,
+                            });
+                        } catch (e) {
+                            console.warn('Error processing exit marker:', e, trade);
+                        }
                     }
                 });
                 
-                candlestickSeries.setMarkers(markers);
+                if (markers.length > 0) {
+                    try {
+                        candlestickSeries.setMarkers(markers);
+                    } catch (e) {
+                        console.warn('Error setting markers:', e);
+                        // Continue without markers rather than failing
+                    }
+                }
             }
             
             // Fit content
-            chart.timeScale().fitContent();
+            try {
+                chart.timeScale().fitContent();
+            } catch (e) {
+                console.warn('Error fitting chart content:', e);
+                // Continue - chart will still display
+            }
         }
 
         function displayResults(result) {

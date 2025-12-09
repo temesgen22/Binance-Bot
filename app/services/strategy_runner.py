@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
 
@@ -255,7 +255,7 @@ class StrategyRunner:
             risk_per_trade=payload.risk_per_trade,
             fixed_amount=payload.fixed_amount,
             params=payload.params,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             account_id=account_id,
             last_signal=None,
             entry_price=None,
@@ -576,7 +576,7 @@ class StrategyRunner:
         last_trade_at = None
         if trades:
             # If trades have timestamps, use the latest; otherwise use current time
-            last_trade_at = datetime.utcnow()
+            last_trade_at = datetime.now(timezone.utc)
         
         logger.debug(
             f"Stats for {strategy_id}: {len(completed_trades)} completed trades, "
@@ -832,6 +832,8 @@ class StrategyRunner:
             strategies_data = self.redis.get_all_strategies()
             logger.info(f"Loading {len(strategies_data)} strategies from Redis")
             
+            loaded_count = 0
+            trades_loaded_count = 0
             for strategy_id, data in strategies_data.items():
                 try:
                     # Convert datetime strings back to datetime objects
@@ -847,26 +849,42 @@ class StrategyRunner:
                     # Reconstruct StrategySummary from dict
                     summary = StrategySummary(**data)
                     self._strategies[strategy_id] = summary
+                    loaded_count += 1
                     
                     # Load trades for this strategy
                     trades_data = self.redis.get_trades(strategy_id)
                     if trades_data:
                         trades = []
                         for trade_data in trades_data:
-                            # Handle any datetime fields if present
-                            if "created_at" in trade_data and isinstance(trade_data["created_at"], str):
-                                trade_data["created_at"] = datetime.fromisoformat(trade_data["created_at"])
-                            trades.append(OrderResponse(**trade_data))
-                        self._trades[strategy_id] = trades
+                            try:
+                                # Handle any datetime fields if present
+                                if "created_at" in trade_data and isinstance(trade_data["created_at"], str):
+                                    trade_data["created_at"] = datetime.fromisoformat(trade_data["created_at"])
+                                if "timestamp" in trade_data and isinstance(trade_data["timestamp"], str):
+                                    trade_data["timestamp"] = datetime.fromisoformat(trade_data["timestamp"])
+                                if "update_time" in trade_data and isinstance(trade_data["update_time"], str):
+                                    trade_data["update_time"] = datetime.fromisoformat(trade_data["update_time"])
+                                trades.append(OrderResponse(**trade_data))
+                            except Exception as trade_exc:
+                                logger.warning(f"Failed to load trade for strategy {strategy_id}: {trade_exc}")
+                                continue
+                        if trades:
+                            self._trades[strategy_id] = trades
+                            trades_loaded_count += len(trades)
+                            logger.debug(f"Loaded {len(trades)} trades for strategy {strategy_id} from Redis")
                     
-                    logger.debug(f"Loaded strategy {strategy_id} from Redis")
+                    logger.debug(f"Loaded strategy {strategy_id} from Redis (status: {summary.status.value})")
                 except Exception as exc:
-                    logger.warning(f"Failed to load strategy {strategy_id} from Redis: {exc}")
+                    logger.warning(f"Failed to load strategy {strategy_id} from Redis: {exc}", exc_info=True)
                     continue
             
-            logger.info(f"Successfully loaded {len(self._strategies)} strategies from Redis")
+            logger.info(
+                f"Successfully loaded {loaded_count} strategies and {trades_loaded_count} trades from Redis. "
+                f"Strategies in memory: {len(self._strategies)}, "
+                f"Running strategies: {len([s for s in self._strategies.values() if s.status == StrategyState.running])}"
+            )
         except Exception as exc:
-            logger.error(f"Failed to load strategies from Redis: {exc}")
+            logger.error(f"Failed to load strategies from Redis: {exc}", exc_info=True)
     
     def _save_to_redis(self, strategy_id: str, summary: StrategySummary) -> None:
         """Save strategy to Redis."""

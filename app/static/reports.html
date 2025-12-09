@@ -300,6 +300,38 @@
             border: 1px solid #e9ecef;
             border-radius: 8px;
             background: white;
+            display: none;
+        }
+
+        .chart-container.visible {
+            display: block;
+        }
+
+        .chart-button {
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin: 15px 0;
+            display: inline-block;
+        }
+
+        .chart-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .chart-button:active {
+            transform: translateY(0);
+        }
+
+        .chart-section {
+            margin: 15px 0;
         }
 
         .trades-table {
@@ -544,8 +576,18 @@
 
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
-            const date = new Date(dateString);
-            return date.toLocaleString();
+            try {
+                const date = new Date(dateString);
+                // Check if date is valid
+                if (isNaN(date.getTime())) {
+                    console.warn('Invalid date string:', dateString);
+                    return 'Invalid Date';
+                }
+                return date.toLocaleString();
+            } catch (e) {
+                console.warn('Error formatting date:', dateString, e);
+                return 'Invalid Date';
+            }
         }
 
         function getFilters() {
@@ -562,12 +604,32 @@
             if (strategyName) params.append('strategy_name', strategyName);
             if (symbol) params.append('symbol', symbol.toUpperCase());
             if (startDate) {
-                const isoStart = new Date(startDate).toISOString();
-                params.append('start_date', isoStart);
+                try {
+                    // datetime-local input provides local time, convert to UTC ISO string
+                    const localDate = new Date(startDate);
+                    if (!isNaN(localDate.getTime())) {
+                        const isoStart = localDate.toISOString();
+                        params.append('start_date', isoStart);
+                    } else {
+                        console.warn('Invalid start date:', startDate);
+                    }
+                } catch (e) {
+                    console.warn('Error converting start date:', e);
+                }
             }
             if (endDate) {
-                const isoEnd = new Date(endDate).toISOString();
-                params.append('end_date', isoEnd);
+                try {
+                    // datetime-local input provides local time, convert to UTC ISO string
+                    const localDate = new Date(endDate);
+                    if (!isNaN(localDate.getTime())) {
+                        const isoEnd = localDate.toISOString();
+                        params.append('end_date', isoEnd);
+                    } else {
+                        console.warn('Invalid end date:', endDate);
+                    }
+                } catch (e) {
+                    console.warn('Error converting end date:', e);
+                }
             }
 
             return params.toString();
@@ -635,37 +697,7 @@
                 header.addEventListener('click', function() {
                     const card = this.parentElement;
                     card.classList.toggle('expanded');
-                    // Render chart when expanded (if not already rendered)
-                    if (card.classList.contains('expanded')) {
-                        const index = parseInt(card.id.replace('strategy-', ''));
-                        const strategy = report.strategies[index];
-                        if (strategy && strategy.klines && strategy.klines.length > 0) {
-                            // Wait for DOM to update before rendering chart
-                            setTimeout(() => {
-                                const container = document.getElementById(`chart-${index}`);
-                                if (container && !charts[index]) {
-                                    renderChart(strategy, index);
-                                }
-                            }, 100);
-                        }
-                    }
                 });
-            });
-            
-            // Render charts for already expanded cards (if any)
-            // Note: Cards start collapsed, so this is mainly for future use
-            report.strategies.forEach((strategy, index) => {
-                if (strategy.klines && strategy.klines.length > 0) {
-                    const card = document.getElementById(`strategy-${index}`);
-                    if (card && card.classList.contains('expanded')) {
-                        setTimeout(() => {
-                            const container = document.getElementById(`chart-${index}`);
-                            if (container && !charts[index]) {
-                                renderChart(strategy, index);
-                            }
-                        }, 100);
-                    }
-                }
             });
         }
 
@@ -748,7 +780,14 @@
                             <strong>Total Profit:</strong> <span class="positive">${formatCurrency(strategy.total_profit_usd)}</span> | 
                             <strong>Total Loss:</strong> <span class="negative">${formatCurrency(strategy.total_loss_usd)}</span>
                         </div>
-                        ${strategy.klines && strategy.klines.length > 0 ? `<div id="chart-${index}" class="chart-container"></div>` : ''}
+                        ${strategy.klines && strategy.klines.length > 0 ? `
+                            <div class="chart-section">
+                                <button class="chart-button" onclick="toggleChart(${index})" id="chart-button-${index}">
+                                    📈 Show Chart
+                                </button>
+                                <div id="chart-${index}" class="chart-container"></div>
+                            </div>
+                        ` : '<p style="color: #666; margin: 15px 0;">No chart data available for this strategy.</p>'}
                         ${strategy.trades && strategy.trades.length > 0 ? createTradesTable(strategy.trades) : '<p>No completed trades yet.</p>'}
                     </div>
                 </div>
@@ -800,6 +839,7 @@
 
         // Chart rendering function
         const charts = {}; // Store chart instances by strategy index
+        const chartVisibility = {}; // Track chart visibility state
         
         // Single resize handler for all charts
         let resizeHandler = null;
@@ -819,6 +859,34 @@
             window.addEventListener('resize', resizeHandler);
         }
         setupChartResizeHandler();
+
+        function toggleChart(index) {
+            const chartContainer = document.getElementById(`chart-${index}`);
+            const chartButton = document.getElementById(`chart-button-${index}`);
+            
+            if (!chartContainer) return;
+            
+            // Toggle visibility
+            const isVisible = chartContainer.classList.contains('visible');
+            
+            if (!isVisible) {
+                // Show chart
+                chartContainer.classList.add('visible');
+                chartButton.textContent = '📉 Hide Chart';
+                
+                // Render chart if not already rendered
+                if (!charts[index]) {
+                    const strategy = window.currentReport?.strategies[index];
+                    if (strategy && strategy.klines && strategy.klines.length > 0) {
+                        renderChart(strategy, index);
+                    }
+                }
+            } else {
+                // Hide chart
+                chartContainer.classList.remove('visible');
+                chartButton.textContent = '📈 Show Chart';
+            }
+        }
 
         function renderChart(strategy, index) {
             const chartContainer = document.getElementById(`chart-${index}`);
@@ -842,51 +910,80 @@
             }
             
             // Create chart
-            const chart = LightweightCharts.createChart(chartContainer, {
-                width: chartContainer.clientWidth,
-                height: 500,
-                layout: {
-                    background: { color: '#ffffff' },
-                    textColor: '#333',
-                },
-                grid: {
-                    vertLines: { color: '#e0e0e0' },
-                    horzLines: { color: '#e0e0e0' },
-                },
-                timeScale: {
-                    timeVisible: true,
-                    secondsVisible: false,
-                },
-                rightPriceScale: {
-                    borderColor: '#cccccc',
-                },
-            });
+            let chart;
+            try {
+                chart = LightweightCharts.createChart(chartContainer, {
+                    width: chartContainer.clientWidth,
+                    height: 500,
+                    layout: {
+                        background: { color: '#ffffff' },
+                        textColor: '#333',
+                    },
+                    grid: {
+                        vertLines: { color: '#e0e0e0' },
+                        horzLines: { color: '#e0e0e0' },
+                    },
+                    timeScale: {
+                        timeVisible: true,
+                        secondsVisible: false,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#cccccc',
+                    },
+                });
+            } catch (e) {
+                console.error('Error creating chart:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart. Please refresh the page.</p>';
+                return;
+            }
             
             // Store chart instance
             charts[index] = chart;
             
             // Add candlestick series
-            const candlestickSeries = chart.addCandlestickSeries({
-                upColor: '#26a69a',
-                downColor: '#ef5350',
-                borderVisible: false,
-                wickUpColor: '#26a69a',
-                wickDownColor: '#ef5350',
-            });
+            let candlestickSeries;
+            try {
+                candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                });
+            } catch (e) {
+                console.error('Error creating candlestick series:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart series. Please refresh the page.</p>';
+                chart.remove();
+                delete charts[index];
+                return;
+            }
             
             // Prepare candlestick data (filter out invalid entries)
+            // Binance klines format: [timestamp_ms, open, high, low, close, volume, ...]
             const candlestickData = strategy.klines
-                .filter(k => k && k.length >= 5 && k[0] && k[1] && k[2] && k[3] && k[4])
+                .filter(k => k && Array.isArray(k) && k.length >= 5 && k[0] && k[1] && k[2] && k[3] && k[4])
                 .map(k => {
-                    const timestamp = parseInt(k[0]);
-                    if (isNaN(timestamp) || timestamp <= 0) return null;
+                    // k[0] is timestamp in milliseconds from Binance
+                    const timestampMs = parseInt(k[0]);
+                    if (isNaN(timestampMs) || timestampMs <= 0) {
+                        console.warn('Invalid kline timestamp:', k[0]);
+                        return null;
+                    }
+                    
                     const open = parseFloat(k[1]);
                     const high = parseFloat(k[2]);
                     const low = parseFloat(k[3]);
                     const close = parseFloat(k[4]);
-                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) return null;
+                    
+                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+                        console.warn('Invalid kline price data:', k);
+                        return null;
+                    }
+                    
+                    // TradingView Lightweight Charts expects Unix timestamp in seconds
+                    // Convert milliseconds to seconds
                     return {
-                        time: Math.floor(timestamp / 1000), // Convert milliseconds to seconds
+                        time: Math.floor(timestampMs / 1000),
                         open: open,
                         high: high,
                         low: low,
@@ -897,10 +994,23 @@
             
             if (candlestickData.length === 0) {
                 chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No valid chart data available.</p>';
+                // Clean up chart instance if it was created
+                if (chart) {
+                    chart.remove();
+                    delete charts[index];
+                }
                 return;
             }
             
-            candlestickSeries.setData(candlestickData);
+            try {
+                candlestickSeries.setData(candlestickData);
+            } catch (e) {
+                console.error('Error setting chart data:', e);
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error loading chart data. Please refresh the page.</p>';
+                chart.remove();
+                delete charts[index];
+                return;
+            }
             
             // Add markers for trades with detailed information
             if (strategy.trades && strategy.trades.length > 0) {
@@ -937,21 +1047,41 @@
                     // Exit marker with exit reason, price, and PnL (if trade is closed)
                     if (trade.exit_time) {
                         try {
+                            // Parse ISO 8601 datetime string from API
                             const exitDate = new Date(trade.exit_time);
                             if (isNaN(exitDate.getTime())) {
                                 console.warn('Invalid exit_time:', trade.exit_time);
                                 return; // Skip this trade exit
                             }
+                            // Convert to Unix timestamp in seconds for chart library
                             const exitTime = Math.floor(exitDate.getTime() / 1000);
                             const side = trade.side || 'LONG'; // Default to LONG if missing
-                            const exitColor = (trade.pnl_usd !== undefined && trade.pnl_usd !== null && trade.pnl_usd >= 0) 
-                                ? '#26a69a' 
-                                : '#ef5350';
+                            // Determine exit color based on PnL and exit reason
+                            let exitColor;
+                            if (trade.exit_reason === 'TP_TRAILING') {
+                                // Trailing TP - use bright green
+                                exitColor = '#00c853';
+                            } else if (trade.exit_reason === 'SL_TRAILING') {
+                                // Trailing SL - use orange (less severe than regular SL)
+                                exitColor = '#ff9800';
+                            } else if (trade.pnl_usd !== undefined && trade.pnl_usd !== null && trade.pnl_usd >= 0) {
+                                // Regular profit
+                                exitColor = '#26a69a';
+                            } else {
+                                // Regular loss
+                                exitColor = '#ef5350';
+                            }
                             
                             // Build exit text with reason, price, and PnL (truncate if too long)
                             let exitText = 'EXIT';
                             if (trade.exit_reason) {
-                                exitText += ` (${trade.exit_reason})`;
+                                // Make trailing stops more visible
+                                const reason = trade.exit_reason;
+                                if (reason === 'TP_TRAILING' || reason === 'SL_TRAILING') {
+                                    exitText += ` (${reason.replace('_', ' ')} ⚡)`;
+                                } else {
+                                    exitText += ` (${reason})`;
+                                }
                             }
                             if (trade.exit_price !== undefined && trade.exit_price !== null) {
                                 exitText += ` @ $${parseFloat(trade.exit_price).toFixed(4)}`;
@@ -984,12 +1114,22 @@
                 });
                 
                 if (markers.length > 0) {
-                    candlestickSeries.setMarkers(markers);
+                    try {
+                        candlestickSeries.setMarkers(markers);
+                    } catch (e) {
+                        console.warn('Error setting markers:', e);
+                        // Continue without markers rather than failing
+                    }
                 }
             }
             
             // Fit content
-            chart.timeScale().fitContent();
+            try {
+                chart.timeScale().fitContent();
+            } catch (e) {
+                console.warn('Error fitting chart content:', e);
+                // Continue - chart will still display
+            }
         }
 
         // Initialize - load report on page load

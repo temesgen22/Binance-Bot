@@ -3,7 +3,7 @@ Backtesting API endpoint for strategy performance analysis on historical data.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -132,6 +132,12 @@ async def run_backtest(
     client: BinanceClient
 ) -> BacktestResult:
     """Run backtesting on historical data."""
+    
+    # Ensure start_time and end_time are timezone-aware (UTC)
+    if request.start_time.tzinfo is None:
+        request.start_time = request.start_time.replace(tzinfo=timezone.utc)
+    if request.end_time.tzinfo is None:
+        request.end_time = request.end_time.replace(tzinfo=timezone.utc)
     
     # Fetch historical klines
     start_timestamp = int(request.start_time.timestamp() * 1000)
@@ -298,7 +304,8 @@ async def run_backtest(
         
         # Get current price (close price of current candle)
         current_price = float(kline[4])
-        candle_time = datetime.fromtimestamp(int(kline[0]) / 1000)
+        # Convert kline timestamp to timezone-aware datetime (UTC)
+        candle_time = datetime.fromtimestamp(int(kline[0]) / 1000, tz=timezone.utc)
         
         # Update strategy's klines (feed it all klines up to current)
         # Strategy needs enough history for indicators, so provide all klines up to current
@@ -359,7 +366,8 @@ async def run_backtest(
         # Check for TP/SL on open position
         # CRITICAL: Use high/low prices to check if TP/SL was hit during the candle
         # This simulates live trading where TP/SL can be hit mid-candle
-        if current_trade and current_trade.is_open:
+        # Also ensure we're within backtest time range
+        if current_trade and current_trade.is_open and request.start_time <= candle_time <= request.end_time:
             entry_price = current_trade.entry_price
             position_side = current_trade.position_side
             
@@ -488,7 +496,16 @@ async def run_backtest(
                 current_trade = None
         
         # Process new signals (only if no open position)
+        # CRITICAL: Only process trades within the backtest time range
         if signal.action in ("BUY", "SELL"):
+            # Ensure trade is within backtest time range
+            if candle_time < request.start_time:
+                logger.warning(f"Skipping {signal.action} signal at candle {i}: candle_time {candle_time} is before start_time {request.start_time}")
+                continue
+            if candle_time > request.end_time:
+                logger.warning(f"Skipping {signal.action} signal at candle {i}: candle_time {candle_time} is after end_time {request.end_time}")
+                continue
+            
             logger.info(f"Signal check: {signal.action} at candle {i}, current_trade={current_trade is not None}")
             if current_trade is not None:
                 logger.warning(f"Skipping {signal.action} signal at candle {i}: position already open ({current_trade.position_side})")
@@ -558,7 +575,8 @@ async def run_backtest(
                 equity_curve.append(balance)
         
         # Close position on CLOSE signal
-        if signal.action == "CLOSE" and current_trade and current_trade.is_open:
+        # Ensure we're within backtest time range
+        if signal.action == "CLOSE" and current_trade and current_trade.is_open and request.start_time <= candle_time <= request.end_time:
             exit_price = current_price
             entry_price = current_trade.entry_price
             position_side = current_trade.position_side
@@ -617,7 +635,7 @@ async def run_backtest(
     # Close any remaining open trades at final price
     if current_trade and current_trade.is_open:
         final_price = float(filtered_klines[-1][4])
-        final_time = datetime.fromtimestamp(int(filtered_klines[-1][0]) / 1000)
+        final_time = datetime.fromtimestamp(int(filtered_klines[-1][0]) / 1000, tz=timezone.utc)
         
         entry_price = current_trade.entry_price
         position_side = current_trade.position_side

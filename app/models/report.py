@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -61,6 +61,6 @@ class TradingReport(BaseModel):
     total_trades: int = Field(description="Total number of trades across all strategies")
     overall_win_rate: float = Field(description="Overall win rate percentage")
     overall_net_pnl: float = Field(description="Overall net PnL")
-    report_generated_at: datetime = Field(default_factory=datetime.utcnow, description="Report generation timestamp")
+    report_generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Report generation timestamp")
     filters: Optional[dict] = Field(default=None, description="Applied filters for this report")
 

@@ -340,6 +340,7 @@ def get_trading_report(
         
         # Get all strategies
         all_strategies = runner.list_strategies()
+        logger.debug(f"Reports endpoint: Found {len(all_strategies)} total strategies in memory")
         
         # Apply filters
         filtered_strategies = []
@@ -371,6 +372,7 @@ def get_trading_report(
             try:
                 # Get trades for this strategy
                 trades = runner.get_trades(strategy.id)
+                logger.debug(f"Reports: Strategy {strategy.id} has {len(trades)} trades")
                 
                 # Match trades to form completed positions
                 completed_trades_list = _match_trades_to_completed_positions(
@@ -387,6 +389,10 @@ def get_trading_report(
                     for trade in completed_trades_list:
                         trade_time = trade.entry_time or trade.exit_time
                         if trade_time:
+                            # Ensure trade_time is timezone-aware for comparison
+                            if trade_time.tzinfo is None:
+                                trade_time = trade_time.replace(tzinfo=timezone.utc)
+                            
                             if start_datetime and trade_time < start_datetime:
                                 continue
                             if end_datetime and trade_time > end_datetime:
@@ -413,6 +419,10 @@ def get_trading_report(
                     else:
                         stopped_at = strategy.created_at
                 
+                # Ensure stopped_at is timezone-aware (UTC)
+                if stopped_at and stopped_at.tzinfo is None:
+                    stopped_at = stopped_at.replace(tzinfo=timezone.utc)
+                
                 # Fetch klines for charting (optional, based on available time range)
                 klines_data = None
                 try:
@@ -422,8 +432,14 @@ def get_trading_report(
                         klines_data = None
                     else:
                         # Determine time range for klines
+                        # Ensure all datetimes are timezone-aware (UTC)
                         chart_start = start_datetime or strategy.created_at
+                        if chart_start and chart_start.tzinfo is None:
+                            chart_start = chart_start.replace(tzinfo=timezone.utc)
+                        
                         chart_end = end_datetime or stopped_at or datetime.now(timezone.utc)
+                        if chart_end and chart_end.tzinfo is None:
+                            chart_end = chart_end.replace(tzinfo=timezone.utc)
                         
                         if chart_start and chart_end and chart_start < chart_end:
                             # Get strategy's kline interval (default to 1m if not available)
