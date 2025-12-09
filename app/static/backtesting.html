@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Strategy Backtesting</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .content {
+            padding: 25px;
+        }
+
+        .form-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+        }
+
+        .form-section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.5em;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .form-group input,
+        .form-group select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group small {
+            color: #666;
+            font-size: 0.85em;
+            margin-top: 5px;
+        }
+
+        .strategy-params {
+            background: white;
+            padding: 20px;
+            border-radius: 6px;
+            margin-top: 20px;
+            border: 2px solid #e9ecef;
+        }
+
+        .strategy-params h3 {
+            margin-bottom: 15px;
+            color: #667eea;
+        }
+
+        .params-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .results-section {
+            display: none;
+            margin-top: 25px;
+        }
+
+        .results-section.show {
+            display: block;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-card .value.positive {
+            color: #28a745;
+        }
+
+        .stat-card .value.negative {
+            color: #dc3545;
+        }
+
+        .trades-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .trades-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .trades-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .trades-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge.danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .badge.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .badge.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+
+        #chartContainer {
+            width: 100%;
+            height: 500px;
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fff;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .time-presets {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .time-preset-btn {
+            padding: 6px 12px;
+            background: #e9ecef;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.3s;
+        }
+
+        .time-preset-btn:hover {
+            background: #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Strategy Backtesting</h1>
+            <p>Test your trading strategies on historical market data</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/market-analyzer">📈 Market Analyzer</a>
+                <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/test-accounts/">🔐 Test Accounts</a>
+                <a href="/register">🚀 Register Strategy</a>
+                <a href="/docs">📖 API Docs</a>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="form-section">
+                <h2>Backtesting Configuration</h2>
+                <form id="backtestForm" onsubmit="runBacktest(event)">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="symbol">Cryptocurrency Symbol *</label>
+                            <input type="text" id="symbol" placeholder="BTCUSDT" required>
+                            <small>e.g., BTCUSDT, ETHUSDT</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="strategyType">Strategy Type *</label>
+                            <select id="strategyType" required onchange="updateStrategyParams()">
+                                <option value="">Select strategy...</option>
+                                <option value="scalping">EMA Scalping</option>
+                                <option value="range_mean_reversion">Range Mean Reversion</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="startTime">Start Time *</label>
+                            <input type="datetime-local" id="startTime" required>
+                            <small>Beginning of backtesting period</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="endTime">End Time *</label>
+                            <input type="datetime-local" id="endTime" required>
+                            <small>End of backtesting period</small>
+                            <div class="time-presets">
+                                <button type="button" class="time-preset-btn" onclick="setTimePreset(1)">Last 1 hour</button>
+                                <button type="button" class="time-preset-btn" onclick="setTimePreset(2)">Last 2 hours</button>
+                                <button type="button" class="time-preset-btn" onclick="setTimePreset(6)">Last 6 hours</button>
+                                <button type="button" class="time-preset-btn" onclick="setTimePreset(24)">Last 24 hours</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="leverage">Leverage *</label>
+                            <input type="number" id="leverage" min="1" max="50" value="5" required>
+                            <small>1-50x leverage</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="riskPerTrade">Risk per Trade *</label>
+                            <input type="number" id="riskPerTrade" min="0.001" max="0.1" step="0.001" value="0.01" required>
+                            <small>Fraction of balance (0.01 = 1%)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="fixedAmount">Fixed Amount (Optional)</label>
+                            <input type="number" id="fixedAmount" min="0" step="0.01" placeholder="Leave empty to use risk %">
+                            <small>Fixed USDT amount per trade (overrides risk %)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="initialBalance">Initial Balance (USDT) *</label>
+                            <input type="number" id="initialBalance" min="1" step="0.01" value="1000" required>
+                            <small>Starting capital for backtesting</small>
+                        </div>
+                    </div>
+
+                    <div class="strategy-params" id="strategyParams">
+                        <h3>Strategy Parameters</h3>
+                        <div id="paramsContainer">
+                            <p style="color: #666;">Select a strategy type to configure parameters</p>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px; display: flex; gap: 10px;">
+                        <button type="submit" class="btn btn-primary" id="runBtn">Run Backtest</button>
+                        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="loading" class="loading" style="display: none;">
+                <h2>Running backtest...</h2>
+                <p>This may take a few moments depending on the time period selected.</p>
+            </div>
+
+            <div id="error" class="error" style="display: none;"></div>
+
+            <div id="results" class="results-section">
+                <h2 style="margin-bottom: 20px;">Backtest Results</h2>
+                
+                <div class="stats-grid" id="statsGrid"></div>
+
+                <h3 style="margin-top: 30px; margin-bottom: 15px;">Price Chart with Trade Signals</h3>
+                <div id="chartContainer"></div>
+
+                <h3 style="margin-top: 30px; margin-bottom: 15px;">Trade History</h3>
+                <div id="tradesTable"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Strategy parameter templates
+        const strategyParams = {
+            scalping: {
+                kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h'] },
+                ema_fast: { type: 'number', label: 'Fast EMA Period', value: 8, min: 1, max: 200 },
+                ema_slow: { type: 'number', label: 'Slow EMA Period', value: 21, min: 2, max: 400 },
+                take_profit_pct: { type: 'number', label: 'Take Profit %', value: 0.004, min: 0.001, max: 0.1, step: 0.001 },
+                stop_loss_pct: { type: 'number', label: 'Stop Loss %', value: 0.002, min: 0.001, max: 0.1, step: 0.001 },
+                enable_short: { type: 'checkbox', label: 'Enable Short Trading', value: true },
+                min_ema_separation: { type: 'number', label: 'Min EMA Separation', value: 0.0002, min: 0, max: 0.01, step: 0.0001 },
+                enable_htf_bias: { type: 'checkbox', label: 'Enable HTF Bias', value: true },
+                cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
+                trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
+                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 }
+            },
+            range_mean_reversion: {
+                kline_interval: { type: 'select', label: 'Kline Interval', value: '5m', options: ['1m', '3m', '5m', '15m', '30m', '1h'] },
+                lookback_period: { type: 'number', label: 'Lookback Period', value: 150, min: 50, max: 500 },
+                buy_zone_pct: { type: 'number', label: 'Buy Zone %', value: 0.2, min: 0.01, max: 0.5, step: 0.01 },
+                sell_zone_pct: { type: 'number', label: 'Sell Zone %', value: 0.2, min: 0.01, max: 0.5, step: 0.01 },
+                ema_fast_period: { type: 'number', label: 'Fast EMA Period', value: 20, min: 5, max: 100 },
+                ema_slow_period: { type: 'number', label: 'Slow EMA Period', value: 50, min: 10, max: 200 },
+                max_ema_spread_pct: { type: 'number', label: 'Max EMA Spread %', value: 0.005, min: 0, max: 0.02, step: 0.001 },
+                max_atr_multiplier: { type: 'number', label: 'Max ATR Multiplier', value: 2.0, min: 0.1, max: 10, step: 0.1 },
+                rsi_period: { type: 'number', label: 'RSI Period', value: 14, min: 5, max: 50 },
+                rsi_oversold: { type: 'number', label: 'RSI Oversold', value: 40, min: 0, max: 50 },
+                rsi_overbought: { type: 'number', label: 'RSI Overbought', value: 60, min: 50, max: 100 },
+                tp_buffer_pct: { type: 'number', label: 'TP Buffer %', value: 0.001, min: 0, max: 0.01, step: 0.0001 },
+                sl_buffer_pct: { type: 'number', label: 'SL Buffer %', value: 0.002, min: 0, max: 0.01, step: 0.0001 },
+                enable_short: { type: 'checkbox', label: 'Enable Short Trading', value: true }
+            }
+        };
+
+        function updateStrategyParams() {
+            const strategyType = document.getElementById('strategyType').value;
+            const container = document.getElementById('paramsContainer');
+            
+            if (!strategyType || !strategyParams[strategyType]) {
+                container.innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
+                return;
+            }
+
+            const params = strategyParams[strategyType];
+            let html = '<div class="params-grid">';
+            
+            for (const [key, config] of Object.entries(params)) {
+                html += '<div class="form-group">';
+                html += `<label for="param_${key}">${config.label}</label>`;
+                
+                if (config.type === 'select') {
+                    html += `<select id="param_${key}" name="${key}">`;
+                    for (const option of config.options) {
+                        html += `<option value="${option}" ${option === config.value ? 'selected' : ''}>${option}</option>`;
+                    }
+                    html += '</select>';
+                } else if (config.type === 'checkbox') {
+                    html += `<input type="checkbox" id="param_${key}" name="${key}" ${config.value ? 'checked' : ''}>`;
+                } else {
+                    html += `<input type="${config.type}" id="param_${key}" name="${key}" value="${config.value}"`;
+                    if (config.min !== undefined) html += ` min="${config.min}"`;
+                    if (config.max !== undefined) html += ` max="${config.max}"`;
+                    if (config.step !== undefined) html += ` step="${config.step}"`;
+                    html += '>';
+                }
+                
+                html += '</div>';
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        function setTimePreset(hours) {
+            const now = new Date();
+            const endTime = new Date(now.getTime() - 60000); // 1 minute ago (to ensure closed candles)
+            const startTime = new Date(endTime.getTime() - (hours * 60 * 60 * 1000));
+            
+            document.getElementById('endTime').value = formatDateTimeLocal(endTime);
+            document.getElementById('startTime').value = formatDateTimeLocal(startTime);
+        }
+
+        function formatDateTimeLocal(date) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day}T${hours}:${minutes}`;
+        }
+
+        function resetForm() {
+            document.getElementById('backtestForm').reset();
+            document.getElementById('results').classList.remove('show');
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('strategyType').value = '';
+            updateStrategyParams();
+            setTimePreset(2); // Default to last 2 hours
+        }
+
+        async function runBacktest(event) {
+            event.preventDefault();
+            
+            const runBtn = document.getElementById('runBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            
+            // Hide previous results
+            error.style.display = 'none';
+            results.classList.remove('show');
+            
+            // Show loading
+            runBtn.disabled = true;
+            loading.style.display = 'block';
+            
+            try {
+                // Collect form data
+                const strategyType = document.getElementById('strategyType').value;
+                const params = {};
+                
+                // Collect strategy parameters
+                const paramInputs = document.querySelectorAll('#strategyParams input, #strategyParams select');
+                paramInputs.forEach(input => {
+                    const key = input.name || input.id.replace('param_', '');
+                    if (input.type === 'checkbox') {
+                        params[key] = input.checked;
+                    } else if (input.type === 'number') {
+                        params[key] = parseFloat(input.value);
+                    } else {
+                        params[key] = input.value;
+                    }
+                });
+                
+                // Build request
+                const request = {
+                    symbol: document.getElementById('symbol').value.toUpperCase(),
+                    strategy_type: strategyType,
+                    start_time: new Date(document.getElementById('startTime').value).toISOString(),
+                    end_time: new Date(document.getElementById('endTime').value).toISOString(),
+                    leverage: parseInt(document.getElementById('leverage').value),
+                    risk_per_trade: parseFloat(document.getElementById('riskPerTrade').value),
+                    fixed_amount: document.getElementById('fixedAmount').value ? parseFloat(document.getElementById('fixedAmount').value) : null,
+                    initial_balance: parseFloat(document.getElementById('initialBalance').value),
+                    params: params
+                };
+                
+                // Call API
+                const response = await fetch('/backtesting/run', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(request)
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Backtest failed');
+                }
+                
+                const result = await response.json();
+                console.log('Backtest result:', result);
+                console.log('Total trades:', result.total_trades);
+                console.log('Klines data:', result.klines ? result.klines.length : 'No klines');
+                displayResults(result);
+                
+            } catch (err) {
+                console.error('Backtest error:', err);
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                runBtn.disabled = false;
+            }
+        }
+
+        let chart = null;
+        let candlestickSeries = null;
+        let markersSeries = null;
+
+        function renderChart(result) {
+            const chartContainer = document.getElementById('chartContainer');
+            
+            // Clear previous chart if exists
+            if (chart) {
+                chart.remove();
+            }
+            
+            if (!result.klines || result.klines.length === 0) {
+                chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No chart data available.</p>';
+                return;
+            }
+            
+            // Check if library is loaded
+            if (typeof LightweightCharts === 'undefined') {
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Chart library failed to load. Please refresh the page.</p>';
+                return;
+            }
+            
+            // Create chart
+            chart = LightweightCharts.createChart(chartContainer, {
+                width: chartContainer.clientWidth,
+                height: 500,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: '#e0e0e0' },
+                    horzLines: { color: '#e0e0e0' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+                rightPriceScale: {
+                    borderColor: '#cccccc',
+                },
+            });
+            
+            // Add candlestick series
+            candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+            
+            // Prepare candlestick data
+            const candlestickData = result.klines.map(k => ({
+                time: Math.floor(k[0] / 1000), // Convert to seconds
+                open: k[1],
+                high: k[2],
+                low: k[3],
+                close: k[4],
+            }));
+            
+            candlestickSeries.setData(candlestickData);
+            
+            // Add markers for buy/sell signals
+            if (result.trades && result.trades.length > 0) {
+                const markers = [];
+                
+                result.trades.forEach(trade => {
+                    // Entry marker
+                    const entryTime = Math.floor(new Date(trade.entry_time).getTime() / 1000);
+                    markers.push({
+                        time: entryTime,
+                        position: trade.position_side === 'LONG' ? 'belowBar' : 'aboveBar',
+                        color: trade.position_side === 'LONG' ? '#26a69a' : '#ef5350',
+                        shape: trade.position_side === 'LONG' ? 'arrowUp' : 'arrowDown',
+                        text: trade.position_side === 'LONG' ? 'BUY' : 'SELL',
+                        size: 2,
+                    });
+                    
+                    // Exit marker (if trade is closed)
+                    if (trade.exit_time && trade.exit_price) {
+                        const exitTime = Math.floor(new Date(trade.exit_time).getTime() / 1000);
+                        const exitColor = (trade.net_pnl && trade.net_pnl >= 0) ? '#26a69a' : '#ef5350';
+                        markers.push({
+                            time: exitTime,
+                            position: trade.position_side === 'LONG' ? 'aboveBar' : 'belowBar',
+                            color: exitColor,
+                            shape: 'circle',
+                            text: 'EXIT',
+                            size: 1.5,
+                        });
+                    }
+                });
+                
+                candlestickSeries.setMarkers(markers);
+            }
+            
+            // Fit content
+            chart.timeScale().fitContent();
+        }
+
+        function displayResults(result) {
+            console.log('Displaying results:', result);
+            const results = document.getElementById('results');
+            const statsGrid = document.getElementById('statsGrid');
+            const tradesTable = document.getElementById('tradesTable');
+            
+            // Always show results section, even with zero trades
+            results.classList.add('show');
+            
+            // Render chart first
+            renderChart(result);
+            
+            // Display statistics
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <h3>Initial Balance</h3>
+                    <div class="value">$${result.initial_balance.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Final Balance</h3>
+                    <div class="value ${result.final_balance >= result.initial_balance ? 'positive' : 'negative'}">$${result.final_balance.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total PnL</h3>
+                    <div class="value ${result.total_pnl >= 0 ? 'positive' : 'negative'}">${result.total_pnl >= 0 ? '+' : ''}$${result.total_pnl.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Return</h3>
+                    <div class="value ${result.total_return_pct >= 0 ? 'positive' : 'negative'}">${result.total_return_pct >= 0 ? '+' : ''}${result.total_return_pct.toFixed(2)}%</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Trades</h3>
+                    <div class="value">${result.total_trades}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Completed Trades</h3>
+                    <div class="value">${result.completed_trades}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Win Rate</h3>
+                    <div class="value ${result.win_rate >= 50 ? 'positive' : 'negative'}">${result.win_rate.toFixed(2)}%</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Winning Trades</h3>
+                    <div class="value positive">${result.winning_trades}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Losing Trades</h3>
+                    <div class="value negative">${result.losing_trades}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Fees</h3>
+                    <div class="value">$${result.total_fees.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Avg Profit/Trade</h3>
+                    <div class="value ${result.avg_profit_per_trade >= 0 ? 'positive' : 'negative'}">${result.avg_profit_per_trade >= 0 ? '+' : ''}$${result.avg_profit_per_trade.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Largest Win</h3>
+                    <div class="value positive">$${result.largest_win.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Largest Loss</h3>
+                    <div class="value negative">$${result.largest_loss.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Max Drawdown</h3>
+                    <div class="value negative">$${result.max_drawdown.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Max Drawdown %</h3>
+                    <div class="value negative">${result.max_drawdown_pct.toFixed(2)}%</div>
+                </div>
+            `;
+            
+            // Display trades table
+            if (result.trades && result.trades.length > 0) {
+                let html = '<table class="trades-table"><thead><tr>';
+                html += '<th>Entry Time</th>';
+                html += '<th>Exit Time</th>';
+                html += '<th>Side</th>';
+                html += '<th>Entry Price</th>';
+                html += '<th>Exit Price</th>';
+                html += '<th>Quantity</th>';
+                html += '<th>Gross PnL</th>';
+                html += '<th>Net PnL</th>';
+                html += '<th>Fees</th>';
+                html += '<th>Exit Reason</th>';
+                html += '</tr></thead><tbody>';
+                
+                result.trades.forEach(trade => {
+                    const entryTime = new Date(trade.entry_time).toLocaleString();
+                    const exitTime = trade.exit_time ? new Date(trade.exit_time).toLocaleString() : 'Open';
+                    const sideClass = trade.position_side === 'LONG' ? 'success' : 'danger';
+                    const pnlClass = trade.net_pnl && trade.net_pnl >= 0 ? 'positive' : 'negative';
+                    const totalFees = trade.entry_fee + (trade.exit_fee || 0);
+                    
+                    html += '<tr>';
+                    html += `<td>${entryTime}</td>`;
+                    html += `<td>${exitTime}</td>`;
+                    html += `<td><span class="badge ${sideClass}">${trade.position_side}</span></td>`;
+                    html += `<td>$${trade.entry_price.toFixed(4)}</td>`;
+                    html += `<td>${trade.exit_price ? '$' + trade.exit_price.toFixed(4) : '-'}</td>`;
+                    html += `<td>${trade.quantity.toFixed(4)}</td>`;
+                    html += `<td class="${pnlClass}">${trade.pnl ? (trade.pnl >= 0 ? '+' : '') + '$' + trade.pnl.toFixed(2) : '-'}</td>`;
+                    html += `<td class="${pnlClass}">${trade.net_pnl ? (trade.net_pnl >= 0 ? '+' : '') + '$' + trade.net_pnl.toFixed(2) : '-'}</td>`;
+                    html += `<td>$${totalFees.toFixed(2)}</td>`;
+                    html += `<td>${trade.exit_reason || '-'}</td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                tradesTable.innerHTML = html;
+            } else {
+                tradesTable.innerHTML = '<p style="color: #666; padding: 20px;">No trades executed during this period.</p>';
+            }
+            
+            results.classList.add('show');
+        }
+
+        // Handle window resize for chart
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            if (resizeTimeout) {
+                clearTimeout(resizeTimeout);
+            }
+            resizeTimeout = setTimeout(() => {
+                if (chart) {
+                    const chartContainer = document.getElementById('chartContainer');
+                    if (chartContainer && chartContainer.clientWidth > 0) {
+                        chart.applyOptions({ width: chartContainer.clientWidth });
+                    }
+                }
+            }, 250);
+        });
+
+        // Initialize form with default time (last 2 hours)
+        window.addEventListener('load', () => {
+            setTimePreset(2);
+        });
+    </script>
+</body>
+</html>
+

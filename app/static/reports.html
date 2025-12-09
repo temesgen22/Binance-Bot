@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Trading Reports</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * {
             margin: 0;
@@ -292,6 +293,15 @@
             display: block;
         }
 
+        .chart-container {
+            width: 100%;
+            height: 500px;
+            margin: 20px 0;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            background: white;
+        }
+
         .trades-table {
             width: 100%;
             border-collapse: collapse;
@@ -439,6 +449,7 @@
                 <a href="/trades">💹 Trade & PnL Viewer</a>
                 <a href="/strategies">🏆 Strategy Performance</a>
                 <a href="/market-analyzer">📈 Market Analyzer</a>
+                <a href="/backtesting">🔬 Strategy Backtesting</a>
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
@@ -616,12 +627,45 @@
 
             content.innerHTML = html;
 
+            // Store report data for chart rendering
+            window.currentReport = report;
+            
             // Attach click handlers for expanding/collapsing
             document.querySelectorAll('.strategy-header').forEach(header => {
                 header.addEventListener('click', function() {
                     const card = this.parentElement;
                     card.classList.toggle('expanded');
+                    // Render chart when expanded (if not already rendered)
+                    if (card.classList.contains('expanded')) {
+                        const index = parseInt(card.id.replace('strategy-', ''));
+                        const strategy = report.strategies[index];
+                        if (strategy && strategy.klines && strategy.klines.length > 0) {
+                            // Wait for DOM to update before rendering chart
+                            setTimeout(() => {
+                                const container = document.getElementById(`chart-${index}`);
+                                if (container && !charts[index]) {
+                                    renderChart(strategy, index);
+                                }
+                            }, 100);
+                        }
+                    }
                 });
+            });
+            
+            // Render charts for already expanded cards (if any)
+            // Note: Cards start collapsed, so this is mainly for future use
+            report.strategies.forEach((strategy, index) => {
+                if (strategy.klines && strategy.klines.length > 0) {
+                    const card = document.getElementById(`strategy-${index}`);
+                    if (card && card.classList.contains('expanded')) {
+                        setTimeout(() => {
+                            const container = document.getElementById(`chart-${index}`);
+                            if (container && !charts[index]) {
+                                renderChart(strategy, index);
+                            }
+                        }, 100);
+                    }
+                }
             });
         }
 
@@ -704,6 +748,7 @@
                             <strong>Total Profit:</strong> <span class="positive">${formatCurrency(strategy.total_profit_usd)}</span> | 
                             <strong>Total Loss:</strong> <span class="negative">${formatCurrency(strategy.total_loss_usd)}</span>
                         </div>
+                        ${strategy.klines && strategy.klines.length > 0 ? `<div id="chart-${index}" class="chart-container"></div>` : ''}
                         ${strategy.trades && strategy.trades.length > 0 ? createTradesTable(strategy.trades) : '<p>No completed trades yet.</p>'}
                     </div>
                 </div>
@@ -751,6 +796,200 @@
             document.getElementById('symbolFilter').value = '';
             document.getElementById('startDateFilter').value = '';
             document.getElementById('endDateFilter').value = '';
+        }
+
+        // Chart rendering function
+        const charts = {}; // Store chart instances by strategy index
+        
+        // Single resize handler for all charts
+        let resizeHandler = null;
+        function setupChartResizeHandler() {
+            if (resizeHandler) return; // Already set up
+            resizeHandler = () => {
+                Object.keys(charts).forEach(idx => {
+                    const chart = charts[idx];
+                    if (chart) {
+                        const container = document.getElementById(`chart-${idx}`);
+                        if (container) {
+                            chart.applyOptions({ width: container.clientWidth });
+                        }
+                    }
+                });
+            };
+            window.addEventListener('resize', resizeHandler);
+        }
+        setupChartResizeHandler();
+
+        function renderChart(strategy, index) {
+            const chartContainer = document.getElementById(`chart-${index}`);
+            if (!chartContainer) return;
+            
+            // Clear previous chart if exists
+            if (charts[index]) {
+                charts[index].remove();
+                delete charts[index];
+            }
+            
+            if (!strategy.klines || strategy.klines.length === 0) {
+                chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No chart data available.</p>';
+                return;
+            }
+            
+            // Check if library is loaded
+            if (typeof LightweightCharts === 'undefined') {
+                chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Chart library failed to load. Please refresh the page.</p>';
+                return;
+            }
+            
+            // Create chart
+            const chart = LightweightCharts.createChart(chartContainer, {
+                width: chartContainer.clientWidth,
+                height: 500,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: '#e0e0e0' },
+                    horzLines: { color: '#e0e0e0' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+                rightPriceScale: {
+                    borderColor: '#cccccc',
+                },
+            });
+            
+            // Store chart instance
+            charts[index] = chart;
+            
+            // Add candlestick series
+            const candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+            
+            // Prepare candlestick data (filter out invalid entries)
+            const candlestickData = strategy.klines
+                .filter(k => k && k.length >= 5 && k[0] && k[1] && k[2] && k[3] && k[4])
+                .map(k => {
+                    const timestamp = parseInt(k[0]);
+                    if (isNaN(timestamp) || timestamp <= 0) return null;
+                    const open = parseFloat(k[1]);
+                    const high = parseFloat(k[2]);
+                    const low = parseFloat(k[3]);
+                    const close = parseFloat(k[4]);
+                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) return null;
+                    return {
+                        time: Math.floor(timestamp / 1000), // Convert milliseconds to seconds
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                    };
+                })
+                .filter(item => item !== null); // Remove null entries
+            
+            if (candlestickData.length === 0) {
+                chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No valid chart data available.</p>';
+                return;
+            }
+            
+            candlestickSeries.setData(candlestickData);
+            
+            // Add markers for trades with detailed information
+            if (strategy.trades && strategy.trades.length > 0) {
+                const markers = [];
+                
+                strategy.trades.forEach(trade => {
+                    // Entry marker with price and side information
+                    if (trade.entry_time) {
+                        try {
+                            const entryDate = new Date(trade.entry_time);
+                            if (isNaN(entryDate.getTime())) {
+                                console.warn('Invalid entry_time:', trade.entry_time);
+                                return; // Skip this trade
+                            }
+                            const entryTime = Math.floor(entryDate.getTime() / 1000);
+                            const entryPrice = (trade.entry_price !== undefined && trade.entry_price !== null) 
+                                ? `$${parseFloat(trade.entry_price).toFixed(4)}` 
+                                : '';
+                            const side = trade.side || 'LONG'; // Default to LONG if missing
+                            const entryText = `${side === 'LONG' ? 'BUY' : 'SELL'}${entryPrice ? ' ' + entryPrice : ''}`;
+                            markers.push({
+                                time: entryTime,
+                                position: side === 'LONG' ? 'belowBar' : 'aboveBar',
+                                color: side === 'LONG' ? '#26a69a' : '#ef5350',
+                                shape: side === 'LONG' ? 'arrowUp' : 'arrowDown',
+                                text: entryText,
+                                size: 2,
+                            });
+                        } catch (e) {
+                            console.warn('Error processing entry marker:', e, trade);
+                        }
+                    }
+                    
+                    // Exit marker with exit reason, price, and PnL (if trade is closed)
+                    if (trade.exit_time) {
+                        try {
+                            const exitDate = new Date(trade.exit_time);
+                            if (isNaN(exitDate.getTime())) {
+                                console.warn('Invalid exit_time:', trade.exit_time);
+                                return; // Skip this trade exit
+                            }
+                            const exitTime = Math.floor(exitDate.getTime() / 1000);
+                            const side = trade.side || 'LONG'; // Default to LONG if missing
+                            const exitColor = (trade.pnl_usd !== undefined && trade.pnl_usd !== null && trade.pnl_usd >= 0) 
+                                ? '#26a69a' 
+                                : '#ef5350';
+                            
+                            // Build exit text with reason, price, and PnL (truncate if too long)
+                            let exitText = 'EXIT';
+                            if (trade.exit_reason) {
+                                exitText += ` (${trade.exit_reason})`;
+                            }
+                            if (trade.exit_price !== undefined && trade.exit_price !== null) {
+                                exitText += ` @ $${parseFloat(trade.exit_price).toFixed(4)}`;
+                            }
+                            if (trade.pnl_usd !== undefined && trade.pnl_usd !== null) {
+                                const pnlSign = trade.pnl_usd >= 0 ? '+' : '';
+                                exitText += ` ${pnlSign}$${parseFloat(trade.pnl_usd).toFixed(2)}`;
+                                if (trade.pnl_pct !== undefined && trade.pnl_pct !== null) {
+                                    exitText += ` (${pnlSign}${parseFloat(trade.pnl_pct).toFixed(2)}%)`;
+                                }
+                            }
+                            
+                            // Truncate text if too long (chart library has limits)
+                            if (exitText.length > 50) {
+                                exitText = exitText.substring(0, 47) + '...';
+                            }
+                            
+                            markers.push({
+                                time: exitTime,
+                                position: side === 'LONG' ? 'aboveBar' : 'belowBar',
+                                color: exitColor,
+                                shape: 'circle',
+                                text: exitText,
+                                size: 1.5,
+                            });
+                        } catch (e) {
+                            console.warn('Error processing exit marker:', e, trade);
+                        }
+                    }
+                });
+                
+                if (markers.length > 0) {
+                    candlestickSeries.setMarkers(markers);
+                }
+            }
+            
+            // Fit content
+            chart.timeScale().fitContent();
         }
 
         // Initialize - load report on page load

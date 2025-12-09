@@ -20,6 +20,7 @@ from app.api.routes.reports import router as reports_router
 from app.api.routes.accounts import router as accounts_router
 from app.api.routes.test_accounts import router as test_accounts_router
 from app.api.routes.market_analyzer import router as market_analyzer_router
+from app.api.routes.backtesting import router as backtesting_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -313,6 +314,52 @@ def create_app() -> FastAPI:
     app.include_router(strategy_performance_router)
     app.include_router(reports_router)  # Must be before /reports GUI route
     app.include_router(market_analyzer_router)  # Market analyzer API
+    app.include_router(backtesting_router)  # Backtesting API
+    
+    # Serve backtesting.html for Strategy Backtesting
+    async def _serve_backtesting_gui():
+        """Helper function to serve the Strategy Backtesting GUI."""
+        backtesting_path = static_dir / "backtesting.html"
+        abs_backtesting_path = backtesting_path.resolve()
+        abs_static_dir = static_dir.resolve()
+        
+        # Try multiple path variations
+        possible_paths = [
+            abs_backtesting_path,
+            backtesting_path,
+            abs_static_dir / "backtesting.html",
+            static_dir / "backtesting.html",
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                return FileResponse(
+                    path=str(path),
+                    media_type="text/html"
+                )
+        
+        # If file not found, return detailed error
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Strategy Backtesting GUI not found.",
+                "tried_paths": [str(p) for p in possible_paths],
+                "static_dir": str(abs_static_dir),
+                "static_dir_exists": abs_static_dir.exists(),
+            }
+        )
+    
+    # GUI route for backtesting
+    @app.get("/backtesting", tags=["gui"], include_in_schema=False)
+    async def backtesting_gui():
+        """Serve the Strategy Backtesting GUI (without trailing slash)."""
+        return await _serve_backtesting_gui()
+    
+    @app.get("/backtesting/", tags=["gui"], include_in_schema=False)
+    async def backtesting_gui_with_slash():
+        """Serve the Strategy Backtesting GUI (with trailing slash)."""
+        return await _serve_backtesting_gui()
     
     # GUI routes - registered AFTER API routers
     # FastAPI matches more specific routes first, so /trades/list will match before /trades

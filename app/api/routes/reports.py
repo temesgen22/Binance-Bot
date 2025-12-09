@@ -413,6 +413,78 @@ def get_trading_report(
                     else:
                         stopped_at = strategy.created_at
                 
+                # Fetch klines for charting (optional, based on available time range)
+                klines_data = None
+                try:
+                    # Skip if client is not available
+                    if not client:
+                        logger.debug(f"Skipping klines fetch for strategy {strategy.id}: client not available")
+                        klines_data = None
+                    else:
+                        # Determine time range for klines
+                        chart_start = start_datetime or strategy.created_at
+                        chart_end = end_datetime or stopped_at or datetime.now(timezone.utc)
+                        
+                        if chart_start and chart_end and chart_start < chart_end:
+                            # Get strategy's kline interval (default to 1m if not available)
+                            strategy_interval = '1m'  # Default
+                            if hasattr(strategy, 'params') and strategy.params:
+                                if isinstance(strategy.params, dict):
+                                    strategy_interval = strategy.params.get('kline_interval', '1m')
+                                elif hasattr(strategy.params, 'kline_interval'):
+                                    strategy_interval = getattr(strategy.params, 'kline_interval', '1m')
+                                elif hasattr(strategy.params, 'get'):
+                                    strategy_interval = strategy.params.get('kline_interval', '1m')
+                            if not isinstance(strategy_interval, str):
+                                strategy_interval = '1m'
+                            
+                            # Calculate time range in milliseconds
+                            start_timestamp = int(chart_start.timestamp() * 1000)
+                            end_timestamp = int(chart_end.timestamp() * 1000)
+                            duration_seconds = (end_timestamp - start_timestamp) / 1000
+                            
+                            # Map interval to seconds
+                            interval_seconds_map = {
+                                "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+                                "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400
+                            }
+                            interval_seconds = interval_seconds_map.get(strategy_interval, 60)
+                            estimated_candles = int(duration_seconds / interval_seconds) + 200
+                            
+                            # Fetch klines using Binance client
+                            rest = client._ensure()
+                            try:
+                                if hasattr(rest, 'futures_historical_klines'):
+                                    start_str = chart_start.strftime("%d %b %Y %H:%M:%S")
+                                    end_str = chart_end.strftime("%d %b %Y %H:%M:%S")
+                                    klines = rest.futures_historical_klines(
+                                        symbol=strategy.symbol,
+                                        interval=strategy_interval,
+                                        start_str=start_str,
+                                        end_str=end_str
+                                    )
+                                    klines_data = klines if klines else None
+                                else:
+                                    # Fallback: use futures_klines
+                                    limit = min(estimated_candles, 1500)
+                                    klines = rest.futures_klines(
+                                        symbol=strategy.symbol,
+                                        interval=strategy_interval,
+                                        limit=limit
+                                    )
+                                    if klines:
+                                        # Filter by time range
+                                        klines_data = [
+                                            k for k in klines
+                                            if start_timestamp <= int(k[0]) <= end_timestamp
+                                        ]
+                            except Exception as klines_error:
+                                logger.warning(f"Failed to fetch klines for strategy {strategy.id}: {klines_error}")
+                                klines_data = None
+                except Exception as klines_exc:
+                    logger.warning(f"Error fetching klines for strategy {strategy.id}: {klines_exc}")
+                    klines_data = None
+                
                 strategy_report = StrategyReport(
                     strategy_id=strategy.id,
                     strategy_name=strategy.name,
@@ -427,6 +499,7 @@ def get_trading_report(
                     total_loss_usd=round(total_loss_usd, 4),
                     net_pnl=round(net_pnl, 4),
                     trades=completed_trades_list,
+                    klines=klines_data,
                 )
                 
                 strategy_reports.append(strategy_report)
