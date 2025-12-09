@@ -760,7 +760,8 @@ class StrategyRunner:
                 
                 # 6) Execute order based on synced state + fresh signal
                 # CRITICAL: Pass account-specific risk and executor to ensure orders go to correct account
-                await self._execute(signal, summary, risk=account_risk, executor=account_executor)
+                # Also pass strategy instance so we can sync state immediately after order execution
+                await self._execute(signal, summary, strategy=strategy, risk=account_risk, executor=account_executor)
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
             # Get final PnL before sending notification
@@ -915,6 +916,7 @@ class StrategyRunner:
         self, 
         signal: StrategySignal, 
         summary: StrategySummary,
+        strategy: Optional[Strategy] = None,
         risk: Optional[RiskManager] = None,
         executor: Optional[OrderExecutor] = None
     ) -> None:
@@ -1214,6 +1216,35 @@ class StrategyRunner:
                     await self._cancel_tp_sl_orders(summary)
                 except Exception as exc:
                     logger.warning(f"[{summary.id}] Failed to cancel TP/SL orders: {exc}")
+            
+            # CRITICAL: Sync strategy's internal state immediately after order execution
+            # This ensures the strategy knows about position changes (especially for cooldown)
+            # Without this, the strategy might not set cooldown until the next loop iteration
+            if strategy:
+                try:
+                    # Update position info from Binance to ensure summary is accurate
+                    await self._update_position_info(summary)
+                    # Sync strategy's internal state with updated summary
+                    # This is critical for cooldown - if position was closed, strategy needs to know immediately
+                    strategy.sync_position_state(
+                        position_side=summary.position_side,
+                        entry_price=summary.entry_price,
+                    )
+                    logger.debug(
+                        f"[{summary.id}] Synced strategy state after order execution: "
+                        f"position={summary.position_side}, entry_price={summary.entry_price}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[{summary.id}] Failed to sync strategy state after order execution: {exc}. "
+                        f"Will sync at start of next loop iteration."
+                    )
+            else:
+                # Fallback: update position info, strategy will sync at start of next loop
+                try:
+                    await self._update_position_info(summary)
+                except Exception as exc:
+                    logger.debug(f"[{summary.id}] Failed to update position info after order execution: {exc}")
 
     async def _place_tp_sl_orders(self, summary: StrategySummary, entry_order: OrderResponse) -> None:
         """Place Binance native TP/SL orders when opening a position.

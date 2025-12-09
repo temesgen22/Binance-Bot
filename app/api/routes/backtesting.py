@@ -490,6 +490,15 @@ async def run_backtest(
                 if drawdown_pct > max_drawdown_pct:
                     max_drawdown_pct = drawdown_pct
                 
+                # CRITICAL: Sync strategy's internal state when trade is closed
+                # This ensures the strategy knows the position is closed and sets cooldown
+                if hasattr(strategy, 'sync_position_state'):
+                    strategy.sync_position_state(
+                        position_side=None,
+                        entry_price=None
+                    )
+                    logger.debug(f"Synced strategy state: position=None after {exit_reason} exit")
+                
                 # Reset strategy state
                 strategy_position = None
                 strategy_entry_price = None
@@ -622,6 +631,14 @@ async def run_backtest(
                 max_drawdown = drawdown
             if drawdown_pct > max_drawdown_pct:
                 max_drawdown_pct = drawdown_pct
+            
+            # CRITICAL: Sync strategy's internal state when trade is closed via CLOSE signal
+            if hasattr(strategy, 'sync_position_state'):
+                strategy.sync_position_state(
+                    position_side=None,
+                    entry_price=None
+                )
+                logger.debug(f"Synced strategy state: position=None after CLOSE signal")
             
             # Reset strategy state
             strategy_position = None

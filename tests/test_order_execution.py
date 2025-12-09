@@ -225,6 +225,16 @@ class TestStrategyRunnerOrderExecution:
         # Mock position sizing
         with patch.object(risk_manager, 'size_position', return_value=PositionSizingResult(quantity=0.001, notional=40.0)):
             mock_binance_client.place_order.return_value = mock_order_response
+            # Mock get_open_position to return a position after BUY order
+            # This simulates Binance having the position after order execution
+            mock_binance_client.get_open_position.return_value = {
+                "positionAmt": "0.001",
+                "entryPrice": "40000.0",
+                "unRealizedProfit": "0.0",
+                "markPrice": "40000.0"
+            }
+            # Mock get_open_orders to return empty (no TP/SL orders yet)
+            mock_binance_client.get_open_orders = MagicMock(return_value=[])
             
             runner = StrategyRunner(
                 client=mock_binance_client,
@@ -557,6 +567,16 @@ class TestOrderExecutionIntegration:
         # Mock all dependencies
         with patch.object(risk_manager, 'size_position', return_value=PositionSizingResult(quantity=0.001, notional=40.0)):
             mock_binance_client.place_order.return_value = mock_order_response
+            # Mock get_open_position to return a position after BUY order
+            # This simulates Binance having the position after order execution
+            mock_binance_client.get_open_position.return_value = {
+                "positionAmt": "0.001",
+                "entryPrice": "40000.0",
+                "unRealizedProfit": "0.0",
+                "markPrice": "40000.0"
+            }
+            # Mock get_open_orders to return empty (no TP/SL orders yet)
+            mock_binance_client.get_open_orders = MagicMock(return_value=[])
             
             runner = StrategyRunner(
                 client=mock_binance_client,
