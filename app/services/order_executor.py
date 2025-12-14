@@ -39,11 +39,31 @@ class OrderExecutor:
         reduce_only = signal.action == "CLOSE"
         if reduce_only_override is not None:
             reduce_only = reduce_only_override
-        return self.client.place_order(
-            symbol=signal.symbol,
-            side=side,
-            quantity=sizing.quantity,
-            order_type="MARKET",
-            reduce_only=reduce_only,
+        
+        logger.info(
+            f"Executing order: {side} {sizing.quantity} {signal.symbol} "
+            f"(reduce_only={reduce_only}, price={signal.price})"
         )
+        
+        try:
+            order_response = self.client.place_order(
+                symbol=signal.symbol,
+                side=side,
+                quantity=sizing.quantity,
+                order_type="MARKET",
+                reduce_only=reduce_only,
+            )
+            if order_response:
+                logger.info(
+                    f"Order created successfully: {order_response.order_id} | "
+                    f"Status: {order_response.status} | "
+                    f"Executed Qty: {order_response.executed_qty}"
+                )
+            return order_response
+        except Exception as exc:
+            logger.error(
+                f"Failed to create order: {side} {sizing.quantity} {signal.symbol} | "
+                f"Error: {type(exc).__name__}: {exc}"
+            )
+            raise
 

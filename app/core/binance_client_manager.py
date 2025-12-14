@@ -23,26 +23,37 @@ class BinanceClientManager:
         self._initialize_clients()
     
     def _initialize_clients(self) -> None:
-        """Initialize all Binance clients from configured accounts."""
-        accounts = self.settings.get_binance_accounts()
-        self._accounts = accounts
+        """Initialize Binance clients.
         
-        for account_id, account_config in accounts.items():
-            try:
-                client = BinanceClient(
-                    api_key=account_config.api_key,
-                    api_secret=account_config.api_secret,
-                    testnet=account_config.testnet,
-                )
-                self._clients[account_id] = client
-                logger.info(
-                    f"Initialized Binance client for account '{account_id}' "
-                    f"({account_config.name}) - Testnet: {account_config.testnet}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize Binance client for account '{account_id}': {e}"
-                )
+        Note: Accounts are now stored in database only, not in .env file.
+        Clients are created on-demand when needed via get_client() or add_client().
+        """
+        # Accounts are loaded from database when needed, not from .env
+        self._accounts = {}
+        self._clients = {}
+        logger.debug("BinanceClientManager initialized - accounts will be loaded from database when needed")
+    
+    def add_client(self, account_id: str, account_config: BinanceAccountConfig) -> None:
+        """Add a client for an account (typically loaded from database).
+        
+        Args:
+            account_id: Account identifier
+            account_config: Account configuration
+        """
+        try:
+            client = BinanceClient(
+                api_key=account_config.api_key,
+                api_secret=account_config.api_secret,
+                testnet=account_config.testnet,
+            )
+            self._clients[account_id.lower()] = client
+            self._accounts[account_id.lower()] = account_config
+            logger.info(
+                f"Added Binance client for account '{account_id}' "
+                f"({account_config.name}) - Testnet: {account_config.testnet}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to add Binance client for account '{account_id}': {e}")
     
     def get_client(self, account_id: str) -> Optional[BinanceClient]:
         """Get Binance client for a specific account.

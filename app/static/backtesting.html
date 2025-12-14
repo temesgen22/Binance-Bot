@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Strategy Backtesting</title>
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/settings.js"></script>
     <style>
         * {
             margin: 0;
@@ -219,6 +221,61 @@
             color: #dc3545;
         }
 
+        .ohlc-info-box {
+            margin: 0 0 15px 0;
+            padding: 8px 12px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .ohlc-content {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .ohlc-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            margin-right: 12px;
+        }
+
+        .ohlc-label {
+            color: #666;
+            font-size: 10px;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        .ohlc-value {
+            color: #333;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .ohlc-value.high {
+            color: #4caf50;
+        }
+
+        .ohlc-value.low {
+            color: #f44336;
+        }
+
+        .ohlc-value.ema-fast {
+            color: #2196F3;
+        }
+
+        .ohlc-value.ema-slow {
+            color: #FF9800;
+        }
+
         .trades-table {
             width: 100%;
             border-collapse: collapse;
@@ -332,8 +389,11 @@
                 <a href="/trades">📊 Trade & PnL Viewer</a>
                 <a href="/reports">📊 Trading Reports</a>
                 <a href="/test-accounts/">🔐 Test Accounts</a>
-                <a href="/register">🚀 Register Strategy</a>
+                <a href="/strategy-register">🚀 Register Strategy</a>
+                <a href="/static/settings.html">⚙️ Settings</a>
                 <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -429,13 +489,53 @@
                 <h3 style="margin-top: 30px; margin-bottom: 15px;">Price Chart with Trade Signals</h3>
                 <div id="chartContainer"></div>
 
-                <h3 style="margin-top: 30px; margin-bottom: 15px;">Trade History</h3>
+                <h3 style="margin-top: 30px; margin-bottom: 10px;">Trade History</h3>
+                <div id="ohlc-info-backtest" class="ohlc-info-box" style="display: none;">
+                    <div class="ohlc-content">
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Open</span>
+                            <span class="ohlc-value" id="ohlc-open-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">High</span>
+                            <span class="ohlc-value high" id="ohlc-high-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Low</span>
+                            <span class="ohlc-value low" id="ohlc-low-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Close</span>
+                            <span class="ohlc-value" id="ohlc-close-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Change</span>
+                            <span class="ohlc-value" id="ohlc-change-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item" id="ohlc-ema-fast-item-backtest" style="display: none;">
+                            <span class="ohlc-label" id="ohlc-ema-fast-label-backtest">EMA</span>
+                            <span class="ohlc-value ema-fast" id="ohlc-ema-fast-backtest">-</span>
+                        </div>
+                        <div class="ohlc-item" id="ohlc-ema-slow-item-backtest" style="display: none;">
+                            <span class="ohlc-label" id="ohlc-ema-slow-label-backtest">EMA</span>
+                            <span class="ohlc-value ema-slow" id="ohlc-ema-slow-backtest">-</span>
+                        </div>
+                    </div>
+                </div>
                 <div id="tradesTable"></div>
             </div>
         </div>
     </div>
 
     <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+        
         // Strategy parameter templates
         const strategyParams = {
             scalping: {
@@ -576,11 +676,23 @@
                 });
                 
                 // Build request
+                // Note: datetime-local input provides local time string (e.g., "2024-01-15T14:30")
+                // new Date() interprets this as LOCAL time, then toISOString() converts to UTC
+                // This ensures the backend receives UTC timestamps matching what Binance expects
+                const startTimeInput = document.getElementById('startTime').value;
+                const endTimeInput = document.getElementById('endTime').value;
+                const startDate = new Date(startTimeInput);
+                const endDate = new Date(endTimeInput);
+                
+                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                    throw new Error('Invalid date/time format');
+                }
+                
                 const request = {
                     symbol: document.getElementById('symbol').value.toUpperCase(),
                     strategy_type: strategyType,
-                    start_time: new Date(document.getElementById('startTime').value).toISOString(),
-                    end_time: new Date(document.getElementById('endTime').value).toISOString(),
+                    start_time: startDate.toISOString(), // Converts local time to UTC ISO string
+                    end_time: endDate.toISOString(), // Converts local time to UTC ISO string
                     leverage: parseInt(document.getElementById('leverage').value),
                     risk_per_trade: parseFloat(document.getElementById('riskPerTrade').value),
                     fixed_amount: document.getElementById('fixedAmount').value ? parseFloat(document.getElementById('fixedAmount').value) : null,
@@ -589,7 +701,7 @@
                 };
                 
                 // Call API
-                const response = await fetch('/backtesting/run', {
+                const response = await authFetch('/backtesting/run', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -656,10 +768,15 @@
                     },
                     timeScale: {
                         timeVisible: true,
-                        secondsVisible: false,
+                        secondsVisible: true,  // Show seconds for second-based intervals (1s, 3s, 5s, 10s, 30s)
                     },
                     rightPriceScale: {
                         borderColor: '#cccccc',
+                        // Configure price format to show 5-6 decimal places
+                        scaleMargins: {
+                            top: 0.1,
+                            bottom: 0.1,
+                        },
                     },
                 });
             } catch (e) {
@@ -668,7 +785,7 @@
                 return;
             }
             
-            // Add candlestick series
+            // Add candlestick series with price format precision
             let candlestickSeries;
             try {
                 candlestickSeries = chart.addCandlestickSeries({
@@ -677,6 +794,12 @@
                     borderVisible: false,
                     wickUpColor: '#26a69a',
                     wickDownColor: '#ef5350',
+                    // Configure price format to show 5-6 decimal places
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
                 });
             } catch (e) {
                 console.error('Error creating candlestick series:', e);
@@ -729,6 +852,48 @@
                 return;
             }
             
+            // Add EMA indicator lines if available
+            let emaFastSeries = null;
+            let emaSlowSeries = null;
+            
+            if (result.indicators && result.indicators.ema_fast && result.indicators.ema_slow) {
+                try {
+                    // EMA Fast line (blue)
+                    emaFastSeries = chart.addLineSeries({
+                        color: '#2196F3',
+                        lineWidth: 2,
+                        title: `EMA Fast (${result.indicators.ema_fast_period || 8})`,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        priceFormat: {
+                            type: 'price',
+                            precision: 6,
+                            minMove: 0.000001,
+                        },
+                    });
+                    
+                    // EMA Slow line (orange)
+                    emaSlowSeries = chart.addLineSeries({
+                        color: '#FF9800',
+                        lineWidth: 2,
+                        title: `EMA Slow (${result.indicators.ema_slow_period || 21})`,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        priceFormat: {
+                            type: 'price',
+                            precision: 6,
+                            minMove: 0.000001,
+                        },
+                    });
+                    
+                    // Set EMA data
+                    emaFastSeries.setData(result.indicators.ema_fast);
+                    emaSlowSeries.setData(result.indicators.ema_slow);
+                } catch (e) {
+                    console.warn('Error adding EMA lines:', e);
+                }
+            }
+            
             try {
                 candlestickSeries.setData(candlestickData);
             } catch (e) {
@@ -740,6 +905,112 @@
                 }
                 return;
             }
+            
+            // Get fixed OHLC info box above the trades table
+            const ohlcBox = document.getElementById('ohlc-info-backtest');
+            
+            // Show OHLC box when chart is rendered
+            if (ohlcBox) {
+                ohlcBox.style.display = 'block';
+            }
+            
+            // Subscribe to crosshair movement to update fixed OHLC display
+            chart.subscribeCrosshairMove(param => {
+                if (!ohlcBox) return;
+                
+                if (param.point === undefined || !param.time || param.seriesData.size === 0) {
+                    return;
+                }
+                
+                const data = param.seriesData.get(candlestickSeries);
+                if (!data || !data.time) {
+                    return;
+                }
+                
+                // Find the candle data for this timestamp
+                const candleTime = data.time;
+                const candle = candlestickData.find(c => c.time === candleTime);
+                
+                if (!candle) {
+                    return;
+                }
+                
+                const { open, high, low, close } = candle;
+                
+                // Calculate change percentage
+                const change = close - open;
+                const changePercent = open !== 0 ? ((change / open) * 100) : 0;
+                const changeColor = change >= 0 ? '#4caf50' : '#f44336';
+                const changeSign = change >= 0 ? '+' : '';
+                
+                // Format prices with 5 decimals (matching the image)
+                const formatPrice = (price) => parseFloat(price).toFixed(5);
+                
+                // Get EMA values for this candle if available
+                let emaFast = null;
+                let emaSlow = null;
+                let emaFastPeriod = null;
+                let emaSlowPeriod = null;
+                
+                if (result.indicators && result.indicators.ema_fast && result.indicators.ema_slow) {
+                    // Find EMA values for this timestamp
+                    const emaFastData = result.indicators.ema_fast.find(e => e.time === candleTime);
+                    const emaSlowData = result.indicators.ema_slow.find(e => e.time === candleTime);
+                    
+                    if (emaFastData && emaFastData.value !== undefined) {
+                        emaFast = emaFastData.value;
+                    }
+                    if (emaSlowData && emaSlowData.value !== undefined) {
+                        emaSlow = emaSlowData.value;
+                    }
+                    
+                    emaFastPeriod = result.indicators.ema_fast_period || 8;
+                    emaSlowPeriod = result.indicators.ema_slow_period || 21;
+                }
+                
+                // Update fixed OHLC display
+                const openEl = document.getElementById('ohlc-open-backtest');
+                const highEl = document.getElementById('ohlc-high-backtest');
+                const lowEl = document.getElementById('ohlc-low-backtest');
+                const closeEl = document.getElementById('ohlc-close-backtest');
+                const changeEl = document.getElementById('ohlc-change-backtest');
+                
+                if (openEl) openEl.textContent = formatPrice(open);
+                if (highEl) highEl.textContent = formatPrice(high);
+                if (lowEl) lowEl.textContent = formatPrice(low);
+                if (closeEl) {
+                    closeEl.textContent = formatPrice(close);
+                    closeEl.style.color = changeColor;
+                }
+                if (changeEl) {
+                    changeEl.textContent = `${changeSign}${changePercent.toFixed(2)}%`;
+                    changeEl.style.color = changeColor;
+                }
+                
+                // Update EMA values if available
+                const emaFastItem = document.getElementById('ohlc-ema-fast-item-backtest');
+                const emaFastEl = document.getElementById('ohlc-ema-fast-backtest');
+                const emaFastLabel = document.getElementById('ohlc-ema-fast-label-backtest');
+                const emaSlowItem = document.getElementById('ohlc-ema-slow-item-backtest');
+                const emaSlowEl = document.getElementById('ohlc-ema-slow-backtest');
+                const emaSlowLabel = document.getElementById('ohlc-ema-slow-label-backtest');
+                
+                if (emaFast !== null && emaFastItem && emaFastEl && emaFastLabel) {
+                    emaFastItem.style.display = 'flex';
+                    emaFastEl.textContent = formatPrice(emaFast);
+                    emaFastLabel.textContent = `EMA(${emaFastPeriod})`;
+                } else if (emaFastItem) {
+                    emaFastItem.style.display = 'none';
+                }
+                
+                if (emaSlow !== null && emaSlowItem && emaSlowEl && emaSlowLabel) {
+                    emaSlowItem.style.display = 'flex';
+                    emaSlowEl.textContent = formatPrice(emaSlow);
+                    emaSlowLabel.textContent = `EMA(${emaSlowPeriod})`;
+                } else if (emaSlowItem) {
+                    emaSlowItem.style.display = 'none';
+                }
+            });
             
             // Add markers for buy/sell signals
             if (result.trades && result.trades.length > 0) {
@@ -933,6 +1204,12 @@
                 </div>
             `;
             
+            // Show OHLC info box
+            const ohlcBox = document.getElementById('ohlc-info-backtest');
+            if (ohlcBox) {
+                ohlcBox.style.display = 'block';
+            }
+            
             // Display trades table
             if (result.trades && result.trades.length > 0) {
                 let html = '<table class="trades-table"><thead><tr>';
@@ -949,8 +1226,25 @@
                 html += '</tr></thead><tbody>';
                 
                 result.trades.forEach(trade => {
-                    const entryTime = new Date(trade.entry_time).toLocaleString();
-                    const exitTime = trade.exit_time ? new Date(trade.exit_time).toLocaleString() : 'Open';
+                    // Use UserSettings if available, otherwise fallback to UTC format
+                    const formatDate = (dateString) => {
+                        if (!dateString) return 'Open';
+                        if (typeof UserSettings !== 'undefined') {
+                            return UserSettings.formatDate(dateString);
+                        }
+                        // Fallback for when settings.js is not loaded
+                        const date = new Date(dateString);
+                        if (isNaN(date.getTime())) return 'Invalid';
+                        const year = date.getUTCFullYear();
+                        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                        const day = String(date.getUTCDate()).padStart(2, '0');
+                        const hours = String(date.getUTCHours()).padStart(2, '0');
+                        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                        const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
+                    };
+                    const entryTime = formatDate(trade.entry_time);
+                    const exitTime = formatDate(trade.exit_time);
                     const sideClass = trade.position_side === 'LONG' ? 'success' : 'danger';
                     const pnlClass = trade.net_pnl && trade.net_pnl >= 0 ? 'positive' : 'negative';
                     const totalFees = trade.entry_fee + (trade.exit_fee || 0);
@@ -994,8 +1288,24 @@
             }, 250);
         });
 
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
         // Initialize form with default time (last 2 hours)
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
+            if (Auth.isAuthenticated()) {
+                await loadUserInfo();
+            }
             setTimePreset(2);
         });
     </script>

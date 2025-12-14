@@ -35,15 +35,41 @@ def mock_client_manager():
 @pytest.fixture
 def test_client(mock_client_manager):
     """Create a test client with mocked dependencies."""
-    # Ensure app state is set up
-    if not hasattr(app.state, 'binance_client_manager'):
-        app.state.binance_client_manager = mock_client_manager
+    from uuid import uuid4
+    from app.models.db_models import User
+    from app.api.deps import get_current_user, get_db_session_dependency
+    from unittest.mock import MagicMock
     
-    # Set a default client for backward compatibility
-    if not hasattr(app.state, 'binance_client'):
-        app.state.binance_client = MagicMock()
+    # Create a mock user for authentication
+    mock_user = User(
+        id=uuid4(),
+        username="testuser",
+        email="test@example.com",
+        password_hash="hashed",
+        is_active=True
+    )
     
-    return TestClient(app)
+    # Create a mock database session
+    mock_db_session = MagicMock()
+    
+    # Override dependencies
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_db_session_dependency] = lambda: mock_db_session
+    
+    try:
+        # Ensure app state is set up
+        if not hasattr(app.state, 'binance_client_manager'):
+            app.state.binance_client_manager = mock_client_manager
+        
+        # Set a default client for backward compatibility
+        if not hasattr(app.state, 'binance_client'):
+            app.state.binance_client = MagicMock()
+        
+        yield TestClient(app)
+    finally:
+        # Clean up dependency overrides
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db_session_dependency, None)
 
 
 class TestTestAccountEndpoint:
@@ -182,147 +208,155 @@ class TestTestExistingAccountEndpoint:
     
     def test_test_existing_account_success(self, test_client, mock_client_manager):
         """Test successful testing of existing account."""
-        # Set up mock client manager with accounts
-        mock_account = BinanceAccountConfig(
+        from app.services.account_service import AccountService
+        
+        # Mock account config that AccountService.get_account should return
+        mock_account_config = BinanceAccountConfig(
             account_id="test_account",
             api_key="test_key",
             api_secret="test_secret",
             testnet=True,
             name="Test Account"
         )
-        mock_client_manager.list_accounts.return_value = {
-            "test_account": mock_account
-        }
         
-        app.state.binance_client_manager = mock_client_manager
-        
-        # Mock BinanceClient
-        with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
-            mock_client = MagicMock(spec=BinanceClient)
-            mock_client_class.return_value = mock_client
+        # Mock AccountService - patch where it's imported (inside the function)
+        with patch('app.services.account_service.AccountService') as mock_account_service_class:
+            mock_account_service = MagicMock(spec=AccountService)
+            mock_account_service_class.return_value = mock_account_service
+            mock_account_service.get_account.return_value = mock_account_config
             
-            mock_rest = MagicMock()
-            mock_client._ensure.return_value = mock_rest
-            
-            # Mock successful account info
-            mock_rest.futures_account.return_value = {
-                "totalWalletBalance": "2000.0",
-                "totalUnrealizedProfit": "100.0",
-                "availableBalance": "1900.0",
-                "marginBalance": "2100.0",
-                "canTrade": True,
-                "canDeposit": True,
-                "canWithdraw": True,
-            }
-            
-            mock_client.futures_account_balance.return_value = 2000.0
-            
-            response = test_client.post("/api/test-account/test_account")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            assert data["account_name"] == "Test Account"
-            assert data["testnet"] is True
-            assert data["connection_status"] == "✅ Connected"
-            assert data["authentication_status"] == "✅ Authenticated"
-            assert data["account_info"]["total_wallet_balance"] == 2000.0
-            assert data["balance"] == 2000.0
-            assert "FUTURES_TRADING" in data["permissions"]
+            # Mock BinanceClient
+            with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
+                mock_client = MagicMock(spec=BinanceClient)
+                mock_client_class.return_value = mock_client
+                
+                mock_rest = MagicMock()
+                mock_client._ensure.return_value = mock_rest
+                
+                # Mock successful account info
+                mock_rest.futures_account.return_value = {
+                    "totalWalletBalance": "2000.0",
+                    "totalUnrealizedProfit": "100.0",
+                    "availableBalance": "1900.0",
+                    "marginBalance": "2100.0",
+                    "canTrade": True,
+                    "canDeposit": True,
+                    "canWithdraw": True,
+                }
+                
+                mock_client.futures_account_balance.return_value = 2000.0
+                
+                response = test_client.post("/api/test-account/test_account")
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["success"] is True
+                assert data["account_name"] == "Test Account"
+                assert data["testnet"] is True
+                assert data["connection_status"] == "✅ Connected"
+                assert data["authentication_status"] == "✅ Authenticated"
+                assert data["account_info"]["total_wallet_balance"] == 2000.0
+                assert data["balance"] == 2000.0
+                assert "FUTURES_TRADING" in data["permissions"]
     
     def test_test_existing_account_not_found(self, test_client, mock_client_manager):
         """Test testing non-existent account."""
-        mock_client_manager.list_accounts.return_value = {
-            "default": BinanceAccountConfig(
-                account_id="default",
-                api_key="key",
-                api_secret="secret",
-                testnet=True
-            )
-        }
+        from app.services.account_service import AccountService
         
-        app.state.binance_client_manager = mock_client_manager
-        
-        response = test_client.post("/api/test-account/nonexistent")
-        
-        assert response.status_code == 404
-        data = response.json()
-        assert "not found" in data["detail"].lower()
-        assert "nonexistent" in data["detail"]
+        # Mock AccountService to return None (account not found)
+        with patch('app.services.account_service.AccountService') as mock_account_service_class:
+            mock_account_service = MagicMock(spec=AccountService)
+            mock_account_service_class.return_value = mock_account_service
+            mock_account_service.get_account.return_value = None
+            
+            response = test_client.post("/api/test-account/nonexistent")
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert "not found" in data["detail"].lower()
+            assert "nonexistent" in data["detail"]
     
     def test_test_existing_account_authentication_failed(self, test_client, mock_client_manager):
         """Test existing account with invalid credentials."""
-        mock_account = BinanceAccountConfig(
+        from app.services.account_service import AccountService
+        
+        # Mock account config with invalid credentials
+        mock_account_config = BinanceAccountConfig(
             account_id="test_account",
             api_key="invalid_key",
             api_secret="invalid_secret",
             testnet=True
         )
-        mock_client_manager.list_accounts.return_value = {
-            "test_account": mock_account
-        }
         
-        app.state.binance_client_manager = mock_client_manager
-        
-        with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
-            mock_client = MagicMock(spec=BinanceClient)
-            mock_client_class.return_value = mock_client
+        # Mock AccountService to return the account
+        with patch('app.services.account_service.AccountService') as mock_account_service_class:
+            mock_account_service = MagicMock(spec=AccountService)
+            mock_account_service_class.return_value = mock_account_service
+            mock_account_service.get_account.return_value = mock_account_config
             
-            mock_rest = MagicMock()
-            mock_client._ensure.return_value = mock_rest
-            
-            # Mock authentication error
-            mock_rest.futures_account.side_effect = Exception("Invalid API-key")
-            
-            response = test_client.post("/api/test-account/test_account")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is False
-            assert "Authentication Failed" in data["authentication_status"]
-            assert "Invalid API credentials" in data["error"]
+            with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
+                mock_client = MagicMock(spec=BinanceClient)
+                mock_client_class.return_value = mock_client
+                
+                mock_rest = MagicMock()
+                mock_client._ensure.return_value = mock_rest
+                
+                # Mock authentication error
+                mock_rest.futures_account.side_effect = Exception("Invalid API-key")
+                
+                response = test_client.post("/api/test-account/test_account")
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["success"] is False
+                assert "Authentication Failed" in data["authentication_status"]
+                assert "Invalid API credentials" in data["error"]
     
     def test_test_existing_account_default(self, test_client, mock_client_manager):
         """Test testing default account."""
-        mock_account = BinanceAccountConfig(
+        from app.services.account_service import AccountService
+        
+        # Mock account config for default account
+        mock_account_config = BinanceAccountConfig(
             account_id="default",
             api_key="default_key",
             api_secret="default_secret",
             testnet=True,
             name="Default Account"
         )
-        mock_client_manager.list_accounts.return_value = {
-            "default": mock_account
-        }
         
-        app.state.binance_client_manager = mock_client_manager
-        
-        with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
-            mock_client = MagicMock(spec=BinanceClient)
-            mock_client_class.return_value = mock_client
+        # Mock AccountService to return the account
+        with patch('app.services.account_service.AccountService') as mock_account_service_class:
+            mock_account_service = MagicMock(spec=AccountService)
+            mock_account_service_class.return_value = mock_account_service
+            mock_account_service.get_account.return_value = mock_account_config
             
-            mock_rest = MagicMock()
-            mock_client._ensure.return_value = mock_rest
-            
-            mock_rest.futures_account.return_value = {
-                "totalWalletBalance": "5000.0",
-                "totalUnrealizedProfit": "0.0",
-                "availableBalance": "5000.0",
-                "marginBalance": "5000.0",
-                "canTrade": True,
-                "canDeposit": True,
-                "canWithdraw": True,
-            }
-            
-            mock_client.futures_account_balance.return_value = 5000.0
-            
-            response = test_client.post("/api/test-account/default")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is True
-            assert data["account_name"] == "Default Account"
-            assert data["account_info"]["total_wallet_balance"] == 5000.0
+            with patch('app.api.routes.test_accounts.BinanceClient') as mock_client_class:
+                mock_client = MagicMock(spec=BinanceClient)
+                mock_client_class.return_value = mock_client
+                
+                mock_rest = MagicMock()
+                mock_client._ensure.return_value = mock_rest
+                
+                mock_rest.futures_account.return_value = {
+                    "totalWalletBalance": "5000.0",
+                    "totalUnrealizedProfit": "0.0",
+                    "availableBalance": "5000.0",
+                    "marginBalance": "5000.0",
+                    "canTrade": True,
+                    "canDeposit": True,
+                    "canWithdraw": True,
+                }
+                
+                mock_client.futures_account_balance.return_value = 5000.0
+                
+                response = test_client.post("/api/test-account/default")
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["success"] is True
+                assert data["account_name"] == "Default Account"
+                assert data["account_info"]["total_wallet_balance"] == 5000.0
 
 
 class TestQuickTestEndpoint:

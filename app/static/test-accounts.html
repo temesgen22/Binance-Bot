@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Test API Accounts</title>
+    <script src="/static/auth.js"></script>
     <style>
         * {
             margin: 0;
@@ -440,6 +441,8 @@
                 <a href="/market-analyzer">📈 Market Analyzer</a>
                 <a href="/backtesting">🔬 Backtesting</a>
                 <a href="/reports/">📋 Reports</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -450,7 +453,12 @@
             </div>
 
             <div class="existing-accounts">
-                <h2>📋 Existing Accounts from .env</h2>
+                <h2>📋 Existing Accounts</h2>
+                <div style="margin-bottom: 15px;">
+                    <button class="btn btn-secondary" onclick="loadExistingAccounts()" style="font-size: 0.9em;">
+                        🔄 Refresh
+                    </button>
+                </div>
                 <div id="existingAccountsList" class="loading-accounts">
                     <span class="loading"></span> Loading accounts...
                 </div>
@@ -465,8 +473,21 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="exchangePlatform">Exchange Platform *</label>
+                        <select id="exchangePlatform" required>
+                            <option value="binance">Binance</option>
+                            <option value="bybit">Bybit</option>
+                            <option value="okx">OKX</option>
+                            <option value="kraken">Kraken</option>
+                            <option value="coinbase">Coinbase</option>
+                            <option value="other">Other</option>
+                        </select>
+                        <small style="color: #666; font-size: 0.85em;">Select the exchange platform for this account</small>
+                    </div>
+
+                    <div class="form-group">
                         <label for="apiKey">API Key *</label>
-                        <input type="text" id="apiKey" required placeholder="Enter your Binance API key">
+                        <input type="text" id="apiKey" required placeholder="Enter your Exchange API key">
                     </div>
 
                     <div class="form-group">
@@ -481,6 +502,19 @@
                         </div>
                     </div>
 
+                    <div class="form-group">
+                        <div class="checkbox-group" style="margin-bottom: 15px;">
+                            <input type="checkbox" id="saveToDatabase" checked>
+                            <label for="saveToDatabase">💾 Save to Database after successful test</label>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="accountId">Account ID (for database storage) *</label>
+                        <input type="text" id="accountId" required placeholder="e.g., main, test, account1" pattern="[a-z0-9_]+" title="Only lowercase letters, numbers, and underscores">
+                        <small style="color: #666; font-size: 0.85em;">Used to identify this account in the database</small>
+                    </div>
+                    
                     <div class="form-group">
                         <button type="submit" class="btn btn-primary" id="testBtn">
                             <span id="testBtnText">🧪 Test Account</span>
@@ -506,43 +540,197 @@
         const resultsDiv = document.getElementById('results');
         const existingAccountsList = document.getElementById('existingAccountsList');
 
-        // Load existing accounts on page load
-        async function loadExistingAccounts() {
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
+        // Load user info
+        async function loadUserInfo() {
             try {
-                const response = await fetch('/accounts/list');
-                const accounts = await response.json();
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Logout function is now global from auth.js
+
+        // Load existing accounts on page load (from database only)
+        async function loadExistingAccounts() {
+            existingAccountsList.innerHTML = '<div class="loading-accounts"><span class="loading"></span> Loading accounts...</div>';
+            
+            try {
+                // Load accounts from database
+                const dbResponse = await authFetch('/accounts/list');
+                const dbAccounts = await dbResponse.json();
                 
-                if (!accounts || Object.keys(accounts).length === 0) {
-                    existingAccountsList.innerHTML = '<div class="no-accounts">No accounts found in .env file. Add accounts using the form below.</div>';
+                if (!dbAccounts || dbAccounts.length === 0) {
+                    existingAccountsList.innerHTML = '<div class="no-accounts">No accounts found. Test and save an account using the form below.</div>';
                     return;
                 }
                 
                 let html = '<div class="accounts-list">';
-                for (const [accountId, account] of Object.entries(accounts)) {
-                    const isTestnet = account.testnet === 'True' || account.testnet === true;
+                
+                // Display database accounts
+                for (const account of dbAccounts) {
+                    const isTestnet = account.testnet === true || account.testnet === 'True';
+                    const accountId = account.account_id || account.id;
+                    const exchangePlatform = account.exchange_platform || 'binance';
                     html += `
-                        <div class="account-card">
+                        <div class="account-card" data-account-id="${accountId}" data-source="database">
                             <div class="account-info">
-                                <h3>${account.name || accountId}</h3>
+                                <h3>${account.name || accountId} ${account.is_default ? '<span style="color: #28a745; font-size: 0.8em;">(Default)</span>' : ''}</h3>
                                 <p>
                                     <span class="account-badge ${isTestnet ? 'testnet' : 'production'}">
                                         ${isTestnet ? '🧪 Testnet' : '🌐 Production'}
                                     </span>
+                                    <span class="account-badge" style="background: #6c757d; color: white;">💾 Database</span>
+                                    <span class="account-badge" style="background: #17a2b8; color: white;">${exchangePlatform.toUpperCase()}</span>
                                     <span style="color: #999;">ID: ${accountId}</span>
                                 </p>
                             </div>
                             <div class="account-actions">
-                                <button class="btn btn-primary btn-test-account" onclick="testExistingAccount('${accountId}')">
+                                <button class="btn btn-primary btn-test-account" onclick="testDatabaseAccount('${accountId}')">
                                     🧪 Test
+                                </button>
+                                <button class="btn btn-secondary" onclick="editAccount('${accountId}')" style="font-size: 0.9em;">
+                                    ✏️ Edit
+                                </button>
+                                <button class="btn btn-danger" onclick="deleteAccount('${accountId}')" style="font-size: 0.9em;">
+                                    🗑️ Delete
                                 </button>
                             </div>
                         </div>
                     `;
                 }
+                
                 html += '</div>';
                 existingAccountsList.innerHTML = html;
             } catch (error) {
                 existingAccountsList.innerHTML = `<div class="error-message">Error loading accounts: ${error.message}</div>`;
+            }
+        }
+        
+        // Test a database account
+        async function testDatabaseAccount(accountId) {
+            // Find the button and disable it
+            const button = document.querySelector(`[data-account-id="${accountId}"][data-source="database"] .btn-test-account`);
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '<span class="loading"></span> Testing...';
+            }
+            
+            try {
+                // Call the API endpoint to test the database account
+                const response = await authFetch(`/api/test-account/${accountId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    displayResult(result);
+                } else {
+                    const errorData = await response.json();
+                    displayError('Error testing account: ' + (errorData.detail || errorData.message || 'Unknown error'));
+                }
+            } catch (error) {
+                displayError('Error testing account: ' + error.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = '🧪 Test';
+                }
+            }
+        }
+        
+        // Edit account
+        async function editAccount(accountId) {
+            try {
+                const response = await authFetch(`/accounts/${accountId}`);
+                const account = await response.json();
+                
+                // Populate form with account data
+                document.getElementById('accountName').value = account.name || '';
+                document.getElementById('exchangePlatform').value = account.exchange_platform || 'binance';
+                document.getElementById('testnet').checked = account.testnet === true || account.testnet === 'True';
+                
+                // Show edit mode
+                const form = document.getElementById('testForm');
+                const submitBtn = document.getElementById('testBtn');
+                submitBtn.textContent = '💾 Update Account';
+                submitBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    await updateAccount(accountId);
+                };
+                
+                // Scroll to form
+                form.scrollIntoView({ behavior: 'smooth' });
+            } catch (error) {
+                alert('Error loading account: ' + error.message);
+            }
+        }
+        
+        // Update account
+        async function updateAccount(accountId) {
+            const name = document.getElementById('accountName').value.trim();
+            const exchangePlatform = document.getElementById('exchangePlatform').value.trim();
+            const testnet = document.getElementById('testnet').checked;
+            
+            try {
+                const response = await authFetch(`/accounts/${accountId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name || null,
+                        exchange_platform: exchangePlatform,
+                        testnet: testnet
+                    })
+                });
+                
+                if (response.ok) {
+                    alert('Account updated successfully!');
+                    loadExistingAccounts();
+                    // Reset form
+                    document.getElementById('testForm').reset();
+                    document.getElementById('testBtn').textContent = '🧪 Test Account';
+                } else {
+                    const error = await response.json();
+                    alert('Error updating account: ' + (error.detail || error.message));
+                }
+            } catch (error) {
+                alert('Error updating account: ' + error.message);
+            }
+        }
+        
+        // Delete account
+        async function deleteAccount(accountId) {
+            if (!confirm(`Are you sure you want to delete account "${accountId}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await authFetch(`/accounts/${accountId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok || response.status === 204) {
+                    alert('Account deleted successfully!');
+                    loadExistingAccounts();
+                } else {
+                    const error = await response.json();
+                    alert('Error deleting account: ' + (error.detail || error.message));
+                }
+            } catch (error) {
+                alert('Error deleting account: ' + error.message);
             }
         }
 
@@ -558,7 +746,7 @@
             });
 
             try {
-                const response = await fetch(`/api/test-account/${accountId}`, {
+                const response = await authFetch(`/api/test-account/${accountId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -580,6 +768,10 @@
         }
 
         // Load accounts when page loads
+        // Load user info on page load
+        if (Auth.isAuthenticated()) {
+            loadUserInfo();
+        }
         loadExistingAccounts();
 
         form.addEventListener('submit', async (e) => {
@@ -588,10 +780,18 @@
             const apiKey = document.getElementById('apiKey').value.trim();
             const apiSecret = document.getElementById('apiSecret').value.trim();
             const accountName = document.getElementById('accountName').value.trim();
+            const accountId = document.getElementById('accountId').value.trim();
+            const exchangePlatform = document.getElementById('exchangePlatform').value.trim();
             const testnet = document.getElementById('testnet').checked;
+            const saveToDatabase = document.getElementById('saveToDatabase').checked;
 
             if (!apiKey || !apiSecret) {
                 alert('Please enter both API Key and API Secret');
+                return;
+            }
+            
+            if (saveToDatabase && !accountId) {
+                alert('Please enter an Account ID to save to database');
                 return;
             }
 
@@ -601,7 +801,7 @@
             loadingSpinner.classList.remove('hidden');
 
             try {
-                const response = await fetch('/api/test-account', {
+                const response = await authFetch('/api/test-account', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -617,7 +817,15 @@
                 const result = await response.json();
 
                 // Display result
-                displayResult(result);
+                displayResult(result, {
+                    apiKey,
+                    apiSecret,
+                    accountName,
+                    accountId,
+                    exchangePlatform,
+                    testnet,
+                    saveToDatabase
+                });
 
             } catch (error) {
                 displayError('Network error: ' + error.message);
@@ -632,9 +840,11 @@
         clearBtn.addEventListener('click', () => {
             form.reset();
             resultsDiv.innerHTML = '';
+            document.getElementById('testBtn').textContent = '🧪 Test Account';
+            document.getElementById('testBtn').onclick = null; // Remove any custom onclick
         });
 
-        function displayResult(result) {
+        function displayResult(result, formData = null) {
             const card = document.createElement('div');
             card.className = `result-card ${result.success ? 'success' : 'error'}`;
 
@@ -669,6 +879,17 @@
                         </div>
                     </div>
             `;
+            
+            // Add save to database button if test was successful and formData is provided
+            if (result.success && formData && formData.saveToDatabase) {
+                detailsHtml += `
+                    <div class="detail-item" style="grid-column: 1 / -1; margin-top: 15px; padding-top: 15px; border-top: 2px solid #e9ecef;">
+                        <button class="btn btn-primary" onclick="saveAccountToDatabase(${JSON.stringify(formData).replace(/"/g, '&quot;')})" style="width: 100%;">
+                            💾 Save to Database
+                        </button>
+                    </div>
+                `;
+            }
 
             if (result.success && result.account_info) {
                 detailsHtml += `
@@ -761,6 +982,43 @@
             resultsDiv.insertBefore(card, resultsDiv.firstChild);
         }
 
+        // Save account to database after successful test
+        async function saveAccountToDatabase(formData) {
+            if (!formData.accountId) {
+                alert('Account ID is required to save to database');
+                return;
+            }
+            
+            try {
+                const response = await authFetch('/accounts/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        account_id: formData.accountId,
+                        api_key: formData.apiKey,
+                        api_secret: formData.apiSecret,
+                        name: formData.accountName || null,
+                        exchange_platform: formData.exchangePlatform || 'binance',
+                        testnet: formData.testnet,
+                        is_default: false
+                    })
+                });
+                
+                if (response.ok) {
+                    const account = await response.json();
+                    alert(`Account "${account.name || account.account_id}" saved to database successfully!`);
+                    loadExistingAccounts();
+                    // Clear form
+                    document.getElementById('testForm').reset();
+                } else {
+                    const error = await response.json();
+                    alert('Error saving account: ' + (error.detail || error.message));
+                }
+            } catch (error) {
+                alert('Error saving account: ' + error.message);
+            }
+        }
+        
         function formatCurrency(value) {
             if (value === null || value === undefined) return 'N/A';
             return new Intl.NumberFormat('en-US', {

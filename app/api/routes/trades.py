@@ -9,7 +9,7 @@ from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager
+from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager, get_current_user
 from app.core.binance_client_manager import BinanceClientManager
 from app.models.trade import (
     TradeWithTimestamp,
@@ -19,6 +19,7 @@ from app.models.trade import (
     TradeFilterParams,
 )
 from app.models.order import OrderResponse
+from app.models.db_models import User
 from app.services.strategy_runner import StrategyRunner
 from app.core.my_binance_client import BinanceClient
 from app.core.exceptions import StrategyNotFoundError
@@ -70,6 +71,7 @@ def list_all_trades(
     side: Optional[str] = Query(default=None, description="Filter by side (BUY/SELL)"),
     strategy_id: Optional[str] = Query(default=None, description="Filter by strategy ID"),
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> List[TradeWithTimestamp]:
     """Get all trades across all strategies with optional filtering."""
@@ -164,7 +166,10 @@ def list_all_trades(
 
 
 @router.get("/symbols", response_model=List[str])
-def list_symbols(runner: StrategyRunner = Depends(get_strategy_runner)) -> List[str]:
+def list_symbols(
+    current_user: User = Depends(get_current_user),
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> List[str]:
     """Get list of all symbols that have trades."""
     symbols = set()
     
@@ -181,6 +186,7 @@ def list_symbols(runner: StrategyRunner = Depends(get_strategy_runner)) -> List[
 def get_symbol_pnl(
     symbol: str,
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
     client_manager: BinanceClientManager = Depends(get_client_manager),
@@ -369,6 +375,7 @@ def get_symbol_pnl(
 @router.get("/pnl/overview", response_model=List[SymbolPnL])
 def get_pnl_overview(
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
 ) -> List[SymbolPnL]:
@@ -402,6 +409,7 @@ def get_symbol_trades(
     symbol: str,
     side: Optional[str] = Query(default=None, description="Filter by side (BUY/SELL)"),
     strategy_id: Optional[str] = Query(default=None, description="Filter by strategy ID"),
+    current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> List[TradeWithTimestamp]:
     """Get all trades for a specific symbol."""

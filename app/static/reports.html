@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Trading Reports</title>
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/settings.js"></script>
     <style>
         * {
             margin: 0;
@@ -334,6 +336,61 @@
             margin: 15px 0;
         }
 
+        .ohlc-info-box {
+            margin: 0 0 15px 0;
+            padding: 8px 12px;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .ohlc-content {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .ohlc-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            margin-right: 12px;
+        }
+
+        .ohlc-label {
+            color: #666;
+            font-size: 10px;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        .ohlc-value {
+            color: #333;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .ohlc-value.high {
+            color: #4caf50;
+        }
+
+        .ohlc-value.low {
+            color: #f44336;
+        }
+
+        .ohlc-value.ema-fast {
+            color: #2196F3;
+        }
+
+        .ohlc-value.ema-slow {
+            color: #FF9800;
+        }
+
         .trades-table {
             width: 100%;
             border-collapse: collapse;
@@ -485,6 +542,9 @@
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="/static/settings.html">⚙️ Settings</a>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -539,11 +599,34 @@
     </div>
 
     <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Logout function is now global from auth.js
+
         let availableAccounts = {};
 
         async function loadAccounts() {
             try {
-                const response = await fetch('/accounts/list');
+                const response = await authFetch('/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 
@@ -575,15 +658,25 @@
         }
 
         function formatDate(dateString) {
+            // Use UserSettings if available, otherwise fallback to UTC format
+            if (typeof UserSettings !== 'undefined') {
+                return UserSettings.formatDate(dateString);
+            }
+            // Fallback for when settings.js is not loaded
             if (!dateString) return 'N/A';
             try {
                 const date = new Date(dateString);
-                // Check if date is valid
                 if (isNaN(date.getTime())) {
                     console.warn('Invalid date string:', dateString);
                     return 'Invalid Date';
                 }
-                return date.toLocaleString();
+                const year = date.getUTCFullYear();
+                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                const day = String(date.getUTCDate()).padStart(2, '0');
+                const hours = String(date.getUTCHours()).padStart(2, '0');
+                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
             } catch (e) {
                 console.warn('Error formatting date:', dateString, e);
                 return 'Invalid Date';
@@ -605,10 +698,12 @@
             if (symbol) params.append('symbol', symbol.toUpperCase());
             if (startDate) {
                 try {
-                    // datetime-local input provides local time, convert to UTC ISO string
+                    // datetime-local input provides local time string (e.g., "2024-01-15T14:30")
+                    // new Date() interprets this as LOCAL time, then toISOString() converts to UTC
+                    // This ensures the backend receives UTC timestamps matching what Binance expects
                     const localDate = new Date(startDate);
                     if (!isNaN(localDate.getTime())) {
-                        const isoStart = localDate.toISOString();
+                        const isoStart = localDate.toISOString(); // Converts local time to UTC ISO string
                         params.append('start_date', isoStart);
                     } else {
                         console.warn('Invalid start date:', startDate);
@@ -619,10 +714,12 @@
             }
             if (endDate) {
                 try {
-                    // datetime-local input provides local time, convert to UTC ISO string
+                    // datetime-local input provides local time string (e.g., "2024-01-15T14:30")
+                    // new Date() interprets this as LOCAL time, then toISOString() converts to UTC
+                    // This ensures the backend receives UTC timestamps matching what Binance expects
                     const localDate = new Date(endDate);
                     if (!isNaN(localDate.getTime())) {
-                        const isoEnd = localDate.toISOString();
+                        const isoEnd = localDate.toISOString(); // Converts local time to UTC ISO string
                         params.append('end_date', isoEnd);
                     } else {
                         console.warn('Invalid end date:', endDate);
@@ -643,7 +740,7 @@
                 const filters = getFilters();
                 const url = filters ? `/reports/?${filters}` : '/reports/';
 
-                const response = await fetch(url, {
+                const response = await authFetch(url, {
                     method: 'GET',
                     headers: {
                         'Accept': 'application/json',
@@ -788,7 +885,42 @@
                                 <div id="chart-${index}" class="chart-container"></div>
                             </div>
                         ` : '<p style="color: #666; margin: 15px 0;">No chart data available for this strategy.</p>'}
-                        ${strategy.trades && strategy.trades.length > 0 ? createTradesTable(strategy.trades) : '<p>No completed trades yet.</p>'}
+                        ${strategy.trades && strategy.trades.length > 0 ? `
+                            <h3 style="margin-top: 30px; margin-bottom: 10px;">Trade History</h3>
+                            <div id="ohlc-info-${index}" class="ohlc-info-box" style="display: none;">
+                                <div class="ohlc-content">
+                                    <div class="ohlc-item">
+                                        <span class="ohlc-label">Open</span>
+                                        <span class="ohlc-value" id="ohlc-open-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item">
+                                        <span class="ohlc-label">High</span>
+                                        <span class="ohlc-value high" id="ohlc-high-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item">
+                                        <span class="ohlc-label">Low</span>
+                                        <span class="ohlc-value low" id="ohlc-low-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item">
+                                        <span class="ohlc-label">Close</span>
+                                        <span class="ohlc-value" id="ohlc-close-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item">
+                                        <span class="ohlc-label">Change</span>
+                                        <span class="ohlc-value" id="ohlc-change-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item" id="ohlc-ema-fast-item-${index}" style="display: none;">
+                                        <span class="ohlc-label" id="ohlc-ema-fast-label-${index}">EMA</span>
+                                        <span class="ohlc-value ema-fast" id="ohlc-ema-fast-${index}">-</span>
+                                    </div>
+                                    <div class="ohlc-item" id="ohlc-ema-slow-item-${index}" style="display: none;">
+                                        <span class="ohlc-label" id="ohlc-ema-slow-label-${index}">EMA</span>
+                                        <span class="ohlc-value ema-slow" id="ohlc-ema-slow-${index}">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            ${createTradesTable(strategy.trades)}
+                        ` : '<p>No completed trades yet.</p>'}
                     </div>
                 </div>
             `;
@@ -929,6 +1061,11 @@
                     },
                     rightPriceScale: {
                         borderColor: '#cccccc',
+                        // Configure price format to show 5-6 decimal places
+                        scaleMargins: {
+                            top: 0.1,
+                            bottom: 0.1,
+                        },
                     },
                 });
             } catch (e) {
@@ -940,7 +1077,7 @@
             // Store chart instance
             charts[index] = chart;
             
-            // Add candlestick series
+            // Add candlestick series with price format precision
             let candlestickSeries;
             try {
                 candlestickSeries = chart.addCandlestickSeries({
@@ -949,6 +1086,12 @@
                     borderVisible: false,
                     wickUpColor: '#26a69a',
                     wickDownColor: '#ef5350',
+                    // Configure price format to show 5-6 decimal places
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
                 });
             } catch (e) {
                 console.error('Error creating candlestick series:', e);
@@ -1002,6 +1145,48 @@
                 return;
             }
             
+            // Add EMA indicator lines if available
+            let emaFastSeries = null;
+            let emaSlowSeries = null;
+            
+            if (strategy.indicators && strategy.indicators.ema_fast && strategy.indicators.ema_slow) {
+                try {
+                    // EMA Fast line (blue)
+                    emaFastSeries = chart.addLineSeries({
+                        color: '#2196F3',
+                        lineWidth: 2,
+                        title: `EMA Fast (${strategy.indicators.ema_fast_period || 8})`,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        priceFormat: {
+                            type: 'price',
+                            precision: 6,
+                            minMove: 0.000001,
+                        },
+                    });
+                    
+                    // EMA Slow line (orange)
+                    emaSlowSeries = chart.addLineSeries({
+                        color: '#FF9800',
+                        lineWidth: 2,
+                        title: `EMA Slow (${strategy.indicators.ema_slow_period || 21})`,
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        priceFormat: {
+                            type: 'price',
+                            precision: 6,
+                            minMove: 0.000001,
+                        },
+                    });
+                    
+                    // Set EMA data
+                    emaFastSeries.setData(strategy.indicators.ema_fast);
+                    emaSlowSeries.setData(strategy.indicators.ema_slow);
+                } catch (e) {
+                    console.warn('Error adding EMA lines:', e);
+                }
+            }
+            
             try {
                 candlestickSeries.setData(candlestickData);
             } catch (e) {
@@ -1011,6 +1196,152 @@
                 delete charts[index];
                 return;
             }
+            
+            // Get or create fixed OHLC info box above the trades table
+            let ohlcBox = document.getElementById(`ohlc-info-${index}`);
+            if (!ohlcBox) {
+                // If box doesn't exist, create it (should exist from HTML, but fallback)
+                ohlcBox = document.createElement('div');
+                ohlcBox.id = `ohlc-info-${index}`;
+                ohlcBox.className = 'ohlc-info-box';
+                ohlcBox.innerHTML = `
+                    <div class="ohlc-title">Candle Information (Hover over chart)</div>
+                    <div class="ohlc-content">
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Open:</span>
+                            <span class="ohlc-value" id="ohlc-open-${index}">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">High:</span>
+                            <span class="ohlc-value high" id="ohlc-high-${index}">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Low:</span>
+                            <span class="ohlc-value low" id="ohlc-low-${index}">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Close:</span>
+                            <span class="ohlc-value" id="ohlc-close-${index}">-</span>
+                        </div>
+                        <div class="ohlc-item">
+                            <span class="ohlc-label">Change:</span>
+                            <span class="ohlc-value" id="ohlc-change-${index}">-</span>
+                        </div>
+                    </div>
+                `;
+                // Find the trades table and insert before it
+                const strategyCard = document.getElementById(`strategy-${index}`);
+                if (strategyCard) {
+                    const tradesTable = strategyCard.querySelector('.trades-table');
+                    if (tradesTable) {
+                        tradesTable.parentNode.insertBefore(ohlcBox, tradesTable);
+                    }
+                }
+            }
+            
+            // Show OHLC box when chart is visible
+            if (ohlcBox) {
+                ohlcBox.style.display = 'block';
+            }
+            
+            // Subscribe to crosshair movement to update fixed OHLC display
+            chart.subscribeCrosshairMove(param => {
+                if (!ohlcBox) return;
+                
+                if (param.point === undefined || !param.time || param.seriesData.size === 0) {
+                    // Hide or show default when not hovering
+                    return;
+                }
+                
+                const data = param.seriesData.get(candlestickSeries);
+                if (!data || !data.time) {
+                    return;
+                }
+                
+                // Find the candle data for this timestamp
+                const candleTime = data.time;
+                const candle = candlestickData.find(c => c.time === candleTime);
+                
+                if (!candle) {
+                    return;
+                }
+                
+                const { open, high, low, close } = candle;
+                
+                // Calculate change percentage
+                const change = close - open;
+                const changePercent = open !== 0 ? ((change / open) * 100) : 0;
+                const changeColor = change >= 0 ? '#4caf50' : '#f44336';
+                const changeSign = change >= 0 ? '+' : '';
+                
+                // Format prices with 5 decimals (matching the image)
+                const formatPrice = (price) => parseFloat(price).toFixed(5);
+                
+                // Get EMA values for this candle if available
+                let emaFast = null;
+                let emaSlow = null;
+                let emaFastPeriod = null;
+                let emaSlowPeriod = null;
+                
+                if (strategy.indicators && strategy.indicators.ema_fast && strategy.indicators.ema_slow) {
+                    // Find EMA values for this timestamp
+                    const emaFastData = strategy.indicators.ema_fast.find(e => e.time === candleTime);
+                    const emaSlowData = strategy.indicators.ema_slow.find(e => e.time === candleTime);
+                    
+                    if (emaFastData && emaFastData.value !== undefined) {
+                        emaFast = emaFastData.value;
+                    }
+                    if (emaSlowData && emaSlowData.value !== undefined) {
+                        emaSlow = emaSlowData.value;
+                    }
+                    
+                    emaFastPeriod = strategy.indicators.ema_fast_period || 8;
+                    emaSlowPeriod = strategy.indicators.ema_slow_period || 21;
+                }
+                
+                // Update fixed OHLC display
+                const openEl = document.getElementById(`ohlc-open-${index}`);
+                const highEl = document.getElementById(`ohlc-high-${index}`);
+                const lowEl = document.getElementById(`ohlc-low-${index}`);
+                const closeEl = document.getElementById(`ohlc-close-${index}`);
+                const changeEl = document.getElementById(`ohlc-change-${index}`);
+                
+                if (openEl) openEl.textContent = formatPrice(open);
+                if (highEl) highEl.textContent = formatPrice(high);
+                if (lowEl) lowEl.textContent = formatPrice(low);
+                if (closeEl) {
+                    closeEl.textContent = formatPrice(close);
+                    closeEl.style.color = changeColor;
+                }
+                if (changeEl) {
+                    changeEl.textContent = `${changeSign}${changePercent.toFixed(2)}%`;
+                    changeEl.style.color = changeColor;
+                }
+                
+                // Update EMA values if available
+                const emaFastItem = document.getElementById(`ohlc-ema-fast-item-${index}`);
+                const emaFastEl = document.getElementById(`ohlc-ema-fast-${index}`);
+                const emaFastLabel = document.getElementById(`ohlc-ema-fast-label-${index}`);
+                const emaSlowItem = document.getElementById(`ohlc-ema-slow-item-${index}`);
+                const emaSlowEl = document.getElementById(`ohlc-ema-slow-${index}`);
+                const emaSlowLabel = document.getElementById(`ohlc-ema-slow-label-${index}`);
+                
+                if (emaFast !== null && emaFastItem && emaFastEl && emaFastLabel) {
+                    emaFastItem.style.display = 'flex';
+                    emaFastEl.textContent = formatPrice(emaFast);
+                    emaFastLabel.textContent = `EMA(${emaFastPeriod})`;
+                } else if (emaFastItem) {
+                    emaFastItem.style.display = 'none';
+                }
+                
+                if (emaSlow !== null && emaSlowItem && emaSlowEl && emaSlowLabel) {
+                    emaSlowItem.style.display = 'flex';
+                    emaSlowEl.textContent = formatPrice(emaSlow);
+                    emaSlowLabel.textContent = `EMA(${emaSlowPeriod})`;
+                } else if (emaSlowItem) {
+                    emaSlowItem.style.display = 'none';
+                }
+            });
             
             // Add markers for trades with detailed information
             if (strategy.trades && strategy.trades.length > 0) {

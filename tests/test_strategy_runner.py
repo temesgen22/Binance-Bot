@@ -22,25 +22,29 @@ def make_runner():
     
     # Create a minimal client manager for backward compatibility
     # The StrategyRunner will create one automatically if not provided,
-    # but we'll provide it to ensure tests work with new code
-    with patch.dict('os.environ', {
-        'BINANCE_API_KEY': 'test_key',
-        'BINANCE_API_SECRET': 'test_secret',
-    }, clear=False):
-        get_settings.cache_clear()
-        settings = get_settings()
-        manager = BinanceClientManager(settings)
-        manager._clients = {'default': client}
-        manager._accounts = settings.get_binance_accounts()
-        
-        return StrategyRunner(
-            client=client,
-            client_manager=manager,
-            risk=risk,
-            executor=executor,
-            max_concurrent=2,
-            redis_storage=DummyRedis(),
-        )
+    # Accounts are loaded from database, not .env
+    settings = get_settings()
+    manager = BinanceClientManager(settings)
+    
+    # Manually add default account (simulating database-loaded account)
+    from app.core.config import BinanceAccountConfig
+    default_account = BinanceAccountConfig(
+        account_id="default",
+        api_key="test_key",
+        api_secret="test_secret",
+        testnet=True
+    )
+    manager._clients = {'default': client}
+    manager._accounts = {'default': default_account}
+    
+    return StrategyRunner(
+        client=client,
+        client_manager=manager,
+        risk=risk,
+        executor=executor,
+        max_concurrent=2,
+        redis_storage=DummyRedis(),
+    )
 
 
 @pytest.mark.asyncio

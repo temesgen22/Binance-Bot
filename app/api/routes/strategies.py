@@ -1,12 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
+from uuid import UUID
 
 from loguru import logger
 
-from app.api.deps import get_strategy_runner
+from app.api.deps import get_strategy_runner, get_current_user, get_database_service, get_db_session_dependency
 from app.models.order import OrderResponse
 from app.models.strategy import CreateStrategyRequest, StrategySummary, StrategyStats, OverallStats
+from app.models.db_models import User
 from app.services.strategy_runner import StrategyRunner
+from app.services.strategy_service import StrategyService
+from app.core.redis_storage import RedisStorage
+from app.core.config import get_settings
+from sqlalchemy.orm import Session
 from app.core.exceptions import (
     StrategyNotFoundError,
     StrategyAlreadyRunningError,
@@ -22,11 +28,17 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
 @router.get("/list", response_model=list[StrategySummary])
-def list_strategies(runner: StrategyRunner = Depends(get_strategy_runner)) -> list[StrategySummary]:
-    """List all registered strategies.
+def list_strategies(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> list[StrategySummary]:
+    """List all registered strategies for the current user.
     
     Note: Changed from GET / to GET /list to avoid conflict with GUI route at /strategies
     """
+    # If runner has StrategyService, it will automatically filter by user_id
+    # Otherwise, return all strategies (backward compatibility)
     return runner.list_strategies()
 
 
@@ -46,7 +58,10 @@ def get_strategy(strategy_id: str, runner: StrategyRunner = Depends(get_strategy
 
 @router.post("/", response_model=StrategySummary, status_code=status.HTTP_201_CREATED)
 async def register_strategy(
-    payload: CreateStrategyRequest, runner: StrategyRunner = Depends(get_strategy_runner)
+    payload: CreateStrategyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+    runner: StrategyRunner = Depends(get_strategy_runner)
 ) -> StrategySummary:
     """Register a new trading strategy.
     
@@ -55,12 +70,31 @@ async def register_strategy(
         ValidationError: If request data is invalid
     """
     try:
-        summary = runner.register(payload)
+        # Get account UUID from account_id
+        account_id = payload.account_id.lower() if payload.account_id else "default"
+        db_service = get_database_service(db)
+        
+        # Find account in database
+        account_uuid = None
+        if runner.strategy_service and runner.user_id:
+            # Multi-user mode: get account from database
+            accounts = db_service.get_user_accounts(current_user.id)
+            account = next((acc for acc in accounts if acc.account_id == account_id), None)
+            if not account:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Account '{account_id}' not found for user"
+                )
+            account_uuid = account.id
+        
+        summary = runner.register(payload, account_uuid=account_uuid)
         if payload.auto_start:
             await runner.start(summary.id)
         return summary
     except (InvalidLeverageError, ValidationError):
         # These will be handled by exception handlers
+        raise
+    except HTTPException:
         raise
     except Exception as exc:
         logger.exception(f"Unexpected error registering strategy: {exc}")
@@ -123,3 +157,22 @@ def get_overall_stats(runner: StrategyRunner = Depends(get_strategy_runner)) -> 
     """Get overall statistics across all strategies."""
     return runner.calculate_overall_stats()
 
+
+@router.delete("/{strategy_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_strategy(
+    strategy_id: str,
+    current_user: User = Depends(get_current_user),
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> None:
+    """Delete a strategy permanently.
+    
+    This endpoint will:
+    1. Check if strategy is running and stop it if necessary
+    2. Delete from database (if using StrategyService)
+    3. Delete from Redis
+    4. Remove from in-memory cache
+    
+    Raises:
+        StrategyNotFoundError: If strategy does not exist
+    """
+    await runner.delete(strategy_id)

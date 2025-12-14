@@ -53,18 +53,19 @@ class EmaScalpingStrategy(Strategy):
         self.stop_loss_pct = float(context.params.get("stop_loss_pct", 0.002))
         
         # Short trading enabled (default: True)
-        self.enable_short = bool(context.params.get("enable_short", True))
+        self.enable_short = self.parse_bool_param(context.params.get("enable_short"), default=True)
         
         # Advanced filters
         self.min_ema_separation = float(context.params.get("min_ema_separation", 0.0002))  # 0.02% of price
-        self.enable_htf_bias = bool(context.params.get("enable_htf_bias", True))  # Higher timeframe bias
+        self.enable_htf_bias = self.parse_bool_param(context.params.get("enable_htf_bias"), default=True)  # Higher timeframe bias
         self.cooldown_candles = int(context.params.get("cooldown_candles", 2))  # Candles to wait after exit
-        self.enable_ema_cross_exit = bool(context.params.get("enable_ema_cross_exit", True))  # Enable EMA cross exits
+        self.enable_ema_cross_exit = self.parse_bool_param(context.params.get("enable_ema_cross_exit"), default=True)  # Enable EMA cross exits
         
         # Kline interval (default 1 minute for scalping)
         self.interval = str(context.params.get("kline_interval", "1m"))
-        # Validate interval format
-        valid_intervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
+        # Validate interval format (includes second-based intervals for high-frequency trading)
+        valid_intervals = ["1s", "3s", "5s", "10s", "30s",  # Second-based intervals
+                          "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
         if self.interval not in valid_intervals:
             logger.warning(f"Invalid kline interval {self.interval}, using 1m")
             self.interval = "1m"
@@ -87,7 +88,7 @@ class EmaScalpingStrategy(Strategy):
         self.cooldown_left: int = 0  # Candles remaining in cooldown
         
         # Dynamic trailing stop (optional)
-        self.trailing_stop_enabled = bool(context.params.get("trailing_stop_enabled", False))
+        self.trailing_stop_enabled = self.parse_bool_param(context.params.get("trailing_stop_enabled"), default=False)
         self.trailing_stop: Optional[TrailingStopManager] = None
     
     def sync_position_state(
@@ -700,25 +701,51 @@ class EmaScalpingStrategy(Strategy):
                                 interval="5m",
                                 limit=self.slow_period + 5
                             )
-                            if htf_klines and len(htf_klines) >= self.slow_period:
-                                htf_closes = [float(k[4]) for k in htf_klines[:-1]]  # Exclude forming candle
-                                if len(htf_closes) >= self.slow_period:
-                                    htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
-                                    htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
-                                    
-                                    # Only short if 5m trend is down
-                                    if htf_fast_ema >= htf_slow_ema:
-                                        logger.debug(
-                                            f"[{self.context.id}] Short blocked: 5m trend is up "
-                                            f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
-                                        )
-                                        # Early return: state will be updated in finally block
-                                        return StrategySignal(
-                                            action="HOLD",
-                                            symbol=self.context.symbol,
-                                            confidence=0.1,
-                                            price=live_price
-                                        )
+                            # BUG FIX: Fail-closed behavior - block short if HTF data unavailable when bias is enabled
+                            # This prevents unwanted shorts when HTF trend check cannot be performed
+                            if not htf_klines or len(htf_klines) < self.slow_period + 1:
+                                logger.warning(
+                                    f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient 5m data "
+                                    f"(got {len(htf_klines) if htf_klines else 0} klines, need {self.slow_period + 1})"
+                                )
+                                # Early return: state will be updated in finally block
+                                return StrategySignal(
+                                    action="HOLD",
+                                    symbol=self.context.symbol,
+                                    confidence=0.1,
+                                    price=live_price
+                                )
+                            
+                            htf_closes = [float(k[4]) for k in htf_klines[:-1]]  # Exclude forming candle
+                            if len(htf_closes) >= self.slow_period:
+                                htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
+                                htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
+                                
+                                # Only short if 5m trend is down
+                                if htf_fast_ema >= htf_slow_ema:
+                                    logger.debug(
+                                        f"[{self.context.id}] Short blocked: 5m trend is up "
+                                        f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
+                                    )
+                                    # Early return: state will be updated in finally block
+                                    return StrategySignal(
+                                        action="HOLD",
+                                        symbol=self.context.symbol,
+                                        confidence=0.1,
+                                        price=live_price
+                                    )
+                            else:
+                                # Insufficient closed candles for HTF EMA calculation
+                                logger.warning(
+                                    f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient closed 5m candles "
+                                    f"(got {len(htf_closes)} closed, need {self.slow_period})"
+                                )
+                                return StrategySignal(
+                                    action="HOLD",
+                                    symbol=self.context.symbol,
+                                    confidence=0.1,
+                                    price=live_price
+                                )
                         
                         logger.info(
                             f"[{self.context.id}] Death Cross (enter short): fast {fast_ema:.8f} < slow {slow_ema:.8f} "

@@ -51,6 +51,7 @@ class StrategyReport(BaseModel):
     net_pnl: float = Field(description="Net profit/loss (total_profit - total_loss)")
     trades: List[TradeReport] = Field(default_factory=list, description="List of detailed trades")
     klines: Optional[List[List]] = Field(default=None, description="Historical candlestick data for charting")
+    indicators: Optional[dict] = Field(default=None, description="Indicator data (EMA fast/slow) for charting")
 
 
 class TradingReport(BaseModel):

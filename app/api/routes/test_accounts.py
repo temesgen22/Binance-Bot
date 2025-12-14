@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.core.my_binance_client import BinanceClient
 from app.core.binance_client_manager import BinanceClientManager
@@ -14,7 +15,8 @@ from app.core.exceptions import (
     BinanceNetworkError,
     BinanceAuthenticationError,
 )
-from app.api.deps import get_client_manager
+from app.api.deps import get_client_manager, get_current_user, get_db_session_dependency
+from app.models.db_models import User
 
 
 router = APIRouter(tags=["test-accounts"])
@@ -227,16 +229,19 @@ async def quick_test(
 @router.post("/api/test-account/{account_id}")
 async def test_existing_account(
     account_id: str,
-    client_manager: BinanceClientManager = Depends(get_client_manager)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency)
 ) -> TestAccountResponse:
-    """Test an existing account from .env file by account_id.
+    """Test an existing account from database by account_id.
     
-    This endpoint retrieves the account credentials from the loaded configuration
+    This endpoint retrieves the account credentials from the database
     and tests them. Secrets are never exposed in the response.
     
     Args:
-        account_id: The account ID to test (e.g., "default", "1", "main")
-        client_manager: BinanceClientManager dependency
+        account_id: The account ID to test
+        request: FastAPI request object
+        current_user: Current authenticated user
+        db: Database session
         
     Returns:
         Test results with detailed status information
@@ -244,16 +249,27 @@ async def test_existing_account(
     Raises:
         HTTPException: If account not found
     """
-    # Get account configuration
-    accounts = client_manager.list_accounts()
+    from app.services.account_service import AccountService
+    from app.core.redis_storage import RedisStorage
+    from app.core.config import get_settings
     
-    if account_id not in accounts:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Account '{account_id}' not found. Available accounts: {list(accounts.keys())}"
+    # Get account from database
+    settings = get_settings()
+    redis_storage = None
+    if settings.redis_enabled:
+        redis_storage = RedisStorage(
+            redis_url=settings.redis_url,
+            enabled=settings.redis_enabled
         )
     
-    account_config = accounts[account_id]
+    account_service = AccountService(db, redis_storage)
+    account_config = account_service.get_account(current_user.id, account_id)
+    
+    if not account_config:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Account '{account_id}' not found for current user"
+        )
     
     # Create test request using the account's credentials
     request = TestAccountRequest(

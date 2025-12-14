@@ -131,6 +131,33 @@ echo '🔨 Rebuilding Docker image with latest code...'
 echo '🚀 Starting services (will rebuild if needed)...'
 docker-compose up -d --build
 
+# Wait for PostgreSQL to be ready
+echo ''
+echo '⏳ Waiting for PostgreSQL to be ready...'
+sleep 5
+
+# Run database migrations
+echo ''
+echo '🔄 Running database migrations...'
+if docker exec binance-bot-api alembic upgrade head 2>/dev/null; then
+    echo '✅ Database migrations completed successfully'
+else
+    echo '⚠️  Warning: Database migrations failed or alembic not available in container'
+    echo '   You may need to run migrations manually:'
+    echo '   docker exec binance-bot-api alembic upgrade head'
+fi
+
+# Seed default roles (if needed)
+echo ''
+echo '🌱 Seeding default roles...'
+if docker exec binance-bot-api python scripts/seed_default_roles.py 2>/dev/null; then
+    echo '✅ Default roles seeded successfully'
+else
+    echo '⚠️  Warning: Role seeding failed or script not available'
+    echo '   You may need to run manually:'
+    echo '   docker exec binance-bot-api python scripts/seed_default_roles.py'
+fi
+
 # Verify Redis volume still exists
 echo '✅ Verifying Redis volume after restart...'
 docker volume ls | grep redis-data && echo '✅ Redis volume preserved' || echo '⚠️  Warning: Redis volume not found'

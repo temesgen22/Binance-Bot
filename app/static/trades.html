@@ -426,6 +426,8 @@
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -540,14 +542,23 @@
         </div>
     </div>
 
+    <script src="/static/auth.js"></script>
     <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
         let autoRefreshInterval = null;
         let allSymbols = [];
         let availableAccounts = {};
 
         async function loadAccounts() {
             try {
-                const response = await fetch('/accounts/list');
+                const response = await authFetch('/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 
@@ -570,7 +581,7 @@
 
         async function loadSymbols() {
             try {
-                const response = await fetch('/trades/symbols');
+                const response = await authFetch('/trades/symbols');
                 if (!response.ok) throw new Error('Failed to load symbols');
                 allSymbols = await response.json();
                 
@@ -594,7 +605,7 @@
                 if (accountId) {
                     url += `?account_id=${encodeURIComponent(accountId)}`;
                 }
-                const response = await fetch(url);
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load PnL data');
                 const pnlData = await response.json();
                 
@@ -741,7 +752,7 @@
                 const cacheBuster = `_t=${Date.now()}`;
                 const finalUrl = url.includes('?') ? `${url}&${cacheBuster}` : `${url}?${cacheBuster}`;
                 
-                const response = await fetch(finalUrl, {
+                const response = await authFetch(finalUrl, {
                     method: 'GET',
                     headers: {
                         'Accept': 'application/json',
@@ -902,8 +913,26 @@
             return sign + '$' + value.toFixed(2);
         }
 
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Logout function is now global from auth.js
+
         // Initialize on page load
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
+            if (Auth.isAuthenticated()) {
+                await loadUserInfo();
+            }
             loadAccounts();
             loadSymbols();
             loadData();

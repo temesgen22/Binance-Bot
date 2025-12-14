@@ -28,6 +28,11 @@ from app.services.notifier import NotificationService
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from uuid import UUID
+    from app.services.strategy_service import StrategyService
+    from app.services.trade_service import TradeService
 
 
 class StrategyRegistry:
@@ -72,6 +77,8 @@ class StrategyRunner:
         max_concurrent: int = 3,
         redis_storage: Optional[RedisStorage] = None,
         notification_service: Optional[NotificationService] = None,
+        strategy_service: Optional["StrategyService"] = None,
+        user_id: Optional["UUID"] = None,
     ) -> None:
         """Initialize StrategyRunner.
         
@@ -83,6 +90,8 @@ class StrategyRunner:
             max_concurrent: Maximum concurrent strategies
             redis_storage: Redis storage for persistence
             notification_service: Notification service
+            strategy_service: StrategyService for database persistence (optional, for multi-user mode)
+            user_id: User ID for multi-user mode (required if strategy_service is provided)
         """
         # Support both single client (backward compatibility) and client manager (multi-account)
         if client_manager:
@@ -98,21 +107,17 @@ class StrategyRunner:
             # CRITICAL: Replace all clients with just the provided client
             # This ensures mock clients in tests are always used instead of real clients
             self.client_manager._clients = {"default": client}
-            # Also update accounts to only include default (for consistency)
-            accounts = settings.get_binance_accounts()
-            if "default" in accounts:
-                self.client_manager._accounts = {"default": accounts["default"]}
-            else:
-                from app.core.config import BinanceAccountConfig
-                self.client_manager._accounts = {
-                    "default": BinanceAccountConfig(
-                        account_id="default",
-                        api_key="mock",
-                        api_secret="mock",
-                        testnet=True,
-                        name="Mock Account"
-                    )
-                }
+            # For test mode with mock client, create a mock account config
+            from app.core.config import BinanceAccountConfig
+            self.client_manager._accounts = {
+                "default": BinanceAccountConfig(
+                    account_id="default",
+                    api_key="mock",
+                    api_secret="mock",
+                    testnet=True,
+                    name="Mock Account"
+                )
+            }
         else:
             raise ValueError("Either client or client_manager must be provided")
         
@@ -125,6 +130,9 @@ class StrategyRunner:
         self.max_concurrent = max_concurrent
         self.redis = redis_storage
         self.notifications = notification_service
+        self.strategy_service = strategy_service
+        self.user_id = user_id
+        self.trade_service: Optional["TradeService"] = None  # Will be set by dependency injection
         self._strategies: Dict[str, StrategySummary] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
@@ -132,8 +140,17 @@ class StrategyRunner:
         # Track if we're using a directly provided client (for tests with mock clients)
         self._has_direct_client = client is not None and client_manager is None
         
-        # Load strategies from Redis on startup
-        self._load_from_redis()
+        # Validate: if strategy_service is provided, user_id must be provided
+        if strategy_service is not None and user_id is None:
+            raise ValueError("user_id must be provided when strategy_service is provided")
+        
+        # Load strategies on startup
+        if strategy_service and user_id:
+            # Multi-user mode: load from database via StrategyService
+            self._load_from_database()
+        else:
+            # Single-user mode: load from Redis (backward compatibility)
+            self._load_from_redis()
     
     def _get_account_client(self, account_id: str) -> BinanceClient:
         """Get client for an account, preferring directly provided client for default account.
@@ -222,7 +239,16 @@ class StrategyRunner:
         
         return error_details
 
-    def register(self, payload: CreateStrategyRequest) -> StrategySummary:
+    def register(self, payload: CreateStrategyRequest, account_uuid: Optional["UUID"] = None) -> StrategySummary:
+        """Register a new strategy.
+        
+        Args:
+            payload: Strategy creation request
+            account_uuid: UUID of the account in database (required for multi-user mode)
+        
+        Returns:
+            StrategySummary of the created strategy
+        """
         # Validate leverage is explicitly provided (Pydantic should catch this, but double-check)
         if payload.leverage is None:
             raise InvalidLeverageError(
@@ -237,34 +263,81 @@ class StrategyRunner:
         
         # Validate account_id exists
         account_id = payload.account_id.lower() if payload.account_id else "default"
+        
+        # Load accounts from database if we have a user_id and they're not already loaded
+        if self.user_id and not self.client_manager.account_exists(account_id):
+            from app.services.account_service import AccountService
+            from app.core.redis_storage import RedisStorage
+            from app.core.config import get_settings
+            
+            settings = get_settings()
+            redis_storage = None
+            if settings.redis_enabled:
+                redis_storage = RedisStorage(
+                    redis_url=settings.redis_url,
+                    enabled=settings.redis_enabled
+                )
+            
+            # Get database session from strategy_service if available
+            if self.strategy_service:
+                # Access db through db_service
+                db = self.strategy_service.db_service.db
+                account_service = AccountService(db, redis_storage)
+                accounts = account_service.list_accounts(self.user_id)
+                
+                # Load accounts into client manager
+                for account_config in accounts:
+                    self.client_manager.add_client(account_config.account_id, account_config)
+        
+        # Check again after loading
         if not self.client_manager.account_exists(account_id):
             available_accounts = list(self.client_manager.list_accounts().keys())
             raise ValueError(
                 f"Binance account '{account_id}' not found. "
-                f"Available accounts: {', '.join(available_accounts)}"
+                f"Available accounts: {', '.join(available_accounts) if available_accounts else 'none'}"
             )
         
         strategy_id = str(uuid.uuid4())
-        summary = StrategySummary(
-            id=strategy_id,
-            name=payload.name,
-            symbol=payload.symbol,
-            strategy_type=payload.strategy_type,
-            status=StrategyState.stopped,
-            leverage=payload.leverage,
-            risk_per_trade=payload.risk_per_trade,
-            fixed_amount=payload.fixed_amount,
-            params=payload.params,
-            created_at=datetime.now(timezone.utc),
-            account_id=account_id,
-            last_signal=None,
-            entry_price=None,
-            current_price=None,
-            position_size=None,
-            unrealized_pnl=None,
-            meta={},
-        )
-        self._strategies[strategy_id] = summary
+        
+        # Multi-user mode: use StrategyService to save to database
+        if self.strategy_service and self.user_id and account_uuid:
+            summary = self.strategy_service.create_strategy(
+                user_id=self.user_id,
+                strategy_id=strategy_id,
+                name=payload.name,
+                symbol=payload.symbol,
+                strategy_type=payload.strategy_type.value if isinstance(payload.strategy_type, StrategyType) else payload.strategy_type,
+                account_id=account_uuid,
+                leverage=payload.leverage,
+                risk_per_trade=payload.risk_per_trade,
+                params=payload.params.model_dump() if hasattr(payload.params, 'model_dump') else payload.params,
+                fixed_amount=payload.fixed_amount,
+                max_positions=1
+            )
+            # Also keep in memory for fast access
+            self._strategies[strategy_id] = summary
+        else:
+            # Single-user mode: save to Redis only (backward compatibility)
+            summary = StrategySummary(
+                id=strategy_id,
+                name=payload.name,
+                symbol=payload.symbol,
+                strategy_type=payload.strategy_type,
+                status=StrategyState.stopped,
+                leverage=payload.leverage,
+                risk_per_trade=payload.risk_per_trade,
+                fixed_amount=payload.fixed_amount,
+                params=payload.params,
+                created_at=datetime.now(timezone.utc),
+                account_id=account_id,
+                last_signal=None,
+                entry_price=None,
+                current_price=None,
+                position_size=None,
+                unrealized_pnl=None,
+                meta={},
+            )
+            self._strategies[strategy_id] = summary
         self._save_to_redis(strategy_id, summary)
         
         account_name = self.client_manager.get_account_config(account_id)
@@ -362,6 +435,18 @@ class StrategyRunner:
         summary.status = StrategyState.running
         self._save_to_redis(strategy_id, summary)
         
+        # Update database if strategy_service is available (multi-user mode)
+        if self.strategy_service and self.user_id:
+            try:
+                self.strategy_service.update_strategy(
+                    user_id=self.user_id,
+                    strategy_id=strategy_id,
+                    status=StrategyState.running.value
+                )
+                logger.debug(f"Updated strategy {strategy_id} status to 'running' in database")
+            except Exception as e:
+                logger.warning(f"Failed to update strategy status in database: {e}")
+        
         # Log strategy start
         account_name = self.client_manager.get_account_config(account_id)
         account_display = account_name.name if account_name else account_id
@@ -413,6 +498,22 @@ class StrategyRunner:
                     if strategy_id not in self._trades:
                         self._trades[strategy_id] = []
                     self._trades[strategy_id].append(close_order)
+                    
+                    # Save to database if TradeService is available (multi-user mode)
+                    if self.trade_service and self.user_id:
+                        try:
+                            # Get strategy UUID from database
+                            if self.strategy_service:
+                                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                                if db_strategy:
+                                    self.trade_service.save_trade(
+                                        user_id=self.user_id,
+                                        strategy_id=db_strategy.id,
+                                        order=close_order
+                                    )
+                                    logger.debug(f"Saved closing trade {close_order.order_id} to database")
+                        except Exception as e:
+                            logger.warning(f"Failed to save closing trade to database: {e}")
         except Exception as exc:
             logger.warning(f"Error closing position for strategy {strategy_id}: {exc}")
             # Continue with stopping even if position close fails
@@ -423,6 +524,18 @@ class StrategyRunner:
             task.cancel()
         summary.status = StrategyState.stopped
         self._save_to_redis(strategy_id, summary)
+        
+        # Update database if strategy_service is available (multi-user mode)
+        if self.strategy_service and self.user_id:
+            try:
+                self.strategy_service.update_strategy(
+                    user_id=self.user_id,
+                    strategy_id=strategy_id,
+                    status=StrategyState.stopped.value
+                )
+                logger.debug(f"Updated strategy {strategy_id} status to 'stopped' in database")
+            except Exception as e:
+                logger.warning(f"Failed to update strategy status in database: {e}")
         
         # Get final PnL before sending notification
         final_pnl = None
@@ -452,11 +565,103 @@ class StrategyRunner:
         
         return summary
 
+    async def delete(self, strategy_id: str) -> None:
+        """Delete a strategy permanently.
+        
+        This method will:
+        1. Check if strategy is running and stop it if necessary
+        2. Delete from database (if using StrategyService)
+        3. Delete from Redis
+        4. Remove from in-memory cache
+        
+        Args:
+            strategy_id: Strategy ID to delete
+            
+        Raises:
+            StrategyNotFoundError: If strategy does not exist
+        """
+        if strategy_id not in self._strategies:
+            raise StrategyNotFoundError(strategy_id)
+        
+        summary = self._strategies[strategy_id]
+        
+        # Step 1: Stop strategy if it's running
+        if summary.status == StrategyState.running:
+            logger.info(f"Stopping strategy {strategy_id} before deletion...")
+            try:
+                await self.stop(strategy_id)
+            except Exception as exc:
+                logger.warning(f"Error stopping strategy {strategy_id} before deletion: {exc}")
+                # Continue with deletion even if stop fails
+        
+        # Step 2: Delete from database (if using StrategyService)
+        if self.strategy_service and self.user_id:
+            try:
+                success = self.strategy_service.delete_strategy(self.user_id, strategy_id)
+                if not success:
+                    logger.warning(f"Failed to delete strategy {strategy_id} from database")
+            except Exception as exc:
+                logger.warning(f"Error deleting strategy {strategy_id} from database: {exc}")
+        
+        # Step 3: Delete from Redis
+        if self.redis and self.redis.enabled:
+            try:
+                self.redis.delete_strategy(strategy_id)
+                self.redis.delete_trades(strategy_id)
+            except Exception as exc:
+                logger.warning(f"Error deleting strategy {strategy_id} from Redis: {exc}")
+        
+        # Step 4: Remove from in-memory cache
+        self._strategies.pop(strategy_id, None)
+        self._trades.pop(strategy_id, None)
+        self._tasks.pop(strategy_id, None)  # Should already be removed by stop(), but just in case
+        
+        logger.info(f"✅ Strategy {strategy_id} ({summary.name}) deleted permanently")
+
     def list_strategies(self) -> list[StrategySummary]:
+        """List all strategies.
+        
+        In multi-user mode, loads from database via StrategyService.
+        In single-user mode, returns in-memory strategies.
+        """
+        # Multi-user mode: load from database if available
+        if self.strategy_service and self.user_id:
+            try:
+                strategies = self.strategy_service.list_strategies(self.user_id)
+                # Update in-memory cache
+                for summary in strategies:
+                    self._strategies[summary.id] = summary
+                return strategies
+            except Exception as exc:
+                logger.warning(f"Failed to load strategies from database: {exc}, falling back to in-memory")
+        
+        # Single-user mode or fallback: return in-memory strategies
         return list(self._strategies.values())
     
     def get_trades(self, strategy_id: str) -> List[OrderResponse]:
-        """Get all executed trades for a strategy."""
+        """Get all executed trades for a strategy.
+        
+        In multi-user mode, loads from database via TradeService.
+        In single-user mode, returns in-memory trades.
+        """
+        # Multi-user mode: load from database if available
+        if self.trade_service and self.user_id and self.strategy_service:
+            try:
+                # Get strategy UUID from database
+                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                if db_strategy:
+                    trades = self.trade_service.get_strategy_trades(
+                        user_id=self.user_id,
+                        strategy_id=db_strategy.id,
+                        limit=1000
+                    )
+                    # Update in-memory cache
+                    self._trades[strategy_id] = trades
+                    return trades
+            except Exception as e:
+                logger.warning(f"Failed to load trades from database: {e}, falling back to in-memory")
+        
+        # Single-user mode or fallback: return in-memory trades
         return self._trades.get(strategy_id, [])
 
     def calculate_strategy_stats(self, strategy_id: str) -> StrategyStats:
@@ -742,7 +947,8 @@ class StrategyRunner:
                     f"[{summary.id}] Signal: {signal.action} | "
                     f"Symbol: {signal.symbol} | "
                     f"Price: {signal.price} | "
-                    f"Confidence: {signal.confidence}"
+                    f"Confidence: {signal.confidence} | "
+                    f"Exit Reason: {signal.exit_reason or 'N/A'}"
                 )
                 
                 # 4) Update current price for UI/stats (not critical to logic)
@@ -821,6 +1027,29 @@ class StrategyRunner:
             # This prevents dead tasks from counting toward concurrent limit
             self._tasks.pop(summary.id, None)
             logger.debug(f"Removed strategy {summary.id} from active tasks")
+    
+    def _load_from_database(self) -> None:
+        """Load all strategies from database via StrategyService (multi-user mode)."""
+        if not self.strategy_service or not self.user_id:
+            return
+        
+        try:
+            strategies = self.strategy_service.list_strategies(self.user_id)
+            logger.info(f"Loading {len(strategies)} strategies from database for user {self.user_id}")
+            
+            for summary in strategies:
+                self._strategies[summary.id] = summary
+                # Also cache in Redis for fast access
+                if self.redis:
+                    self._save_to_redis(summary.id, summary)
+            
+            logger.info(
+                f"Successfully loaded {len(strategies)} strategies from database. "
+                f"Strategies in memory: {len(self._strategies)}, "
+                f"Running strategies: {len([s for s in self._strategies.values() if s.status == StrategyState.running])}"
+            )
+        except Exception as exc:
+            logger.error(f"Failed to load strategies from database: {exc}", exc_info=True)
     
     def _load_from_redis(self) -> None:
         """Load all strategies and trades from Redis on startup."""
@@ -933,7 +1162,11 @@ class StrategyRunner:
         )
         
         if signal.action == "HOLD":
-            logger.debug(f"[{summary.id}] HOLD signal - skipping order execution")
+            logger.debug(
+                f"[{summary.id}] HOLD signal - skipping order execution | "
+                f"Position: {summary.position_side or 'FLAT'} | "
+                f"Price: {signal.price}"
+            )
             return
         
         # CRITICAL: Leverage in Binance is PER SYMBOL, not per strategy.
@@ -1085,9 +1318,26 @@ class StrategyRunner:
                 )
                 self._trades[summary.id].append(order_with_exit_reason)
                 
+                # Save to database if TradeService is available (multi-user mode)
+                if self.trade_service and self.user_id:
+                    try:
+                        # Get strategy UUID from database
+                        if self.strategy_service:
+                            db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
+                            if db_strategy:
+                                self.trade_service.save_trade(
+                                    user_id=self.user_id,
+                                    strategy_id=db_strategy.id,
+                                    order=order_with_exit_reason
+                                )
+                                logger.debug(f"Saved trade {order_with_exit_reason.order_id} to database")
+                    except Exception as e:
+                        logger.warning(f"Failed to save trade to database: {e}")
+                
                 # Log trade tracking with position direction and exit reason
                 trades_count = len(self._trades[summary.id])
                 redis_status = "enabled" if (self.redis and self.redis.enabled) else "disabled"
+                db_status = "enabled" if (self.trade_service and self.user_id) else "disabled"
                 exit_reason = signal.exit_reason or "N/A"
                 position_direction = summary.position_side or "FLAT"
                 logger.info(
@@ -1095,7 +1345,7 @@ class StrategyRunner:
                     f"order_id={order_response.order_id} status={order_response.status} "
                     f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f} "
                     f"(position: {position_direction}, exit_reason: {exit_reason}, "
-                    f"total trades: {trades_count}, Redis: {redis_status})"
+                    f"total trades: {trades_count}, Redis: {redis_status}, DB: {db_status})"
                 )
                 
                 # Optionally save to Redis if enabled (for persistence across server restarts)

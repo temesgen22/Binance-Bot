@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Market Analyzer</title>
+    <script src="/static/auth.js"></script>
     <style>
         * {
             margin: 0;
@@ -368,6 +369,8 @@
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -418,6 +421,29 @@
     </div>
 
     <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Logout function is now global from auth.js
+
         async function analyzeMarket() {
             const symbol = document.getElementById('symbol').value.trim().toUpperCase();
             const interval = document.getElementById('interval').value;
@@ -442,7 +468,7 @@
                     lookback_period: lookback.toString()
                 });
 
-                const response = await fetch(`/market-analyzer/analyze?${params}`);
+                const response = await authFetch(`/market-analyzer/analyze?${params}`);
                 const data = await response.json();
 
                 if (!response.ok) {

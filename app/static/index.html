@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Log Viewer</title>
+    <script src="/static/auth.js"></script>
     <style>
         * {
             margin: 0;
@@ -336,8 +337,10 @@
                 <a href="/backtesting" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🔬 Strategy Backtesting</a>
                 <a href="/reports" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📊 Trading Reports</a>
                 <a href="/test-accounts/" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🔐 Test Accounts</a>
-                <a href="/register" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🚀 Register Strategy</a>
+                <a href="/strategy-register" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🚀 Register Strategy</a>
                 <a href="/docs" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px; color: white;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px; color: white; text-decoration: none;">🚪 Logout</a>
             </div>
         </div>
 
@@ -432,7 +435,15 @@
     </div>
 
     <script>
-        const API_BASE = window.location.origin;
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
+        const API_BASE = '';
         let autoRefreshInterval = null;
         let currentLogs = [];
 
@@ -639,8 +650,24 @@
             document.getElementById('dateFrom').value = formatDateTimeLocal(weekAgo);
         }
 
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
         // Initialize on page load
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
+            if (Auth.isAuthenticated()) {
+                await loadUserInfo();
+            }
             setDefaultDates();
             loadSymbols();
             loadLogs();

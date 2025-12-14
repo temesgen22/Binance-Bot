@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Settings</title>
+    <script src="/static/auth.js"></script>
+    <script src="/static/settings.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.2);
+            transition: background 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .settings-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .settings-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .setting-item {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .setting-item label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .setting-item .description {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .setting-item select,
+        .setting-item input[type="text"],
+        .setting-item input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .setting-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .preview {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .preview-label {
+            font-size: 0.8em;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border: 1px solid #c3e6cb;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚙️ Settings</h1>
+            <p>Configure your preferences</p>
+            <div class="nav-links">
+                <a href="/static/index.html">📊 Dashboard</a>
+                <a href="/static/strategies.html">📈 Strategies</a>
+                <a href="/static/trades.html">💼 Trades</a>
+                <a href="/static/reports.html">📋 Reports</a>
+                <a href="/static/backtesting.html">🧪 Backtesting</a>
+                <a href="/static/settings.html">⚙️ Settings</a>
+                <a href="#" onclick="logout(); return false;">🚪 Logout</a>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="success-message" id="successMessage">
+                Settings saved successfully!
+            </div>
+
+            <form id="settingsForm">
+                <!-- Time & Date Settings -->
+                <div class="settings-section">
+                    <h2>🕐 Time & Date Format</h2>
+                    
+                    <div class="setting-item">
+                        <label for="timeFormat">Time Format</label>
+                        <div class="description">
+                            Choose whether to display times in UTC or your local timezone.<br>
+                            <strong>Note:</strong> Charts always use UTC timestamps (required by chart library), but trade history tables will use your selected format.
+                        </div>
+                        <select id="timeFormat" name="timeFormat">
+                            <option value="utc">UTC (Coordinated Universal Time)</option>
+                            <option value="local">Local Time</option>
+                        </select>
+                        <div class="preview">
+                            <div class="preview-label">Preview (Trade History Table):</div>
+                            <span id="timeFormatPreview"></span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label for="dateFormat">Date Format</label>
+                        <div class="description">Choose how dates are displayed</div>
+                        <select id="dateFormat" name="dateFormat">
+                            <option value="iso">ISO (YYYY-MM-DD HH:MM:SS)</option>
+                            <option value="us">US (MM/DD/YYYY HH:MM:SS)</option>
+                            <option value="european">European (DD/MM/YYYY HH:MM:SS)</option>
+                            <option value="compact">Compact (YYYYMMDD-HHMMSS)</option>
+                        </select>
+                        <div class="preview">
+                            <div class="preview-label">Preview:</div>
+                            <span id="dateFormatPreview"></span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label>
+                            <input type="checkbox" id="showTimezone" name="showTimezone">
+                            Show Timezone Label
+                        </label>
+                        <div class="description">Display timezone abbreviation (UTC, UTC+05:30, etc.) after the time</div>
+                    </div>
+                </div>
+
+                <!-- Display Settings -->
+                <div class="settings-section">
+                    <h2>📊 Display Settings</h2>
+                    
+                    <div class="setting-item">
+                        <label for="decimalPlaces">Decimal Places</label>
+                        <div class="description">Number of decimal places for prices and amounts</div>
+                        <input type="number" id="decimalPlaces" name="decimalPlaces" min="2" max="8" value="4">
+                    </div>
+
+                    <div class="setting-item">
+                        <label for="currencySymbol">Currency Symbol</label>
+                        <div class="description">Symbol used for currency display</div>
+                        <input type="text" id="currencySymbol" name="currencySymbol" maxlength="5" value="$">
+                    </div>
+                </div>
+
+                <!-- Auto-Refresh Settings -->
+                <div class="settings-section">
+                    <h2>🔄 Auto-Refresh</h2>
+                    
+                    <div class="setting-item">
+                        <label>
+                            <input type="checkbox" id="autoRefresh" name="autoRefresh">
+                            Enable Auto-Refresh
+                        </label>
+                        <div class="description">Automatically refresh data on dashboard and reports pages</div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label for="refreshInterval">Refresh Interval (seconds)</label>
+                        <div class="description">How often to refresh data when auto-refresh is enabled</div>
+                        <input type="number" id="refreshInterval" name="refreshInterval" min="5" max="300" value="30">
+                    </div>
+                </div>
+
+                <div class="buttons">
+                    <button type="submit" class="btn btn-primary">💾 Save Settings</button>
+                    <button type="button" class="btn btn-secondary" onclick="resetSettings()">🔄 Reset to Defaults</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication
+        if (typeof requireAuth === 'function') {
+            requireAuth();
+        }
+
+        // Load current settings
+        function loadSettings() {
+            const settings = UserSettings.getAll();
+            
+            document.getElementById('timeFormat').value = settings.timeFormat;
+            document.getElementById('dateFormat').value = settings.dateFormat;
+            document.getElementById('showTimezone').checked = settings.showTimezone;
+            document.getElementById('decimalPlaces').value = settings.decimalPlaces;
+            document.getElementById('currencySymbol').value = settings.currencySymbol;
+            document.getElementById('autoRefresh').checked = settings.autoRefresh;
+            document.getElementById('refreshInterval').value = settings.refreshInterval;
+
+            updatePreviews();
+        }
+
+        // Update previews
+        function updatePreviews() {
+            const now = new Date().toISOString();
+            
+            // Time format preview
+            const timeFormat = document.getElementById('timeFormat').value;
+            const dateFormat = document.getElementById('dateFormat').value;
+            const showTimezone = document.getElementById('showTimezone').checked;
+            
+            // Temporarily update settings for preview
+            const tempSettings = {
+                timeFormat: timeFormat,
+                dateFormat: dateFormat,
+                showTimezone: showTimezone
+            };
+            const originalSettings = UserSettings.getAll();
+            UserSettings.setMultiple(tempSettings);
+            const preview = UserSettings.formatDate(now);
+            UserSettings.setMultiple(originalSettings);
+            
+            document.getElementById('timeFormatPreview').textContent = preview;
+            document.getElementById('dateFormatPreview').textContent = preview;
+        }
+
+        // Save settings
+        document.getElementById('settingsForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const settings = {
+                timeFormat: document.getElementById('timeFormat').value,
+                dateFormat: document.getElementById('dateFormat').value,
+                showTimezone: document.getElementById('showTimezone').checked,
+                decimalPlaces: parseInt(document.getElementById('decimalPlaces').value),
+                currencySymbol: document.getElementById('currencySymbol').value,
+                autoRefresh: document.getElementById('autoRefresh').checked,
+                refreshInterval: parseInt(document.getElementById('refreshInterval').value),
+            };
+
+            if (UserSettings.setMultiple(settings)) {
+                const successMsg = document.getElementById('successMessage');
+                successMsg.classList.add('show');
+                setTimeout(() => {
+                    successMsg.classList.remove('show');
+                }, 3000);
+                updatePreviews();
+            }
+        });
+
+        // Reset settings
+        function resetSettings() {
+            if (confirm('Are you sure you want to reset all settings to defaults?')) {
+                UserSettings.reset();
+                loadSettings();
+                const successMsg = document.getElementById('successMessage');
+                successMsg.textContent = 'Settings reset to defaults!';
+                successMsg.classList.add('show');
+                setTimeout(() => {
+                    successMsg.classList.remove('show');
+                    successMsg.textContent = 'Settings saved successfully!';
+                }, 3000);
+            }
+        }
+
+        // Update previews when settings change
+        document.getElementById('timeFormat').addEventListener('change', updatePreviews);
+        document.getElementById('dateFormat').addEventListener('change', updatePreviews);
+        document.getElementById('showTimezone').addEventListener('change', updatePreviews);
+
+        // Load settings on page load
+        loadSettings();
+    </script>
+</body>
+</html>
+

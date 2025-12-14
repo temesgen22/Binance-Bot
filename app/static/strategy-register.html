@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Strategy Registration</title>
+    <script src="/static/auth.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+
+        .nav-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1.1em;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab:hover {
+            background: #e9ecef;
+        }
+
+        .tab.active {
+            background: white;
+            border-bottom: 3px solid #667eea;
+            color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 30px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .form-section h3 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.3em;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .form-group input,
+        .form-group select {
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group small {
+            margin-top: 5px;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .strategy-params {
+            margin-top: 20px;
+        }
+
+        .params-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Strategy Registration</h1>
+            <p>Create and register a new trading strategy</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/market-analyzer">📈 Market Analyzer</a>
+                <a href="/backtesting">🔬 Strategy Backtesting</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/test-accounts/">🔐 Test Accounts</a>
+                <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('create')">Create New Strategy</div>
+            <div class="tab" onclick="switchTab('reuse')">Reuse Existing Strategy</div>
+        </div>
+
+        <!-- Create New Strategy Tab -->
+        <div id="create-tab" class="tab-content active">
+            <div id="create-alert"></div>
+            
+            <form id="create-form">
+                <div class="form-section">
+                    <h3>Basic Information</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="name">Strategy Name *</label>
+                            <input type="text" id="name" name="name" required placeholder="e.g., BTC Scalping Strategy">
+                        </div>
+                        <div class="form-group">
+                            <label for="symbol">Trading Symbol *</label>
+                            <input type="text" id="symbol" name="symbol" required placeholder="e.g., BTCUSDT" style="text-transform: uppercase;">
+                        </div>
+                        <div class="form-group">
+                            <label for="strategy_type">Strategy Type *</label>
+                            <select id="strategy_type" name="strategy_type" required onchange="updateStrategyParams()">
+                                <option value="">Select strategy type</option>
+                                <option value="scalping">Scalping (EMA-based)</option>
+                                <option value="range_mean_reversion">Range Mean-Reversion</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="account_id">Binance Account *</label>
+                            <select id="account_id" name="account_id" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                            <small id="account-help-text">Select the Binance account to use for this strategy</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="leverage">Leverage *</label>
+                            <input type="number" id="leverage" name="leverage" required min="1" max="50" value="5">
+                            <small>Leverage multiplier (1-50). Required to avoid Binance default 20x.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="risk_per_trade">Risk Per Trade *</label>
+                            <input type="number" id="risk_per_trade" name="risk_per_trade" required min="0.001" max="0.99" step="0.001" value="0.01">
+                            <small>Risk percentage per trade (0.01 = 1% of account balance)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="fixed_amount">Fixed Amount (Optional)</label>
+                            <input type="number" id="fixed_amount" name="fixed_amount" min="0" step="0.01" placeholder="e.g., 100">
+                            <small>Fixed USDT amount per trade (overrides risk_per_trade if set)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="max_positions">Max Positions</label>
+                            <input type="number" id="max_positions" name="max_positions" min="1" max="5" value="1">
+                            <small>Maximum concurrent positions (1-5)</small>
+                        </div>
+                        <div class="form-group checkbox-group">
+                            <input type="checkbox" id="auto_start" name="auto_start">
+                            <label for="auto_start" style="margin: 0;">Auto-start strategy after creation</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3>Strategy Parameters</h3>
+                    <div id="strategy-params-section" class="strategy-params">
+                        <p style="color: #666;">Select a strategy type to configure parameters</p>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn" id="create-submit-btn">Register Strategy</button>
+                <div class="loading" id="create-submit-loading">Registering strategy...</div>
+            </form>
+        </div>
+
+        <!-- Reuse Existing Strategy Tab -->
+        <div id="reuse-tab" class="tab-content">
+            <div id="reuse-alert"></div>
+            
+            <form id="reuse-form">
+                <div class="form-section">
+                    <h3>Select Strategy to Reuse</h3>
+                    <div class="form-group">
+                        <label for="existing_strategy">Existing Strategy</label>
+                        <select id="existing_strategy" name="existing_strategy" required onchange="loadStrategyForReuse()">
+                            <option value="">Loading strategies...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="reuse-form-container" class="hidden">
+                    <div class="form-section">
+                        <h3>Strategy Configuration</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="reuse-name">Strategy Name *</label>
+                                <input type="text" id="reuse-name" name="name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="reuse-symbol">Trading Symbol *</label>
+                                <input type="text" id="reuse-symbol" name="symbol" required style="text-transform: uppercase;">
+                            </div>
+                            <div class="form-group">
+                                <label for="reuse-account_id">Binance Account *</label>
+                                <select id="reuse-account_id" name="account_id" required>
+                                    <option value="">Loading accounts...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="reuse-leverage">Leverage *</label>
+                                <input type="number" id="reuse-leverage" name="leverage" required min="1" max="50">
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <input type="checkbox" id="reuse-auto_start" name="auto_start">
+                                <label for="reuse-auto_start" style="margin: 0;">Auto-start strategy after creation</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn" id="reuse-submit-btn">Register Strategy</button>
+                    <div class="loading" id="reuse-submit-loading">Registering strategy...</div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Strategy parameter templates
+        const strategyParams = {
+            scalping: {
+                fields: [
+                    { name: 'interval_seconds', type: 'number', label: 'Interval (seconds)', default: 10, min: 1, max: 3600, description: 'How often the strategy evaluates the market (in seconds)' },
+                    { name: 'kline_interval', type: 'select', label: 'Kline Interval', default: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h'] },
+                    { name: 'ema_fast', type: 'number', label: 'Fast EMA Period', default: 8, min: 1, max: 200 },
+                    { name: 'ema_slow', type: 'number', label: 'Slow EMA Period', default: 21, min: 2, max: 400 },
+                    { name: 'take_profit_pct', type: 'number', label: 'Take Profit %', default: 0.004, min: 0.001, max: 0.1, step: 0.001 },
+                    { name: 'stop_loss_pct', type: 'number', label: 'Stop Loss %', default: 0.002, min: 0.001, max: 0.1, step: 0.001 },
+                    { name: 'enable_short', type: 'checkbox', label: 'Enable Short Trading', default: true },
+                    { name: 'min_ema_separation', type: 'number', label: 'Min EMA Separation', default: 0.0002, min: 0, max: 0.01, step: 0.0001 },
+                    { name: 'enable_htf_bias', type: 'checkbox', label: 'Enable HTF Bias', default: true },
+                    { name: 'cooldown_candles', type: 'number', label: 'Cooldown Candles', default: 2, min: 0, max: 10 },
+                    { name: 'enable_ema_cross_exit', type: 'checkbox', label: 'Enable EMA Cross Exits', default: true },
+                    { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
+                    { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 }
+                ]
+            },
+            range_mean_reversion: {
+                fields: [
+                    { name: 'interval_seconds', type: 'number', label: 'Interval (seconds)', default: 10, min: 1, max: 3600, description: 'How often the strategy evaluates the market (in seconds)' },
+                    { name: 'kline_interval', type: 'select', label: 'Kline Interval', default: '5m', options: ['1m', '3m', '5m', '15m', '30m', '1h'] },
+                    { name: 'lookback_period', type: 'number', label: 'Lookback Period', default: 150, min: 50, max: 500 },
+                    { name: 'buy_zone_pct', type: 'number', label: 'Buy Zone %', default: 0.2, min: 0.01, max: 0.5, step: 0.01 },
+                    { name: 'sell_zone_pct', type: 'number', label: 'Sell Zone %', default: 0.2, min: 0.01, max: 0.5, step: 0.01 },
+                    { name: 'ema_fast_period', type: 'number', label: 'Fast EMA Period', default: 20, min: 5, max: 100 },
+                    { name: 'ema_slow_period', type: 'number', label: 'Slow EMA Period', default: 50, min: 10, max: 200 },
+                    { name: 'max_ema_spread_pct', type: 'number', label: 'Max EMA Spread %', default: 0.005, min: 0, max: 0.02, step: 0.001 },
+                    { name: 'max_atr_multiplier', type: 'number', label: 'Max ATR Multiplier', default: 2.0, min: 0.1, max: 10, step: 0.1 },
+                    { name: 'rsi_period', type: 'number', label: 'RSI Period', default: 14, min: 5, max: 50 },
+                    { name: 'rsi_oversold', type: 'number', label: 'RSI Oversold', default: 40, min: 0, max: 50 },
+                    { name: 'rsi_overbought', type: 'number', label: 'RSI Overbought', default: 60, min: 50, max: 100 },
+                    { name: 'tp_buffer_pct', type: 'number', label: 'TP Buffer %', default: 0.001, min: 0, max: 0.01, step: 0.0001 },
+                    { name: 'sl_buffer_pct', type: 'number', label: 'SL Buffer %', default: 0.002, min: 0, max: 0.01, step: 0.0001 },
+                    { name: 'enable_short', type: 'checkbox', label: 'Enable Short Trading', default: true }
+                ]
+            }
+        };
+
+        let selectedStrategy = null;
+
+        function switchTab(tab) {
+            // Update tabs
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            
+            if (tab === 'create') {
+                document.querySelector('.tab:first-child').classList.add('active');
+                document.getElementById('create-tab').classList.add('active');
+            } else {
+                document.querySelector('.tab:last-child').classList.add('active');
+                document.getElementById('reuse-tab').classList.add('active');
+                loadExistingStrategies();
+            }
+        }
+
+        function updateStrategyParams() {
+            const strategyType = document.getElementById('strategy_type').value;
+            const container = document.getElementById('strategy-params-section');
+            
+            if (!strategyType || !strategyParams[strategyType]) {
+                container.innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
+                return;
+            }
+
+            const params = strategyParams[strategyType];
+            let html = '<div class="params-grid">';
+            
+            params.fields.forEach(field => {
+                html += '<div class="form-group">';
+                html += `<label for="params.${field.name}">${field.label}</label>`;
+                
+                if (field.type === 'select') {
+                    html += `<select id="params.${field.name}" name="params.${field.name}">`;
+                    field.options.forEach(opt => {
+                        html += `<option value="${opt}" ${opt === field.default ? 'selected' : ''}>${opt}</option>`;
+                    });
+                    html += '</select>';
+                } else if (field.type === 'checkbox') {
+                    html += `<div class="checkbox-group">`;
+                    html += `<input type="checkbox" id="params.${field.name}" name="params.${field.name}" ${field.default ? 'checked' : ''}>`;
+                    html += `<label for="params.${field.name}" style="margin: 0;">Enable</label>`;
+                    html += `</div>`;
+                } else {
+                    html += `<input type="${field.type}" id="params.${field.name}" name="params.${field.name}" value="${field.default}" min="${field.min || ''}" max="${field.max || ''}" step="${field.step || ''}">`;
+                    if (field.description) {
+                        html += `<small>${field.description}</small>`;
+                    }
+                }
+                
+                html += '</div>';
+            });
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        async function loadAccounts() {
+            const accountSelect = document.getElementById('account_id');
+            const reuseAccountSelect = document.getElementById('reuse-account_id');
+            const statusDiv = document.getElementById('account-help-text');
+            
+            try {
+                const response = await authFetch('/accounts/list');
+                if (!response.ok) throw new Error('Failed to load accounts');
+                const accounts = await response.json();
+                
+                // Clear and populate account selects
+                [accountSelect, reuseAccountSelect].forEach(select => {
+                    if (select) {
+                        select.innerHTML = '<option value="">Select account</option>';
+                        accounts.forEach(account => {
+                            const option = document.createElement('option');
+                            option.value = account.account_id;
+                            const testnetLabel = account.testnet ? ' [TESTNET]' : '';
+                            option.textContent = `${account.name || account.account_id}${testnetLabel}`;
+                            select.appendChild(option);
+                        });
+                    }
+                });
+            } catch (error) {
+                console.error('Error loading accounts:', error);
+                if (statusDiv) {
+                    statusDiv.textContent = 'Error loading accounts. Please refresh the page.';
+                    statusDiv.style.color = 'red';
+                }
+            }
+        }
+
+        async function loadExistingStrategies() {
+            const select = document.getElementById('existing_strategy');
+            try {
+                const response = await authFetch('/strategies/list');
+                if (!response.ok) throw new Error('Failed to load strategies');
+                const strategies = await response.json();
+                
+                select.innerHTML = '<option value="">Select a strategy to reuse</option>';
+                strategies.forEach(strategy => {
+                    const option = document.createElement('option');
+                    option.value = strategy.id;
+                    option.textContent = `${strategy.name} (${strategy.symbol}) - ${strategy.strategy_type}`;
+                    option.dataset.strategy = JSON.stringify(strategy);
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading strategies:', error);
+                select.innerHTML = '<option value="">Error loading strategies</option>';
+            }
+        }
+
+        function loadStrategyForReuse() {
+            const select = document.getElementById('existing_strategy');
+            const strategyData = select.options[select.selectedIndex]?.dataset.strategy;
+            
+            if (!strategyData) {
+                document.getElementById('reuse-form-container').classList.add('hidden');
+                return;
+            }
+            
+            selectedStrategy = JSON.parse(strategyData);
+            document.getElementById('reuse-form-container').classList.remove('hidden');
+            
+            // Pre-fill form with strategy data
+            document.getElementById('reuse-name').value = selectedStrategy.name + ' (Copy)';
+            document.getElementById('reuse-symbol').value = selectedStrategy.symbol;
+            document.getElementById('reuse-leverage').value = selectedStrategy.leverage;
+        }
+
+        // Create new strategy form
+        document.getElementById('create-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const alertDiv = document.getElementById('create-alert');
+            const loading = document.getElementById('create-submit-loading');
+            const submitBtn = document.getElementById('create-submit-btn');
+            
+            alertDiv.innerHTML = '';
+            loading.classList.add('active');
+            submitBtn.disabled = true;
+            
+            try {
+                const formData = new FormData(e.target);
+                const data = {
+                    name: formData.get('name'),
+                    symbol: formData.get('symbol').toUpperCase(),
+                    strategy_type: formData.get('strategy_type'),
+                    leverage: parseInt(formData.get('leverage')),
+                    risk_per_trade: parseFloat(formData.get('risk_per_trade')) || 0.01,
+                    max_positions: parseInt(formData.get('max_positions')) || 1,
+                    auto_start: formData.get('auto_start') === 'on',
+                    account_id: formData.get('account_id') || 'default',
+                    params: {}
+                };
+                
+                // Add fixed_amount if provided
+                const fixedAmount = formData.get('fixed_amount');
+                if (fixedAmount) {
+                    data.fixed_amount = parseFloat(fixedAmount);
+                }
+                
+                // Collect strategy parameters
+                const strategyType = data.strategy_type;
+                if (strategyParams[strategyType]) {
+                    strategyParams[strategyType].fields.forEach(field => {
+                        const value = formData.get(`params.${field.name}`);
+                        if (value !== null) {
+                            if (field.type === 'checkbox') {
+                                data.params[field.name] = value === 'on';
+                            } else if (field.type === 'number') {
+                                data.params[field.name] = parseFloat(value) || field.default;
+                            } else {
+                                data.params[field.name] = value || field.default;
+                            }
+                        }
+                    });
+                }
+                
+                const response = await authFetch('/strategies/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || result.message || 'Failed to create strategy');
+                }
+                
+                loading.classList.remove('active');
+                alertDiv.innerHTML = `<div class="alert alert-success">Strategy "${result.name}" created successfully! <a href="/strategies">View Strategies</a></div>`;
+                e.target.reset();
+                document.getElementById('strategy-params-section').innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
+                
+            } catch (error) {
+                loading.classList.remove('active');
+                submitBtn.disabled = false;
+                alertDiv.innerHTML = `<div class="alert alert-error">Error: ${error.message}</div>`;
+            }
+        });
+
+        // Reuse existing strategy form
+        document.getElementById('reuse-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!selectedStrategy) {
+                alert('Please select an existing strategy first');
+                return;
+            }
+            
+            const alertDiv = document.getElementById('reuse-alert');
+            const loading = document.getElementById('reuse-submit-loading');
+            const submitBtn = document.getElementById('reuse-submit-btn');
+            
+            alertDiv.innerHTML = '';
+            loading.classList.add('active');
+            submitBtn.disabled = true;
+            
+            try {
+                const formData = new FormData(e.target);
+                const data = {
+                    name: formData.get('name'),
+                    symbol: formData.get('symbol').toUpperCase(),
+                    strategy_type: selectedStrategy.strategy_type,
+                    leverage: parseInt(formData.get('leverage')),
+                    risk_per_trade: selectedStrategy.risk_per_trade,
+                    max_positions: selectedStrategy.max_positions || 1,
+                    auto_start: formData.get('auto_start') === 'on',
+                    account_id: formData.get('account_id') || 'default',
+                    params: selectedStrategy.params,
+                    fixed_amount: selectedStrategy.fixed_amount
+                };
+                
+                const response = await authFetch('/strategies/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || result.message || 'Failed to create strategy');
+                }
+                
+                loading.classList.remove('active');
+                alertDiv.innerHTML = `<div class="alert alert-success">Strategy "${result.name}" created successfully! <a href="/strategies">View Strategies</a></div>`;
+                
+                setTimeout(() => {
+                    switchTab('create');
+                    document.getElementById('reuse-form-container').classList.add('hidden');
+                    selectedStrategy = null;
+                }, 2000);
+                
+            } catch (error) {
+                loading.classList.remove('active');
+                submitBtn.disabled = false;
+                alertDiv.innerHTML = `<div class="alert alert-error">Error: ${error.message}</div>`;
+            }
+        });
+
+        // Initialize on page load
+        window.addEventListener('load', async () => {
+            if (Auth.isAuthenticated()) {
+                await loadUserInfo();
+            }
+            await loadAccounts();
+            await loadExistingStrategies();
+        });
+    </script>
+</body>
+</html>
+

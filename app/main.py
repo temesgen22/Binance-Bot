@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 
 from fastapi.exceptions import RequestValidationError
 
+from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.api.routes.strategies import router as strategies_router
 from app.api.routes.logs import router as logs_router
@@ -41,6 +42,7 @@ from app.core.config import get_settings
 from app.core.logger import configure_logging
 from loguru import logger
 from app.core.redis_storage import RedisStorage
+from app.core.database import init_database, close_database
 from app.core.exceptions import (
     BinanceAPIError,
     BinanceRateLimitError,
@@ -65,19 +67,16 @@ from app.services.telegram_commands import TelegramCommandHandler
 def create_app() -> FastAPI:
     configure_logging()
     
-    # CRITICAL: Load .env file explicitly before creating Settings
-    # This ensures BINANCE_ACCOUNT_* variables are in os.environ
-    # pydantic-settings only loads fields defined in Settings class,
-    # so custom variables like BINANCE_ACCOUNT_* won't be loaded automatically
+    # Load .env file for other settings (database, redis, etc.)
+    # Note: API accounts are now stored in database only, not in .env file
     from dotenv import load_dotenv
     from pathlib import Path
     
     # Try multiple possible locations for .env file
-    # __file__ is app/main.py, so parent.parent is project root
     project_root = Path(__file__).parent.parent
     env_file = None
     possible_paths = [
-        project_root / ".env",  # Project root (most reliable - prioritize this)
+        project_root / ".env",  # Project root (most reliable)
         Path(".env"),  # Current directory
         Path.cwd() / ".env",  # Current working directory
     ]
@@ -85,42 +84,17 @@ def create_app() -> FastAPI:
     for env_path in possible_paths:
         if env_path.exists() and env_path.is_file():
             env_file = env_path
-            logger.info(f"Loading .env file from: {env_file.absolute()}")
+            logger.debug(f"Loading .env file from: {env_file.absolute()}")
             load_dotenv(env_file, override=False)  # Don't override existing env vars
             break
     
-    if not env_file:
-        # Check if environment variables are already set (e.g., from Docker env_file or system env)
-        has_env_vars = bool(os.environ.get('BINANCE_API_KEY') or any(
-            key.startswith('BINANCE_ACCOUNT_') for key in os.environ.keys()
-        ))
-        if has_env_vars:
-            logger.debug(
-                f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}, "
-                "but environment variables are already set (likely from Docker or system environment). "
-                "Continuing with existing environment variables."
-            )
-        else:
-            logger.warning(
-                f"Could not find .env file in any of these locations: {[str(p) for p in possible_paths]}. "
-                "Multi-account variables (BINANCE_ACCOUNT_*) may not be loaded. "
-                "If running in Docker, ensure env_file is configured in docker-compose.yml."
-            )
-    
-    # Clear settings cache to ensure fresh load from .env file
+    # Clear settings cache to ensure fresh load
     get_settings.cache_clear()
     settings = get_settings()
-    # Force reload of accounts to ensure all accounts from .env are loaded
-    settings._binance_accounts = None
     
-    # Initialize Binance client manager (supports multiple accounts)
+    # Initialize Binance client manager (accounts are loaded from database when needed)
     client_manager = BinanceClientManager(settings)
-    
-    # Log loaded accounts for debugging
-    accounts = client_manager.list_accounts()
-    logger.info(f"Initialized BinanceClientManager with {len(accounts)} account(s): {list(accounts.keys())}")
-    for account_id, account_config in accounts.items():
-        logger.info(f"  - Account '{account_id}': {account_config.name} (Testnet: {account_config.testnet})")
+    logger.info("Initialized BinanceClientManager - accounts will be loaded from database when needed")
     
     # Get default client for backward compatibility
     default_client = client_manager.get_default_client()
@@ -199,6 +173,9 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:  # pragma: no cover
+        # Initialize database connection pool
+        init_database()
+        
         app.state.binance_client = default_client  # For backward compatibility
         app.state.binance_client_manager = client_manager
         app.state.strategy_runner = runner
@@ -214,6 +191,9 @@ def create_app() -> FastAPI:
         # Stop Telegram command handler
         if telegram_command_handler:
             telegram_command_handler.stop()
+        
+        # Close database connections
+        close_database()
         
         for task in app.state.background_tasks:
             task.cancel()
@@ -231,6 +211,23 @@ def create_app() -> FastAPI:
             pass  # Ignore if mount fails
     
     # Register GUI routes BEFORE API routers to ensure they take precedence
+    # Serve login.html and register.html (user registration) - public routes
+    @app.get("/login.html", tags=["gui"], include_in_schema=False)
+    async def login_gui():
+        """Serve the Login page."""
+        login_path = static_dir / "login.html"
+        if login_path.exists():
+            return FileResponse(path=str(login_path), media_type="text/html")
+        raise HTTPException(status_code=404, detail="Login page not found")
+    
+    @app.get("/register.html", tags=["gui"], include_in_schema=False)
+    async def register_html_gui():
+        """Serve the User Registration page."""
+        register_path = static_dir / "register.html"
+        if register_path.exists():
+            return FileResponse(path=str(register_path), media_type="text/html")
+        raise HTTPException(status_code=404, detail="Registration page not found")
+    
     # Serve index.html at root - register this route explicitly
     @app.get("/", tags=["gui"])
     async def root():
@@ -305,6 +302,7 @@ def create_app() -> FastAPI:
     
     # Include API routers FIRST to ensure API endpoints take precedence
     # This ensures /trades/list matches before /trades GUI route
+    app.include_router(auth_router)  # Authentication endpoints
     app.include_router(health_router)
     app.include_router(accounts_router)
     app.include_router(test_accounts_router)  # Test accounts API
@@ -508,10 +506,10 @@ def create_app() -> FastAPI:
         """Serve the Trading Reports GUI (with trailing slash)."""
         return await _serve_reports_gui()
     
-    # Serve register.html for Strategy Registration
-    async def _serve_register_gui():
+    # Serve strategy-register.html for Strategy Registration
+    async def _serve_strategy_register_gui():
         """Helper function to serve the Strategy Registration GUI."""
-        register_path = static_dir / "register.html"
+        register_path = static_dir / "strategy-register.html"
         abs_register_path = register_path.resolve()
         abs_static_dir = static_dir.resolve()
         
@@ -519,8 +517,8 @@ def create_app() -> FastAPI:
         possible_paths = [
             abs_register_path,
             register_path,
-            abs_static_dir / "register.html",
-            static_dir / "register.html",
+            abs_static_dir / "strategy-register.html",
+            static_dir / "strategy-register.html",
         ]
         
         for path in possible_paths:
@@ -542,16 +540,23 @@ def create_app() -> FastAPI:
             }
         )
     
-    # GUI routes for register - registered AFTER API routers
-    @app.get("/register", tags=["gui"], include_in_schema=False)
-    async def register_gui():
+    # GUI routes for strategy registration - registered AFTER API routers
+    @app.get("/strategy-register", tags=["gui"], include_in_schema=False)
+    async def strategy_register_gui():
         """Serve the Strategy Registration GUI (without trailing slash)."""
-        return await _serve_register_gui()
+        return await _serve_strategy_register_gui()
     
-    @app.get("/register/", tags=["gui"], include_in_schema=False)
-    async def register_gui_with_slash():
+    @app.get("/strategy-register/", tags=["gui"], include_in_schema=False)
+    async def strategy_register_gui_with_slash():
         """Serve the Strategy Registration GUI (with trailing slash)."""
-        return await _serve_register_gui()
+        return await _serve_strategy_register_gui()
+    
+    # Keep /register route for backward compatibility (redirects to strategy-register)
+    @app.get("/register", tags=["gui"], include_in_schema=False)
+    async def register_gui_redirect():
+        """Redirect /register to /strategy-register for backward compatibility."""
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/strategy-register", status_code=301)
     
     # Serve market-analyzer.html for Market Analyzer
     async def _serve_market_analyzer_gui():

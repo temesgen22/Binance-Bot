@@ -41,6 +41,54 @@ class Strategy(ABC):
         self.client = client
         self._stopped = asyncio.Event()
 
+    @staticmethod
+    def parse_bool_param(value: bool | int | str | None, default: bool = False) -> bool:
+        """Safely parse a boolean parameter from various input types.
+        
+        Handles values from JSON/DB/.env which often come as strings.
+        This prevents silent bugs where bool("false") == True.
+        
+        Args:
+            value: The value to parse (can be bool, int, str, or None)
+            default: Default value if value is None or cannot be parsed
+            
+        Returns:
+            bool: Parsed boolean value
+            
+        Examples:
+            >>> Strategy.parse_bool_param(True)  # True
+            >>> Strategy.parse_bool_param("true")  # True
+            >>> Strategy.parse_bool_param("false")  # False (not True!)
+            >>> Strategy.parse_bool_param("0")  # False (not True!)
+            >>> Strategy.parse_bool_param(1)  # True
+            >>> Strategy.parse_bool_param(0)  # False
+            >>> Strategy.parse_bool_param(None)  # default
+        """
+        if value is None:
+            return default
+        
+        # Already a boolean
+        if isinstance(value, bool):
+            return value
+        
+        # Integer: 0 = False, anything else = True
+        if isinstance(value, int):
+            return value != 0
+        
+        # String: parse common boolean representations
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            if value_lower in ("true", "1", "yes", "on", "enabled"):
+                return True
+            if value_lower in ("false", "0", "no", "off", "disabled", ""):
+                return False
+            # Unknown string value - log warning and use default
+            logger.warning(f"Unknown boolean string value: {value!r}, using default: {default}")
+            return default
+        
+        # Fallback: convert to bool (for other types)
+        return bool(value)
+
     @abstractmethod
     async def evaluate(self) -> StrategySignal:
         ...

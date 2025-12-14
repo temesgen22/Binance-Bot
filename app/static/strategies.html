@@ -370,6 +370,30 @@
             transform: none;
         }
 
+        .btn-delete {
+            background: transparent;
+            color: #dc3545;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-delete:hover {
+            background: #f8f9fa;
+            transform: translateY(-1px);
+            color: #c82333;
+        }
+
+        .btn-delete:disabled {
+            color: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+            opacity: 0.5;
+        }
+
         .expand-btn {
             background: none;
             border: none;
@@ -508,6 +532,8 @@
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
+                <span id="user-info" style="margin-left: 20px;"></span>
+                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
         </div>
 
@@ -609,14 +635,23 @@
         </div>
     </div>
 
+    <script src="/static/auth.js"></script>
     <script>
+        // Check authentication IMMEDIATELY - before any other code runs
+        (function() {
+            if (!requireAuth()) {
+                // Stop execution - page will redirect
+                throw new Error('Not authenticated');
+            }
+        })();
+
         let autoRefreshInterval = null;
         let expandedStrategies = new Set();
         let availableAccounts = {};
 
         async function loadAccounts() {
             try {
-                const response = await fetch('/accounts/list');
+                const response = await authFetch('/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 
@@ -667,7 +702,7 @@
             url += params.toString();
 
             try {
-                const response = await fetch(url);
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load strategy performance');
                 const data = await response.json();
                 
@@ -712,6 +747,7 @@
             html += '<th style="width: 100px;">Completed</th>';
             html += '<th style="width: 100px;">Percentile</th>';
             html += '<th style="width: 100px;">Action</th>';
+            html += '<th style="width: 100px;">Delete</th>';
             html += '<th style="width: 50px;"></th>';
             html += '</tr></thead><tbody>';
 
@@ -758,13 +794,17 @@
                 const actionButtonClass = isRunning ? 'btn-stop' : 'btn-start';
                 html += `<td><button class="btn ${actionButtonClass}" onclick="toggleStrategy('${strategy.strategy_id}', ${isRunning})" id="action-btn-${strategy.strategy_id}">${actionButtonText}</button></td>`;
                 
+                // Delete button
+                const escapedName = strategy.strategy_name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                html += `<td><button class="btn btn-delete" onclick="deleteStrategy('${strategy.strategy_id}', '${escapedName}')" id="delete-btn-${strategy.strategy_id}" title="Delete strategy">🗑️</button></td>`;
+                
                 // Expand button
                 html += `<td><button class="expand-btn" onclick="toggleDetails('${strategy.strategy_id}')">${isExpanded ? '▼' : '▶'}</button></td>`;
                 
                 html += '</tr>';
                 
                 // Details row
-                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="12">`;
+                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="13">`;
                 html += `<div class="strategy-details ${isExpanded ? 'show' : ''}" id="details-${strategy.strategy_id}">`;
                 html += generateStrategyDetails(strategy);
                 html += '</div></td></tr>';
@@ -926,7 +966,7 @@
                     ? `/strategies/${strategyId}/stop`
                     : `/strategies/${strategyId}/start`;
                 
-                const response = await fetch(endpoint, {
+                const response = await authFetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -953,6 +993,55 @@
                 // Re-enable button and restore text
                 button.disabled = false;
                 button.textContent = isCurrentlyRunning ? 'Stop' : 'Start';
+            }
+        }
+
+        async function deleteStrategy(strategyId, strategyName) {
+            // Confirm deletion
+            const confirmed = confirm(
+                `Are you sure you want to delete strategy "${strategyName}"?\n\n` +
+                `This will:\n` +
+                `- Stop the strategy if it's running\n` +
+                `- Permanently delete the strategy and all its data\n\n` +
+                `This action cannot be undone!`
+            );
+            
+            if (!confirmed) {
+                return;
+            }
+
+            const button = document.getElementById(`delete-btn-${strategyId}`);
+            if (!button) return;
+
+            // Disable button during request
+            button.disabled = true;
+            button.textContent = '⏳';
+
+            try {
+                const response = await authFetch(`/strategies/${strategyId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || 'Failed to delete strategy');
+                }
+
+                // Success - reload data to reflect deletion
+                await loadData();
+                
+                // Show success message
+                showNotification(`Strategy "${strategyName}" deleted successfully`, 'success');
+            } catch (error) {
+                console.error('Error deleting strategy:', error);
+                showNotification(`Failed to delete strategy: ${error.message}`, 'error');
+                
+                // Re-enable button and restore icon
+                button.disabled = false;
+                button.textContent = '🗑️';
             }
         }
 
@@ -1019,8 +1108,26 @@
         `;
         document.head.appendChild(style);
 
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const user = await AuthAPI.getCurrentUser();
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    userInfo.textContent = `👤 ${user.username}`;
+                }
+            } catch (e) {
+                console.error('Failed to load user info:', e);
+            }
+        }
+
+        // Logout function is now global from auth.js
+
         // Initialize on page load
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
+            if (Auth.isAuthenticated()) {
+                await loadUserInfo();
+            }
             loadAccounts();
             loadData();
         });

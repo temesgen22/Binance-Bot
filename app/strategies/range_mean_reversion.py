@@ -63,13 +63,14 @@ class RangeMeanReversionStrategy(Strategy):
         
         # Kline interval
         self.interval = str(context.params.get("kline_interval", "5m"))
-        valid_intervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
+        valid_intervals = ["1s", "3s", "5s", "10s", "30s",  # Second-based intervals for high-frequency trading
+                          "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
         if self.interval not in valid_intervals:
             logger.warning(f"Invalid kline interval {self.interval}, using 5m")
             self.interval = "5m"
         
         # Short trading
-        self.enable_short = bool(context.params.get("enable_short", True))
+        self.enable_short = self.parse_bool_param(context.params.get("enable_short"), default=True)
         
         # Position tracking
         self.position: Optional[Literal["LONG", "SHORT"]] = None

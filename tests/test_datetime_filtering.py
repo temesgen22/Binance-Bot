@@ -266,22 +266,42 @@ class TestTradesDatetimeFiltering:
     
     def test_trades_api_accepts_datetime_params(self, client, mock_runner):
         """Test that trades API accepts datetime parameters."""
-        # Set up app state with mock runner
-        client.app.state.strategy_runner = mock_runner
+        from uuid import uuid4
+        from app.models.db_models import User
+        from app.api.deps import get_current_user
         
-        # Test with ISO datetime format
-        response = client.get(
-            "/trades/list?"
-            "start_date=2025-11-28T10:00:00Z&"
-            "end_date=2025-11-28T12:00:00Z"
+        # Create a mock user for authentication
+        mock_user = User(
+            id=uuid4(),
+            username="testuser",
+            email="test@example.com",
+            password_hash="hashed",
+            is_active=True
         )
         
-        # Should accept the parameters (even if filtering isn't fully implemented)
-        assert response.status_code in [200, 422]  # 422 if datetime parsing fails
+        # Override the get_current_user dependency to return mock user
+        client.app.dependency_overrides[get_current_user] = lambda: mock_user
         
-        if response.status_code == 200:
-            data = response.json()
-            assert isinstance(data, list)
+        try:
+            # Set up app state with mock runner
+            client.app.state.strategy_runner = mock_runner
+            
+            # Test with ISO datetime format
+            response = client.get(
+                "/trades/list?"
+                "start_date=2025-11-28T10:00:00Z&"
+                "end_date=2025-11-28T12:00:00Z"
+            )
+            
+            # Should accept the parameters (even if filtering isn't fully implemented)
+            assert response.status_code in [200, 422]  # 422 if datetime parsing fails
+            
+            if response.status_code == 200:
+                data = response.json()
+                assert isinstance(data, list)
+        finally:
+            # Clean up dependency override
+            client.app.dependency_overrides.pop(get_current_user, None)
     
     def test_trades_api_datetime_filtering_logic(self):
         """Test the datetime filtering logic in trades API."""

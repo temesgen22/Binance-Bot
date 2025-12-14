@@ -13,6 +13,7 @@ from app.core.my_binance_client import BinanceClient
 from app.strategies.base import StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
+from app.strategies.indicators import calculate_ema
 from app.risk.manager import RiskManager, PositionSizingResult
 from loguru import logger
 
@@ -83,6 +84,7 @@ class BacktestResult(BaseModel):
     max_drawdown_pct: float
     trades: list[dict]  # List of trade details
     klines: Optional[list[list]] = None  # Historical candlestick data for charting
+    indicators: Optional[dict] = None  # Indicator data (EMA fast/slow) for charting
 
 
 class MockBinanceClient:
@@ -149,6 +151,7 @@ async def run_backtest(
     # Fetch historical klines using python-binance directly
     # Calculate how many candles we need
     interval_seconds_map = {
+        "1s": 1, "3s": 3, "5s": 5, "10s": 10, "30s": 30,  # Second-based intervals for high-frequency trading
         "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
         "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400
     }
@@ -165,43 +168,79 @@ async def run_backtest(
         # Use futures_historical_klines for historical data (proper method)
         # This method is specifically designed for fetching historical klines with start/end times
         try:
-            # Check if futures_historical_klines method exists
-            if hasattr(rest, 'futures_historical_klines'):
-                # Use the proper historical klines method
-                # Format: "01 Jan 2025 12:00:00"
-                start_str = request.start_time.strftime("%d %b %Y %H:%M:%S")
-                end_str = request.end_time.strftime("%d %b %Y %H:%M:%S")
-                logger.info(f"Fetching historical klines for {request.symbol} from {start_str} to {end_str}")
-                klines = rest.futures_historical_klines(
+            # Prefer timestamp-based approach to avoid timezone interpretation issues
+            # Use futures_klines with startTime/endTime (timestamps in milliseconds) for unambiguous UTC
+            try:
+                limit = min(estimated_candles, 1500)
+                logger.info(f"Fetching historical klines for {request.symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
+                klines = rest.futures_klines(
                     symbol=request.symbol,
                     interval=interval,
-                    start_str=start_str,
-                    end_str=end_str
+                    limit=limit,
+                    startTime=start_timestamp,
+                    endTime=end_timestamp
                 )
-                all_klines = klines if klines else []
-                logger.info(f"Fetched {len(all_klines)} historical klines using futures_historical_klines")
-            else:
-                # Fallback: try futures_klines with startTime/endTime
-                limit = min(estimated_candles, 1500)
-                logger.info(f"futures_historical_klines not available, using futures_klines with limit={limit}")
-                try:
-                    klines = rest.futures_klines(
-                        symbol=request.symbol,
-                        interval=interval,
-                        limit=limit,
-                        startTime=start_timestamp,
-                        endTime=end_timestamp
-                    )
-                    all_klines = klines if klines else []
-                except (TypeError, AttributeError) as e:
-                    logger.warning(f"futures_klines with startTime/endTime failed: {e}, using fallback")
-                    # If startTime/endTime not supported, fetch recent and filter
-                    klines = rest.futures_klines(symbol=request.symbol, interval=interval, limit=limit)
-                    # Filter by time range
+                if klines:
+                    # Filter by time range to ensure accuracy (in case limit cuts off)
                     all_klines = [
-                        k for k in (klines or [])
+                        k for k in klines
                         if start_timestamp <= int(k[0]) <= end_timestamp
                     ]
+                    logger.info(f"Fetched {len(all_klines)} klines within time range using futures_klines with timestamps")
+                else:
+                    all_klines = []
+            except (TypeError, AttributeError) as timestamp_error:
+                logger.warning(f"futures_klines with startTime/endTime failed: {timestamp_error}, trying string format")
+                # Fallback: try futures_historical_klines with string format
+                if hasattr(rest, 'futures_historical_klines'):
+                    # Use string format as fallback (may have timezone interpretation issues)
+                    start_str = request.start_time.strftime("%d %b %Y %H:%M:%S")
+                    end_str = request.end_time.strftime("%d %b %Y %H:%M:%S")
+                    logger.info(f"Fallback: Using futures_historical_klines with string format: {start_str} to {end_str}")
+                    try:
+                        klines = rest.futures_historical_klines(
+                            symbol=request.symbol,
+                            interval=interval,
+                            start_str=start_str,
+                            end_str=end_str
+                        )
+                        all_klines = klines if klines else []
+                        logger.info(f"Fetched {len(all_klines)} historical klines using futures_historical_klines (string format)")
+                        
+                        # Verify the fetched klines are within the requested time range
+                        if all_klines:
+                            first_kline_time = int(all_klines[0][0])
+                            last_kline_time = int(all_klines[-1][0])
+                            time_diff_start = abs(first_kline_time - start_timestamp)
+                            time_diff_end = abs(last_kline_time - end_timestamp)
+                            # Allow some tolerance (up to 1 hour difference might indicate timezone issue)
+                            if time_diff_start > 3600000 or time_diff_end > 3600000:
+                                logger.warning(
+                                    f"Potential timezone issue: Fetched klines time range ({first_kline_time} to {last_kline_time}) "
+                                    f"differs significantly from requested range ({start_timestamp} to {end_timestamp}). "
+                                    f"Differences: {time_diff_start/1000/60:.1f} min start, {time_diff_end/1000/60:.1f} min end"
+                                )
+                    except Exception as str_format_error:
+                        logger.error(f"futures_historical_klines with string format also failed: {str_format_error}")
+                        all_klines = []
+                else:
+                    # Last fallback: fetch recent and filter
+                    limit = min(estimated_candles, 1500)
+                    logger.warning(f"Using last fallback: futures_klines with limit={limit}, then filtering")
+                    try:
+                        klines = rest.futures_klines(symbol=request.symbol, interval=interval, limit=limit)
+                        # Filter by time range
+                        all_klines = [
+                            k for k in (klines or [])
+                            if start_timestamp <= int(k[0]) <= end_timestamp
+                        ]
+                        logger.info(f"Fetched {len(all_klines)} klines after filtering")
+                    except Exception as fallback_error:
+                        logger.error(f"All methods failed to fetch klines: {fallback_error}")
+                        all_klines = []
+            except Exception as e:
+                logger.error(f"Error in timestamp-based klines fetch: {e}")
+                all_klines = []
         except Exception as fetch_error:
             logger.error(f"Error fetching historical klines: {fetch_error}")
             # Try fallback method
@@ -402,7 +441,11 @@ async def run_backtest(
                     logger.info(f"Signal action {signal.action} closes {position_side} position at price {exit_price:.8f}")
             elif request.strategy_type == "scalping":
                 # For scalping, check fixed TP/SL if trailing stop is not enabled or didn't trigger
-                trailing_stop_enabled = bool(request.params.get("trailing_stop_enabled", False))
+                # Use strategy's parse_bool_param to safely handle string values from JSON/DB
+                trailing_stop_enabled = EmaScalpingStrategy.parse_bool_param(
+                    request.params.get("trailing_stop_enabled"), 
+                    default=False
+                )
                 
                 # Only use fixed TP/SL if trailing stop is disabled
                 if not trailing_stop_enabled:
@@ -575,6 +618,16 @@ async def run_backtest(
                 strategy_position = position_side
                 strategy_entry_price = real_entry_price  # Use spread-adjusted entry price
                 
+                # CRITICAL: Sync strategy's internal state when trade is opened
+                # This ensures the strategy knows about the position and can check TP/SL correctly
+                # This matches live trading behavior where strategy sets its own state when generating signals
+                if hasattr(strategy, 'sync_position_state'):
+                    strategy.sync_position_state(
+                        position_side=position_side,
+                        entry_price=real_entry_price  # Use spread-adjusted entry price
+                    )
+                    logger.debug(f"Synced strategy state: position={position_side} @ {real_entry_price:.8f} after opening trade")
+                
                 # Add to trades list
                 trades.append(current_trade)
                 
@@ -734,6 +787,45 @@ async def run_backtest(
             float(k[5])   # volume
         ])
     
+    # Calculate EMA indicators for charting
+    indicators_data = None
+    if request.strategy_type == "scalping":
+        # Extract closing prices
+        closing_prices = [float(k[4]) for k in filtered_klines]
+        
+        # Calculate EMA fast and slow
+        ema_fast_values = []
+        ema_slow_values = []
+        
+        fast_period = int(request.params.get("ema_fast", 8))
+        slow_period = int(request.params.get("ema_slow", 21))
+        
+        for i in range(len(closing_prices)):
+            # EMA fast
+            prices_up_to_i = closing_prices[:i+1]
+            ema_fast = calculate_ema(prices_up_to_i, fast_period) if len(prices_up_to_i) >= fast_period else None
+            ema_fast_values.append(ema_fast)
+            
+            # EMA slow
+            ema_slow = calculate_ema(prices_up_to_i, slow_period) if len(prices_up_to_i) >= slow_period else None
+            ema_slow_values.append(ema_slow)
+        
+        # Create indicators data with timestamps matching klines
+        indicators_data = {
+            "ema_fast": [
+                {"time": int(k[0]) // 1000, "value": ema_fast_values[i]} 
+                for i, k in enumerate(filtered_klines) 
+                if ema_fast_values[i] is not None
+            ],
+            "ema_slow": [
+                {"time": int(k[0]) // 1000, "value": ema_slow_values[i]} 
+                for i, k in enumerate(filtered_klines) 
+                if ema_slow_values[i] is not None
+            ],
+            "ema_fast_period": fast_period,
+            "ema_slow_period": slow_period
+        }
+    
     return BacktestResult(
         symbol=request.symbol,
         strategy_type=request.strategy_type,
@@ -756,7 +848,8 @@ async def run_backtest(
         max_drawdown=max_drawdown,
         max_drawdown_pct=max_drawdown_pct,
         trades=trades_dict,
-        klines=klines_data
+        klines=klines_data,
+        indicators=indicators_data
     )
 
 

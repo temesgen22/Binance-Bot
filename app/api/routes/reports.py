@@ -468,38 +468,115 @@ def get_trading_report(
                             estimated_candles = int(duration_seconds / interval_seconds) + 200
                             
                             # Fetch klines using Binance client
+                            # Use timestamp-based approach to avoid timezone interpretation issues
                             rest = client._ensure()
                             try:
-                                if hasattr(rest, 'futures_historical_klines'):
-                                    start_str = chart_start.strftime("%d %b %Y %H:%M:%S")
-                                    end_str = chart_end.strftime("%d %b %Y %H:%M:%S")
-                                    klines = rest.futures_historical_klines(
-                                        symbol=strategy.symbol,
-                                        interval=strategy_interval,
-                                        start_str=start_str,
-                                        end_str=end_str
-                                    )
-                                    klines_data = klines if klines else None
-                                else:
-                                    # Fallback: use futures_klines
-                                    limit = min(estimated_candles, 1500)
+                                # Prefer timestamp-based approach (unambiguous UTC)
+                                limit = min(estimated_candles, 1500)
+                                logger.debug(f"Fetching klines for {strategy.symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
+                                try:
                                     klines = rest.futures_klines(
                                         symbol=strategy.symbol,
                                         interval=strategy_interval,
-                                        limit=limit
+                                        limit=limit,
+                                        startTime=start_timestamp,
+                                        endTime=end_timestamp
                                     )
                                     if klines:
-                                        # Filter by time range
+                                        # Filter by time range to ensure accuracy
                                         klines_data = [
                                             k for k in klines
                                             if start_timestamp <= int(k[0]) <= end_timestamp
                                         ]
+                                    else:
+                                        klines_data = None
+                                except (TypeError, AttributeError) as timestamp_error:
+                                    # Fallback: try futures_historical_klines with string format
+                                    logger.warning(f"futures_klines with timestamps failed: {timestamp_error}, trying string format")
+                                    if hasattr(rest, 'futures_historical_klines'):
+                                        start_str = chart_start.strftime("%d %b %Y %H:%M:%S")
+                                        end_str = chart_end.strftime("%d %b %Y %H:%M:%S")
+                                        klines = rest.futures_historical_klines(
+                                            symbol=strategy.symbol,
+                                            interval=strategy_interval,
+                                            start_str=start_str,
+                                            end_str=end_str
+                                        )
+                                        klines_data = klines if klines else None
+                                    else:
+                                        # Last fallback: fetch recent and filter
+                                        klines = rest.futures_klines(
+                                            symbol=strategy.symbol,
+                                            interval=strategy_interval,
+                                            limit=limit
+                                        )
+                                        if klines:
+                                            # Filter by time range
+                                            klines_data = [
+                                                k for k in klines
+                                                if start_timestamp <= int(k[0]) <= end_timestamp
+                                            ]
+                                        else:
+                                            klines_data = None
                             except Exception as klines_error:
                                 logger.warning(f"Failed to fetch klines for strategy {strategy.id}: {klines_error}")
                                 klines_data = None
                 except Exception as klines_exc:
                     logger.warning(f"Error fetching klines for strategy {strategy.id}: {klines_exc}")
                     klines_data = None
+                
+                # Calculate EMA indicators for charting if klines are available and strategy is scalping
+                indicators_data = None
+                if klines_data and strategy.strategy_type == "scalping":
+                    try:
+                        from app.strategies.indicators import calculate_ema
+                        
+                        # Extract closing prices
+                        closing_prices = [float(k[4]) for k in klines_data]
+                        
+                        # Get EMA periods from strategy params
+                        fast_period = 8  # default
+                        slow_period = 21  # default
+                        if hasattr(strategy, 'params') and strategy.params:
+                            if isinstance(strategy.params, dict):
+                                fast_period = int(strategy.params.get('ema_fast', 8))
+                                slow_period = int(strategy.params.get('ema_slow', 21))
+                            elif hasattr(strategy.params, 'ema_fast'):
+                                fast_period = int(getattr(strategy.params, 'ema_fast', 8))
+                                slow_period = int(getattr(strategy.params, 'ema_slow', 21))
+                        
+                        # Calculate EMA fast and slow
+                        ema_fast_values = []
+                        ema_slow_values = []
+                        
+                        for i in range(len(closing_prices)):
+                            # EMA fast
+                            prices_up_to_i = closing_prices[:i+1]
+                            ema_fast = calculate_ema(prices_up_to_i, fast_period) if len(prices_up_to_i) >= fast_period else None
+                            ema_fast_values.append(ema_fast)
+                            
+                            # EMA slow
+                            ema_slow = calculate_ema(prices_up_to_i, slow_period) if len(prices_up_to_i) >= slow_period else None
+                            ema_slow_values.append(ema_slow)
+                        
+                        # Create indicators data with timestamps matching klines
+                        indicators_data = {
+                            "ema_fast": [
+                                {"time": int(k[0]) // 1000, "value": ema_fast_values[i]} 
+                                for i, k in enumerate(klines_data) 
+                                if ema_fast_values[i] is not None
+                            ],
+                            "ema_slow": [
+                                {"time": int(k[0]) // 1000, "value": ema_slow_values[i]} 
+                                for i, k in enumerate(klines_data) 
+                                if ema_slow_values[i] is not None
+                            ],
+                            "ema_fast_period": fast_period,
+                            "ema_slow_period": slow_period
+                        }
+                    except Exception as indicators_error:
+                        logger.warning(f"Failed to calculate indicators for strategy {strategy.id}: {indicators_error}")
+                        indicators_data = None
                 
                 strategy_report = StrategyReport(
                     strategy_id=strategy.id,
@@ -516,6 +593,7 @@ def get_trading_report(
                     net_pnl=round(net_pnl, 4),
                     trades=completed_trades_list,
                     klines=klines_data,
+                    indicators=indicators_data,
                 )
                 
                 strategy_reports.append(strategy_report)
