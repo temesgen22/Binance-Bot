@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Trading Reports</title>
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/chart-utils.js"></script>
     <script src="/static/auth.js"></script>
     <script src="/static/settings.js"></script>
     <style>
@@ -882,6 +883,10 @@
                                 <button class="chart-button" onclick="toggleChart(${index})" id="chart-button-${index}">
                                     📈 Show Chart
                                 </button>
+                                <div id="indicatorControls-${index}" style="display: none; margin-bottom: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                                    <h4 style="margin-bottom: 10px; font-size: 1.1em;">Indicator Controls</h4>
+                                    <div id="indicatorToggles-${index}" style="display: flex; flex-wrap: wrap; gap: 15px;"></div>
+                                </div>
                                 <div id="chart-${index}" class="chart-container"></div>
                             </div>
                         ` : '<p style="color: #666; margin: 15px 0;">No chart data available for this strategy.</p>'}
@@ -972,6 +977,16 @@
         // Chart rendering function
         const charts = {}; // Store chart instances by strategy index
         const chartVisibility = {}; // Track chart visibility state
+        const candlestickSeries = {}; // Store candlestick series by strategy index
+        const indicatorSeries = {}; // Store indicator series by strategy index for toggle control
+        const indicatorToggles = {}; // Store toggle states by strategy index
+        
+        // Initialize chart renderer with reports-specific options
+        const chartRenderer = new ChartRenderer({
+            defaultHeight: 500,
+            secondsVisible: false, // Reports don't need second precision
+            supportRangeMeanReversion: true, // Enable range mean reversion support
+        });
         
         // Single resize handler for all charts
         let resizeHandler = null;
@@ -1020,6 +1035,447 @@
             }
         }
 
+        function createIndicatorToggles(strategy, index) {
+            const controlsDiv = document.getElementById(`indicatorControls-${index}`);
+            const togglesDiv = document.getElementById(`indicatorToggles-${index}`);
+            
+            if (!controlsDiv || !togglesDiv) return;
+            
+            const strategyType = strategy.strategy_type || '';
+            const isRangeMeanReversion = strategyType === 'range_mean_reversion' && 
+                                        strategy.indicators && 
+                                        strategy.indicators.range_high;
+            const hasEMAs = strategy.indicators && strategy.indicators.ema_fast && strategy.indicators.ema_slow;
+            
+            // Only show controls if there are indicators to toggle
+            if (!isRangeMeanReversion && !hasEMAs) {
+                controlsDiv.style.display = 'none';
+                return;
+            }
+            
+            controlsDiv.style.display = 'block';
+            
+            // Initialize toggle states for this chart
+            indicatorToggles[index] = {
+                rangeLines: true,
+                entryZones: true,
+                tpSlLevels: true,
+                rsi: true,
+                emaLines: true,
+                emaSpread: false
+            };
+            
+            // Build toggle HTML based on available indicators
+            let togglesHTML = '';
+            
+            if (isRangeMeanReversion) {
+                // Range mean reversion has all indicators
+                togglesHTML = `
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-range-lines-${index}" checked>
+                        <span>Range Lines (High/Mid/Low)</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-entry-zones-${index}" checked>
+                        <span>Entry Zones (Buy/Sell)</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-tp-sl-${index}" checked>
+                        <span>TP/SL Levels</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-rsi-${index}" checked>
+                        <span>RSI Panel</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-ema-lines-${index}" checked>
+                        <span>EMA Lines</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-ema-spread-${index}">
+                        <span>EMA Spread</span>
+                    </label>
+                `;
+            } else if (hasEMAs) {
+                // Scalping only has EMA lines
+                togglesHTML = `
+                    <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-ema-lines-${index}" checked>
+                        <span>EMA Lines</span>
+                    </label>
+                `;
+            }
+            
+            togglesDiv.innerHTML = togglesHTML;
+            
+            // Add event listeners based on available toggles
+            if (isRangeMeanReversion) {
+                document.getElementById(`toggle-range-lines-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].rangeLines = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+                document.getElementById(`toggle-entry-zones-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].entryZones = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+                document.getElementById(`toggle-tp-sl-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].tpSlLevels = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+                document.getElementById(`toggle-rsi-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].rsi = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+                document.getElementById(`toggle-ema-lines-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].emaLines = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+                document.getElementById(`toggle-ema-spread-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].emaSpread = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+            } else if (hasEMAs) {
+                document.getElementById(`toggle-ema-lines-${index}`).addEventListener('change', (e) => {
+                    indicatorToggles[index].emaLines = e.target.checked;
+                    updateIndicatorVisibility(index);
+                });
+            }
+        }
+
+        function updateIndicatorVisibility(index) {
+            if (!indicatorSeries[index] || !indicatorToggles[index]) return;
+            
+            const series = indicatorSeries[index];
+            const toggles = indicatorToggles[index];
+            const chart = charts[index];
+            const candlestickSeriesInstance = candlestickSeries[index];
+            
+            if (!chart || !candlestickSeriesInstance) {
+                console.warn(`Chart or candlestick series not found for index ${index}`);
+                return;
+            }
+            
+            // Update visibility of indicator series based on toggle states
+            if (series.rangeHigh) {
+                series.rangeHigh.applyOptions({ visible: toggles.rangeLines });
+            }
+            if (series.rangeMid) {
+                series.rangeMid.applyOptions({ visible: toggles.rangeLines });
+            }
+            if (series.rangeLow) {
+                series.rangeLow.applyOptions({ visible: toggles.rangeLines });
+            }
+            if (series.buyZoneUpper) {
+                series.buyZoneUpper.applyOptions({ visible: toggles.entryZones });
+            }
+            if (series.sellZoneLower) {
+                series.sellZoneLower.applyOptions({ visible: toggles.entryZones });
+            }
+            
+            // Handle TP/SL price lines (remove all and recreate if enabled)
+            if (series.tpSlPriceLines && series.tpSlPriceLines.length > 0) {
+                // Remove all existing TP/SL price lines
+                series.tpSlPriceLines.forEach(priceLine => {
+                    try {
+                        candlestickSeriesInstance.removePriceLine(priceLine);
+                    } catch (e) {
+                        // Price line might already be removed
+                        console.warn('Error removing price line:', e);
+                    }
+                });
+                series.tpSlPriceLines = [];
+            }
+            
+            // Recreate TP/SL price lines if toggle is enabled
+            if (toggles.tpSlLevels && series.tpSlData && candlestickSeriesInstance) {
+                series.tpSlPriceLines = [];
+                series.tpSlData.forEach(level => {
+                    if (level.tp1 !== null && level.tp1 !== undefined) {
+                        const tp1Line = candlestickSeriesInstance.createPriceLine({
+                            price: level.tp1,
+                            color: '#2196F3',
+                            lineWidth: 1,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'TP1',
+                        });
+                        series.tpSlPriceLines.push(tp1Line);
+                    }
+                    if (level.tp2 !== null && level.tp2 !== undefined) {
+                        const tp2Line = candlestickSeriesInstance.createPriceLine({
+                            price: level.tp2,
+                            color: '#00c853',
+                            lineWidth: 1,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'TP2',
+                        });
+                        series.tpSlPriceLines.push(tp2Line);
+                    }
+                    if (level.sl !== null && level.sl !== undefined) {
+                        const slLine = candlestickSeriesInstance.createPriceLine({
+                            price: level.sl,
+                            color: '#f44336',
+                            lineWidth: 2,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'SL',
+                        });
+                        series.tpSlPriceLines.push(slLine);
+                    }
+                });
+            }
+            
+            if (series.rsi) {
+                series.rsi.applyOptions({ visible: toggles.rsi });
+            }
+            if (series.rsiOversold) {
+                series.rsiOversold.applyOptions({ visible: toggles.rsi });
+            }
+            if (series.rsiOverbought) {
+                series.rsiOverbought.applyOptions({ visible: toggles.rsi });
+            }
+            if (series.emaFast) {
+                series.emaFast.applyOptions({ visible: toggles.emaLines });
+            }
+            if (series.emaSlow) {
+                series.emaSlow.applyOptions({ visible: toggles.emaLines });
+            }
+            if (series.emaSpread) {
+                series.emaSpread.applyOptions({ visible: toggles.emaSpread });
+            }
+        }
+
+        function addRangeMeanReversionIndicators(chart, candlestickSeries, strategy, index) {
+            const indicators = strategy.indicators;
+            if (!indicators) return;
+            
+            // Initialize indicator series storage for this chart
+            if (!indicatorSeries[index]) {
+                indicatorSeries[index] = {};
+            }
+            const series = indicatorSeries[index];
+            const toggles = indicatorToggles[index] || {
+                rangeLines: true,
+                entryZones: true,
+                tpSlLevels: true,
+                rsi: true,
+                emaLines: true,
+                emaSpread: false
+            };
+            
+            // Panel 1: Price + Range overlays (main pane, pane 0)
+            // Add range lines
+            if (indicators.range_high && indicators.range_low && indicators.range_mid) {
+                // Range High (bold line, red)
+                series.rangeHigh = chart.addLineSeries({
+                    color: '#f44336',
+                    lineWidth: 2,
+                    title: 'Range High',
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
+                    visible: toggles.rangeLines !== false,
+                });
+                series.rangeHigh.setData(indicators.range_high);
+                
+                // Range Mid (dashed line, gray)
+                series.rangeMid = chart.addLineSeries({
+                    color: '#757575',
+                    lineWidth: 1,
+                    lineStyle: 2, // Dashed
+                    title: 'Range Mid',
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
+                    visible: toggles.rangeLines !== false,
+                });
+                series.rangeMid.setData(indicators.range_mid);
+                
+                // Range Low (bold line, green)
+                series.rangeLow = chart.addLineSeries({
+                    color: '#4caf50',
+                    lineWidth: 2,
+                    title: 'Range Low',
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
+                    visible: toggles.rangeLines !== false,
+                });
+                series.rangeLow.setData(indicators.range_low);
+            }
+            
+            // Add entry zones (boundary lines)
+            if (indicators.buy_zone_upper && indicators.range_low) {
+                series.buyZoneUpper = chart.addLineSeries({
+                    color: '#4caf50',
+                    lineWidth: 1,
+                    lineStyle: 2, // Dashed
+                    title: 'Buy Zone Upper',
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
+                    visible: toggles.entryZones !== false,
+                });
+                series.buyZoneUpper.setData(indicators.buy_zone_upper);
+            }
+            
+            if (indicators.sell_zone_lower && indicators.range_high) {
+                series.sellZoneLower = chart.addLineSeries({
+                    color: '#f44336',
+                    lineWidth: 1,
+                    lineStyle: 2, // Dashed
+                    title: 'Sell Zone Lower',
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceFormat: {
+                        type: 'price',
+                        precision: 6,
+                        minMove: 0.000001,
+                    },
+                    visible: toggles.entryZones !== false,
+                });
+                series.sellZoneLower.setData(indicators.sell_zone_lower);
+            }
+            
+            // Add TP/SL levels (price lines on candlestick series)
+            series.tpSlData = [];
+            series.tpSlPriceLines = []; // Store price line references for toggling
+            if (indicators.tp_sl_levels && indicators.tp_sl_levels.length > 0 && toggles.tpSlLevels !== false) {
+                indicators.tp_sl_levels.forEach(level => {
+                    if (level.tp1 !== null && level.tp1 !== undefined) {
+                        const tp1Line = candlestickSeries.createPriceLine({
+                            price: level.tp1,
+                            color: '#2196F3',
+                            lineWidth: 1,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'TP1',
+                        });
+                        series.tpSlPriceLines.push(tp1Line);
+                    }
+                    if (level.tp2 !== null && level.tp2 !== undefined) {
+                        const tp2Line = candlestickSeries.createPriceLine({
+                            price: level.tp2,
+                            color: '#00c853',
+                            lineWidth: 1,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'TP2',
+                        });
+                        series.tpSlPriceLines.push(tp2Line);
+                    }
+                    if (level.sl !== null && level.sl !== undefined) {
+                        const slLine = candlestickSeries.createPriceLine({
+                            price: level.sl,
+                            color: '#f44336',
+                            lineWidth: 2,
+                            lineStyle: 1,
+                            axisLabelVisible: true,
+                            title: 'SL',
+                        });
+                        series.tpSlPriceLines.push(slLine);
+                    }
+                    series.tpSlData.push(level);
+                });
+            }
+            
+            // Panel 2: RSI (separate price scale on the right)
+            if (indicators.rsi && indicators.rsi.length > 0) {
+                series.rsi = chart.addLineSeries({
+                    color: '#9C27B0',
+                    lineWidth: 2,
+                    title: `RSI (${indicators.rsi_period || 14})`,
+                    priceLineVisible: false,
+                    lastValueVisible: true,
+                    priceScaleId: 'rsi',
+                    visible: toggles.rsi !== false,
+                });
+                
+                chart.priceScale('rsi').applyOptions({
+                    scaleMargins: {
+                        top: 0.1,
+                        bottom: 0.1,
+                    },
+                });
+                
+                series.rsi.setData(indicators.rsi);
+                
+                // Add RSI oversold line
+                if (indicators.rsi_oversold !== undefined) {
+                    series.rsiOversold = chart.addLineSeries({
+                        color: '#4caf50',
+                        lineWidth: 1,
+                        lineStyle: 2, // Dashed
+                        title: `RSI Oversold (${indicators.rsi_oversold})`,
+                        priceLineVisible: false,
+                        priceScaleId: 'rsi',
+                        visible: toggles.rsi !== false,
+                    });
+                    const oversoldData = indicators.rsi.map(r => ({
+                        time: r.time,
+                        value: indicators.rsi_oversold
+                    }));
+                    series.rsiOversold.setData(oversoldData);
+                }
+                
+                // Add RSI overbought line
+                if (indicators.rsi_overbought !== undefined) {
+                    series.rsiOverbought = chart.addLineSeries({
+                        color: '#f44336',
+                        lineWidth: 1,
+                        lineStyle: 2, // Dashed
+                        title: `RSI Overbought (${indicators.rsi_overbought})`,
+                        priceLineVisible: false,
+                        priceScaleId: 'rsi',
+                        visible: toggles.rsi !== false,
+                    });
+                    const overboughtData = indicators.rsi.map(r => ({
+                        time: r.time,
+                        value: indicators.rsi_overbought
+                    }));
+                    series.rsiOverbought.setData(overboughtData);
+                }
+            }
+            
+            // Add EMA spread line if available (for range mean reversion)
+            if (indicators.ema_spread_pct && indicators.ema_spread_pct.length > 0) {
+                series.emaSpread = chart.addLineSeries({
+                    color: '#9C27B0',
+                    lineWidth: 1,
+                    title: 'EMA Spread %',
+                    priceLineVisible: false,
+                    priceScaleId: 'emaSpread',
+                    visible: toggles.emaSpread !== false,
+                });
+                
+                chart.priceScale('emaSpread').applyOptions({
+                    scaleMargins: {
+                        top: 0.1,
+                        bottom: 0.1,
+                    },
+                });
+                
+                series.emaSpread.setData(indicators.ema_spread_pct);
+            }
+        }
+
         function renderChart(strategy, index) {
             const chartContainer = document.getElementById(`chart-${index}`);
             if (!chartContainer) return;
@@ -1028,6 +1484,18 @@
             if (charts[index]) {
                 charts[index].remove();
                 delete charts[index];
+            }
+            // Clear candlestick series reference
+            if (candlestickSeries[index]) {
+                delete candlestickSeries[index];
+            }
+            // Clear indicator series references
+            if (indicatorSeries[index]) {
+                delete indicatorSeries[index];
+            }
+            // Clear toggle states
+            if (indicatorToggles[index]) {
+                delete indicatorToggles[index];
             }
             
             if (!strategy.klines || strategy.klines.length === 0) {
@@ -1041,33 +1509,20 @@
                 return;
             }
             
-            // Create chart
+            // Determine strategy type and chart height
+            const strategyType = strategy.strategy_type || '';
+            const isRangeMeanReversion = strategyType === 'range_mean_reversion' && 
+                                        strategy.indicators && 
+                                        strategy.indicators.range_high;
+            const chartHeight = isRangeMeanReversion ? 800 : 500; // Taller for range mean reversion
+            
+            // Update chart container height
+            chartContainer.style.height = chartHeight + 'px';
+            
+            // Create chart using shared utility
             let chart;
             try {
-                chart = LightweightCharts.createChart(chartContainer, {
-                    width: chartContainer.clientWidth,
-                    height: 500,
-                    layout: {
-                        background: { color: '#ffffff' },
-                        textColor: '#333',
-                    },
-                    grid: {
-                        vertLines: { color: '#e0e0e0' },
-                        horzLines: { color: '#e0e0e0' },
-                    },
-                    timeScale: {
-                        timeVisible: true,
-                        secondsVisible: false,
-                    },
-                    rightPriceScale: {
-                        borderColor: '#cccccc',
-                        // Configure price format to show 5-6 decimal places
-                        scaleMargins: {
-                            top: 0.1,
-                            bottom: 0.1,
-                        },
-                    },
-                });
+                chart = chartRenderer.createChart(chartContainer, chartHeight);
             } catch (e) {
                 console.error('Error creating chart:', e);
                 chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart. Please refresh the page.</p>';
@@ -1077,22 +1532,12 @@
             // Store chart instance
             charts[index] = chart;
             
-            // Add candlestick series with price format precision
-            let candlestickSeries;
+            // Add candlestick series using shared utility
+            let candlestickSeriesInstance;
             try {
-                candlestickSeries = chart.addCandlestickSeries({
-                    upColor: '#26a69a',
-                    downColor: '#ef5350',
-                    borderVisible: false,
-                    wickUpColor: '#26a69a',
-                    wickDownColor: '#ef5350',
-                    // Configure price format to show 5-6 decimal places
-                    priceFormat: {
-                        type: 'price',
-                        precision: 6,
-                        minMove: 0.000001,
-                    },
-                });
+                candlestickSeriesInstance = chartRenderer.createCandlestickSeries(chart);
+                // Store candlestick series reference for toggle control
+                candlestickSeries[index] = candlestickSeriesInstance;
             } catch (e) {
                 console.error('Error creating candlestick series:', e);
                 chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart series. Please refresh the page.</p>';
@@ -1101,39 +1546,8 @@
                 return;
             }
             
-            // Prepare candlestick data (filter out invalid entries)
-            // Binance klines format: [timestamp_ms, open, high, low, close, volume, ...]
-            const candlestickData = strategy.klines
-                .filter(k => k && Array.isArray(k) && k.length >= 5 && k[0] && k[1] && k[2] && k[3] && k[4])
-                .map(k => {
-                    // k[0] is timestamp in milliseconds from Binance
-                    const timestampMs = parseInt(k[0]);
-                    if (isNaN(timestampMs) || timestampMs <= 0) {
-                        console.warn('Invalid kline timestamp:', k[0]);
-                        return null;
-                    }
-                    
-                    const open = parseFloat(k[1]);
-                    const high = parseFloat(k[2]);
-                    const low = parseFloat(k[3]);
-                    const close = parseFloat(k[4]);
-                    
-                    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
-                        console.warn('Invalid kline price data:', k);
-                        return null;
-                    }
-                    
-                    // TradingView Lightweight Charts expects Unix timestamp in seconds
-                    // Convert milliseconds to seconds
-                    return {
-                        time: Math.floor(timestampMs / 1000),
-                        open: open,
-                        high: high,
-                        low: low,
-                        close: close,
-                    };
-                })
-                .filter(item => item !== null); // Remove null entries
+            // Process klines data using shared utility
+            const candlestickData = chartRenderer.processKlineData(strategy.klines); // Remove null entries
             
             if (candlestickData.length === 0) {
                 chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No valid chart data available.</p>';
@@ -1145,50 +1559,37 @@
                 return;
             }
             
-            // Add EMA indicator lines if available
-            let emaFastSeries = null;
-            let emaSlowSeries = null;
+            // Initialize indicator series storage for this chart
+            if (!indicatorSeries[index]) {
+                indicatorSeries[index] = {};
+            }
             
-            if (strategy.indicators && strategy.indicators.ema_fast && strategy.indicators.ema_slow) {
+            // Create indicator toggles based on strategy type (before adding indicators)
+            createIndicatorToggles(strategy, index);
+            
+            // Add Range Mean Reversion indicators if applicable
+            if (isRangeMeanReversion) {
                 try {
-                    // EMA Fast line (blue)
-                    emaFastSeries = chart.addLineSeries({
-                        color: '#2196F3',
-                        lineWidth: 2,
-                        title: `EMA Fast (${strategy.indicators.ema_fast_period || 8})`,
-                        priceLineVisible: false,
-                        lastValueVisible: true,
-                        priceFormat: {
-                            type: 'price',
-                            precision: 6,
-                            minMove: 0.000001,
-                        },
-                    });
-                    
-                    // EMA Slow line (orange)
-                    emaSlowSeries = chart.addLineSeries({
-                        color: '#FF9800',
-                        lineWidth: 2,
-                        title: `EMA Slow (${strategy.indicators.ema_slow_period || 21})`,
-                        priceLineVisible: false,
-                        lastValueVisible: true,
-                        priceFormat: {
-                            type: 'price',
-                            precision: 6,
-                            minMove: 0.000001,
-                        },
-                    });
-                    
-                    // Set EMA data
-                    emaFastSeries.setData(strategy.indicators.ema_fast);
-                    emaSlowSeries.setData(strategy.indicators.ema_slow);
+                    addRangeMeanReversionIndicators(chart, candlestickSeriesInstance, strategy, index);
                 } catch (e) {
-                    console.warn('Error adding EMA lines:', e);
+                    console.error('Error adding range mean reversion indicators:', e);
+                }
+            }
+            
+            // Add EMA indicator lines using shared utility (for both scalping and range mean reversion)
+            const emaLines = chartRenderer.addEMALines(chart, strategy.indicators);
+            if (emaLines) {
+                // Store for toggle control (merge with existing if range mean reversion already added some)
+                if (!indicatorSeries[index].emaFast) {
+                    indicatorSeries[index].emaFast = emaLines.emaFast;
+                }
+                if (!indicatorSeries[index].emaSlow) {
+                    indicatorSeries[index].emaSlow = emaLines.emaSlow;
                 }
             }
             
             try {
-                candlestickSeries.setData(candlestickData);
+                candlestickSeriesInstance.setData(candlestickData);
             } catch (e) {
                 console.error('Error setting chart data:', e);
                 chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error loading chart data. Please refresh the page.</p>';
@@ -1244,223 +1645,38 @@
                 ohlcBox.style.display = 'block';
             }
             
-            // Subscribe to crosshair movement to update fixed OHLC display
-            chart.subscribeCrosshairMove(param => {
-                if (!ohlcBox) return;
-                
-                if (param.point === undefined || !param.time || param.seriesData.size === 0) {
-                    // Hide or show default when not hovering
-                    return;
-                }
-                
-                const data = param.seriesData.get(candlestickSeries);
-                if (!data || !data.time) {
-                    return;
-                }
-                
-                // Find the candle data for this timestamp
-                const candleTime = data.time;
-                const candle = candlestickData.find(c => c.time === candleTime);
-                
-                if (!candle) {
-                    return;
-                }
-                
-                const { open, high, low, close } = candle;
-                
-                // Calculate change percentage
-                const change = close - open;
-                const changePercent = open !== 0 ? ((change / open) * 100) : 0;
-                const changeColor = change >= 0 ? '#4caf50' : '#f44336';
-                const changeSign = change >= 0 ? '+' : '';
-                
-                // Format prices with 5 decimals (matching the image)
-                const formatPrice = (price) => parseFloat(price).toFixed(5);
-                
-                // Get EMA values for this candle if available
-                let emaFast = null;
-                let emaSlow = null;
-                let emaFastPeriod = null;
-                let emaSlowPeriod = null;
-                
-                if (strategy.indicators && strategy.indicators.ema_fast && strategy.indicators.ema_slow) {
-                    // Find EMA values for this timestamp
-                    const emaFastData = strategy.indicators.ema_fast.find(e => e.time === candleTime);
-                    const emaSlowData = strategy.indicators.ema_slow.find(e => e.time === candleTime);
-                    
-                    if (emaFastData && emaFastData.value !== undefined) {
-                        emaFast = emaFastData.value;
-                    }
-                    if (emaSlowData && emaSlowData.value !== undefined) {
-                        emaSlow = emaSlowData.value;
-                    }
-                    
-                    emaFastPeriod = strategy.indicators.ema_fast_period || 8;
-                    emaSlowPeriod = strategy.indicators.ema_slow_period || 21;
-                }
-                
-                // Update fixed OHLC display
-                const openEl = document.getElementById(`ohlc-open-${index}`);
-                const highEl = document.getElementById(`ohlc-high-${index}`);
-                const lowEl = document.getElementById(`ohlc-low-${index}`);
-                const closeEl = document.getElementById(`ohlc-close-${index}`);
-                const changeEl = document.getElementById(`ohlc-change-${index}`);
-                
-                if (openEl) openEl.textContent = formatPrice(open);
-                if (highEl) highEl.textContent = formatPrice(high);
-                if (lowEl) lowEl.textContent = formatPrice(low);
-                if (closeEl) {
-                    closeEl.textContent = formatPrice(close);
-                    closeEl.style.color = changeColor;
-                }
-                if (changeEl) {
-                    changeEl.textContent = `${changeSign}${changePercent.toFixed(2)}%`;
-                    changeEl.style.color = changeColor;
-                }
-                
-                // Update EMA values if available
-                const emaFastItem = document.getElementById(`ohlc-ema-fast-item-${index}`);
-                const emaFastEl = document.getElementById(`ohlc-ema-fast-${index}`);
-                const emaFastLabel = document.getElementById(`ohlc-ema-fast-label-${index}`);
-                const emaSlowItem = document.getElementById(`ohlc-ema-slow-item-${index}`);
-                const emaSlowEl = document.getElementById(`ohlc-ema-slow-${index}`);
-                const emaSlowLabel = document.getElementById(`ohlc-ema-slow-label-${index}`);
-                
-                if (emaFast !== null && emaFastItem && emaFastEl && emaFastLabel) {
-                    emaFastItem.style.display = 'flex';
-                    emaFastEl.textContent = formatPrice(emaFast);
-                    emaFastLabel.textContent = `EMA(${emaFastPeriod})`;
-                } else if (emaFastItem) {
-                    emaFastItem.style.display = 'none';
-                }
-                
-                if (emaSlow !== null && emaSlowItem && emaSlowEl && emaSlowLabel) {
-                    emaSlowItem.style.display = 'flex';
-                    emaSlowEl.textContent = formatPrice(emaSlow);
-                    emaSlowLabel.textContent = `EMA(${emaSlowPeriod})`;
-                } else if (emaSlowItem) {
-                    emaSlowItem.style.display = 'none';
-                }
+            // Setup OHLC display using shared utility
+            chartRenderer.setupOHLCDisplay(chart, candlestickSeriesInstance, candlestickData, strategy.indicators, {
+                ohlcBoxId: `ohlc-info-${index}`,
+                openId: `ohlc-open-${index}`,
+                highId: `ohlc-high-${index}`,
+                lowId: `ohlc-low-${index}`,
+                closeId: `ohlc-close-${index}`,
+                changeId: `ohlc-change-${index}`,
+                emaFastItemId: `ohlc-ema-fast-item-${index}`,
+                emaFastId: `ohlc-ema-fast-${index}`,
+                emaFastLabelId: `ohlc-ema-fast-label-${index}`,
+                emaSlowItemId: `ohlc-ema-slow-item-${index}`,
+                emaSlowId: `ohlc-ema-slow-${index}`,
+                emaSlowLabelId: `ohlc-ema-slow-label-${index}`,
             });
             
-            // Add markers for trades with detailed information
-            if (strategy.trades && strategy.trades.length > 0) {
-                const markers = [];
-                
-                strategy.trades.forEach(trade => {
-                    // Entry marker with price and side information
-                    if (trade.entry_time) {
-                        try {
-                            const entryDate = new Date(trade.entry_time);
-                            if (isNaN(entryDate.getTime())) {
-                                console.warn('Invalid entry_time:', trade.entry_time);
-                                return; // Skip this trade
-                            }
-                            const entryTime = Math.floor(entryDate.getTime() / 1000);
-                            const entryPrice = (trade.entry_price !== undefined && trade.entry_price !== null) 
-                                ? `$${parseFloat(trade.entry_price).toFixed(4)}` 
-                                : '';
-                            const side = trade.side || 'LONG'; // Default to LONG if missing
-                            const entryText = `${side === 'LONG' ? 'BUY' : 'SELL'}${entryPrice ? ' ' + entryPrice : ''}`;
-                            markers.push({
-                                time: entryTime,
-                                position: side === 'LONG' ? 'belowBar' : 'aboveBar',
-                                color: side === 'LONG' ? '#26a69a' : '#ef5350',
-                                shape: side === 'LONG' ? 'arrowUp' : 'arrowDown',
-                                text: entryText,
-                                size: 2,
-                            });
-                        } catch (e) {
-                            console.warn('Error processing entry marker:', e, trade);
-                        }
-                    }
-                    
-                    // Exit marker with exit reason, price, and PnL (if trade is closed)
-                    if (trade.exit_time) {
-                        try {
-                            // Parse ISO 8601 datetime string from API
-                            const exitDate = new Date(trade.exit_time);
-                            if (isNaN(exitDate.getTime())) {
-                                console.warn('Invalid exit_time:', trade.exit_time);
-                                return; // Skip this trade exit
-                            }
-                            // Convert to Unix timestamp in seconds for chart library
-                            const exitTime = Math.floor(exitDate.getTime() / 1000);
-                            const side = trade.side || 'LONG'; // Default to LONG if missing
-                            // Determine exit color based on PnL and exit reason
-                            let exitColor;
-                            if (trade.exit_reason === 'TP_TRAILING') {
-                                // Trailing TP - use bright green
-                                exitColor = '#00c853';
-                            } else if (trade.exit_reason === 'SL_TRAILING') {
-                                // Trailing SL - use orange (less severe than regular SL)
-                                exitColor = '#ff9800';
-                            } else if (trade.pnl_usd !== undefined && trade.pnl_usd !== null && trade.pnl_usd >= 0) {
-                                // Regular profit
-                                exitColor = '#26a69a';
-                            } else {
-                                // Regular loss
-                                exitColor = '#ef5350';
-                            }
-                            
-                            // Build exit text with reason, price, and PnL (truncate if too long)
-                            let exitText = 'EXIT';
-                            if (trade.exit_reason) {
-                                // Make trailing stops more visible
-                                const reason = trade.exit_reason;
-                                if (reason === 'TP_TRAILING' || reason === 'SL_TRAILING') {
-                                    exitText += ` (${reason.replace('_', ' ')} ⚡)`;
-                                } else {
-                                    exitText += ` (${reason})`;
-                                }
-                            }
-                            if (trade.exit_price !== undefined && trade.exit_price !== null) {
-                                exitText += ` @ $${parseFloat(trade.exit_price).toFixed(4)}`;
-                            }
-                            if (trade.pnl_usd !== undefined && trade.pnl_usd !== null) {
-                                const pnlSign = trade.pnl_usd >= 0 ? '+' : '';
-                                exitText += ` ${pnlSign}$${parseFloat(trade.pnl_usd).toFixed(2)}`;
-                                if (trade.pnl_pct !== undefined && trade.pnl_pct !== null) {
-                                    exitText += ` (${pnlSign}${parseFloat(trade.pnl_pct).toFixed(2)}%)`;
-                                }
-                            }
-                            
-                            // Truncate text if too long (chart library has limits)
-                            if (exitText.length > 50) {
-                                exitText = exitText.substring(0, 47) + '...';
-                            }
-                            
-                            markers.push({
-                                time: exitTime,
-                                position: side === 'LONG' ? 'aboveBar' : 'belowBar',
-                                color: exitColor,
-                                shape: 'circle',
-                                text: exitText,
-                                size: 1.5,
-                            });
-                        } catch (e) {
-                            console.warn('Error processing exit marker:', e, trade);
-                        }
-                    }
-                });
-                
-                if (markers.length > 0) {
-                    try {
-                        candlestickSeries.setMarkers(markers);
-                    } catch (e) {
-                        console.warn('Error setting markers:', e);
-                        // Continue without markers rather than failing
-                    }
+            // Add markers for trades using shared utility
+            const markers = chartRenderer.createTradeMarkers(strategy.trades, {
+                sideField: 'side', // reports format
+                pnlUsdField: 'pnl_usd', // reports format
+            });
+            
+            if (markers.length > 0) {
+                try {
+                    candlestickSeriesInstance.setMarkers(markers);
+                } catch (e) {
+                    console.warn('Error setting markers:', e);
                 }
             }
             
-            // Fit content
-            try {
-                chart.timeScale().fitContent();
-            } catch (e) {
-                console.warn('Error fitting chart content:', e);
-                // Continue - chart will still display
-            }
+            // Fit content using shared utility
+            chartRenderer.fitContent(chart);
         }
 
         // Initialize - load report on page load

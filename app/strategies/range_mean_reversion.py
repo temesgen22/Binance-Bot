@@ -72,15 +72,132 @@ class RangeMeanReversionStrategy(Strategy):
         # Short trading
         self.enable_short = self.parse_bool_param(context.params.get("enable_short"), default=True)
         
+        # Cooldown after exit (prevents flip-flops)
+        self.cooldown_candles = int(context.params.get("cooldown_candles", 2))  # Candles to wait after exit
+        self.cooldown_left: int = 0  # Candles remaining in cooldown
+        
         # Position tracking
         self.position: Optional[Literal["LONG", "SHORT"]] = None
         self.entry_price: Optional[float] = None
+        self.entry_candle_time: Optional[int] = None  # Track entry candle to prevent immediate exits
+        
+        # Track last processed candle to avoid duplicate signals
+        self.last_closed_candle_time: Optional[int] = None
         
         # Range state
         self.range_high: Optional[float] = None
         self.range_low: Optional[float] = None
         self.range_mid: Optional[float] = None
         self.range_valid: bool = False
+        self.range_invalid_count: int = 0  # Track consecutive invalid range detections
+        self.max_range_invalid_candles: int = int(context.params.get("max_range_invalid_candles", 20))  # Reset range after N invalid candles
+    
+    def _exit_signal(
+        self,
+        action: Literal["SELL", "BUY"],
+        price: float,
+        exit_reason: str,
+        confidence: float
+    ) -> StrategySignal:
+        """Helper to create exit signal and reset position state."""
+        current_position = self.position
+        self.position = None
+        self.entry_price = None
+        self.entry_candle_time = None
+        self.cooldown_left = self.cooldown_candles
+        return StrategySignal(
+            action=action,
+            symbol=self.context.symbol,
+            confidence=confidence,
+            price=price,
+            exit_reason=exit_reason,
+            position_side=current_position
+        )
+    
+    def _check_tp_sl(
+        self,
+        live_price: float,
+        *,
+        allow_tp: bool = True
+    ) -> Optional[StrategySignal]:
+        """
+        Check TP/SL using last known range.
+        
+        Args:
+            live_price: Current live price
+            allow_tp: Whether to allow TP exits (False to block on entry candle)
+        
+        Returns:
+            StrategySignal if TP/SL hit, None otherwise
+        """
+        # Only check if we have position and valid range
+        # Note: entry_price is not used in range-based TP/SL calculations, so we don't check it
+        # This prevents skipping exits if entry_price is None/0.0 due to desync
+        if not (self.position and self.range_valid and 
+                self.range_high is not None and self.range_low is not None and self.range_mid is not None):
+            return None
+        
+        range_size = self.range_high - self.range_low
+        
+        if self.position == "LONG":
+            tp1 = self.range_mid
+            tp2 = self.range_high - (range_size * self.tp_buffer_pct)
+            sl = self.range_low - (range_size * self.sl_buffer_pct)
+            
+            # Check SL first (critical exit - always allowed)
+            if live_price <= sl:
+                logger.info(
+                    f"[{self.context.id}] Long SL hit (below range): "
+                    f"{live_price:.8f} <= {sl:.8f}"
+                )
+                return self._exit_signal("SELL", live_price, "SL_RANGE_BREAK", 0.85)
+            
+            # Check TP (only if allowed - blocked on entry candle)
+            if allow_tp:
+                if live_price >= tp2:
+                    logger.info(
+                        f"[{self.context.id}] Long TP2 hit (range high): "
+                        f"{live_price:.8f} >= {tp2:.8f}"
+                    )
+                    return self._exit_signal("SELL", live_price, "TP_RANGE_HIGH", 0.9)
+                
+                if live_price >= tp1:
+                    logger.info(
+                        f"[{self.context.id}] Long TP1 hit (range mid): "
+                        f"{live_price:.8f} >= {tp1:.8f}"
+                    )
+                    return self._exit_signal("SELL", live_price, "TP_RANGE_MID", 0.85)
+        
+        elif self.position == "SHORT":
+            tp1 = self.range_mid
+            tp2 = self.range_low + (range_size * self.tp_buffer_pct)
+            sl = self.range_high + (range_size * self.sl_buffer_pct)
+            
+            # Check SL first (critical exit - always allowed)
+            if live_price >= sl:
+                logger.info(
+                    f"[{self.context.id}] Short SL hit (above range): "
+                    f"{live_price:.8f} >= {sl:.8f}"
+                )
+                return self._exit_signal("BUY", live_price, "SL_RANGE_BREAK", 0.85)
+            
+            # Check TP (only if allowed - blocked on entry candle)
+            if allow_tp:
+                if live_price <= tp2:
+                    logger.info(
+                        f"[{self.context.id}] Short TP2 hit (range low): "
+                        f"{live_price:.8f} <= {tp2:.8f}"
+                    )
+                    return self._exit_signal("BUY", live_price, "TP_RANGE_LOW", 0.9)
+                
+                if live_price <= tp1:
+                    logger.info(
+                        f"[{self.context.id}] Short TP1 hit (range mid): "
+                        f"{live_price:.8f} <= {tp1:.8f}"
+                    )
+                    return self._exit_signal("BUY", live_price, "TP_RANGE_MID", 0.85)
+        
+        return None
     
     def sync_position_state(
         self,
@@ -97,6 +214,9 @@ class RangeMeanReversionStrategy(Strategy):
             )
             self.position = None
             self.entry_price = None
+            self.entry_candle_time = None
+            # Set cooldown when position is closed externally
+            self.cooldown_left = self.cooldown_candles
         elif position_side is not None and self.position is None:
             price_str = f"{entry_price:.8f}" if entry_price is not None else "unknown"
             logger.info(
@@ -105,12 +225,31 @@ class RangeMeanReversionStrategy(Strategy):
             )
             self.position = position_side
             self.entry_price = entry_price
+            # Entry candle time unknown when syncing from Binance
+            self.entry_candle_time = None
         elif position_side != self.position:
             logger.warning(
                 f"[{self.context.id}] Strategy position ({self.position}) doesn't match "
                 f"Binance ({position_side}). Syncing to Binance."
             )
             self.position = position_side
+            self.entry_price = entry_price
+            self.entry_candle_time = None  # Unknown when syncing from Binance
+        elif position_side is None:
+            # Position closed - reset entry candle time and set cooldown
+            self.position = None
+            self.entry_price = None
+            self.entry_candle_time = None
+            if self.cooldown_left == 0:  # Only set if not already set
+                self.cooldown_left = self.cooldown_candles
+        else:
+            # Position matches - but update entry_price to reflect actual filled price
+            # This ensures strategy's entry_price matches Binance reality (handles slippage/spread)
+            if entry_price is not None and entry_price != self.entry_price:
+                logger.debug(
+                    f"[{self.context.id}] Updating entry_price from {self.entry_price:.8f} "
+                    f"to {entry_price:.8f} (actual filled price from Binance)"
+                )
             self.entry_price = entry_price
     
     def _detect_range(self, klines: list[list]) -> Tuple[Optional[float], Optional[float], Optional[float], bool]:
@@ -204,6 +343,80 @@ class RangeMeanReversionStrategy(Strategy):
             # Get current price (live)
             live_price = self.client.get_price(self.context.symbol)
             
+            # BUG FIX: Check for duplicate/older candles BEFORE any processing
+            # This prevents processing the same candle multiple times
+            closed_klines = klines[:-1]  # Exclude current forming candle
+            if not closed_klines:
+                return StrategySignal(
+                    action="HOLD",
+                    symbol=self.context.symbol,
+                    confidence=0.0,
+                    price=live_price
+                )
+            
+            last_closed = closed_klines[-1]
+            last_closed_time = int(last_closed[6])  # close_time in ms
+            
+            # Check for strictly older candles (not duplicates)
+            # CRITICAL FIX: If older candle received, do TP/SL only and return immediately
+            # Do NOT update last_closed_candle_time to prevent corrupting forward-only logic
+            if self.last_closed_candle_time is not None and last_closed_time < self.last_closed_candle_time:
+                logger.warning(
+                    f"[{self.context.id}] Skipping OLDER candle: time={last_closed_time} "
+                    f"(last_processed={self.last_closed_candle_time}). "
+                    f"Only checking TP/SL if in position, then returning."
+                )
+                # Only check TP/SL if in position, then return immediately
+                # Do NOT update last_closed_candle_time (would corrupt forward-only logic)
+                if self.position is not None and self.entry_price is not None:
+                    # Check entry candle protection (consistent with duplicate/main paths)
+                    on_entry_candle = (self.entry_candle_time is not None and 
+                                      self.last_closed_candle_time is not None and 
+                                      self.entry_candle_time == self.last_closed_candle_time)
+                    
+                    # Check TP/SL using unified helper (consistent with other paths)
+                    exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                    if exit_signal:
+                        return exit_signal
+                # Return HOLD after TP/SL check (or if no position)
+                return StrategySignal(
+                    action="HOLD",
+                    symbol=self.context.symbol,
+                    confidence=0.1,
+                    price=live_price
+                )
+            
+            # Check for duplicate candle processing
+            # OPTIMIZATION: On duplicate candle, do TP/SL only and return early
+            # Don't waste CPU/API on range detection for same candle
+            if self.last_closed_candle_time == last_closed_time:
+                logger.debug(
+                    f"[{self.context.id}] Duplicate candle detected (time={last_closed_time}). "
+                    f"Only checking TP/SL if in position, then returning."
+                )
+                # Only check TP/SL if in position, then return immediately
+                # Don't run range detection (wasteful for duplicate candle)
+                if self.position is not None and self.entry_price is not None:
+                    # Check entry candle protection (consistent with older/main paths)
+                    on_entry_candle = (self.entry_candle_time is not None and 
+                                      self.last_closed_candle_time is not None and 
+                                      self.entry_candle_time == self.last_closed_candle_time)
+                    
+                    # Check TP/SL using unified helper (consistent with other paths)
+                    exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                    if exit_signal:
+                        return exit_signal
+                # Return HOLD after TP/SL check (or if no position)
+                return StrategySignal(
+                    action="HOLD",
+                    symbol=self.context.symbol,
+                    confidence=0.1,
+                    price=live_price
+                )
+            
+            # Mark candle as processed (only if not older/duplicate)
+            self.last_closed_candle_time = last_closed_time
+            
             # Detect range
             range_high, range_low, range_mid, range_valid = self._detect_range(klines)
             
@@ -211,136 +424,15 @@ class RangeMeanReversionStrategy(Strategy):
             # This ensures we can exit even if current range detection fails (e.g., breakout)
             # Following the same pattern as EmaScalpingStrategy for consistency
             if self.position is not None and self.entry_price is not None:
-                # Use last known valid range if available (for TP/SL checks)
-                # If no previous range, skip TP/SL check (shouldn't happen, but safe)
-                if self.range_valid and self.range_high is not None and self.range_low is not None and self.range_mid is not None:
-                    if self.position == "LONG":
-                        # TP1: range_mid
-                        # TP2: range_high - buffer
-                        # SL: range_low - buffer
-                        # Use last known range values (self.range_*) for TP/SL calculation
-                        range_size = self.range_high - self.range_low
-                        tp1 = self.range_mid
-                        tp2 = self.range_high - (range_size * self.tp_buffer_pct)
-                        sl = self.range_low - (range_size * self.sl_buffer_pct)
-                        
-                        # Check TP2 first (higher priority)
-                        if live_price >= tp2:
-                            logger.info(
-                                f"[{self.context.id}] Long TP2 hit (range high): "
-                                f"{live_price:.8f} >= {tp2:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="SELL",
-                                symbol=self.context.symbol,
-                                confidence=0.9,
-                                price=live_price,
-                                exit_reason="TP_RANGE_HIGH",
-                                position_side=current_position
-                            )
-                        
-                        # Check TP1
-                        if live_price >= tp1:
-                            logger.info(
-                                f"[{self.context.id}] Long TP1 hit (range mid): "
-                                f"{live_price:.8f} >= {tp1:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="SELL",
-                                symbol=self.context.symbol,
-                                confidence=0.85,
-                                price=live_price,
-                                exit_reason="TP_RANGE_MID",
-                                position_side=current_position
-                            )
-                        
-                        # Check SL
-                        if live_price <= sl:
-                            logger.info(
-                                f"[{self.context.id}] Long SL hit (below range): "
-                                f"{live_price:.8f} <= {sl:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="SELL",
-                                symbol=self.context.symbol,
-                                confidence=0.85,
-                                price=live_price,
-                                exit_reason="SL_RANGE_BREAK",
-                                position_side=current_position
-                            )
-                    
-                    elif self.position == "SHORT":
-                        # TP1: range_mid
-                        # TP2: range_low + buffer
-                        # SL: range_high + buffer
-                        # Use last known range values (self.range_*) for TP/SL calculation
-                        range_size = self.range_high - self.range_low
-                        tp1 = self.range_mid
-                        tp2 = self.range_low + (range_size * self.tp_buffer_pct)
-                        sl = self.range_high + (range_size * self.sl_buffer_pct)
-                        
-                        # Check TP2 first (higher priority)
-                        if live_price <= tp2:
-                            logger.info(
-                                f"[{self.context.id}] Short TP2 hit (range low): "
-                                f"{live_price:.8f} <= {tp2:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="BUY",
-                                symbol=self.context.symbol,
-                                confidence=0.9,
-                                price=live_price,
-                                exit_reason="TP_RANGE_LOW",
-                                position_side=current_position
-                            )
-                        
-                        # Check TP1
-                        if live_price <= tp1:
-                            logger.info(
-                                f"[{self.context.id}] Short TP1 hit (range mid): "
-                                f"{live_price:.8f} <= {tp1:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="BUY",
-                                symbol=self.context.symbol,
-                                confidence=0.85,
-                                price=live_price,
-                                exit_reason="TP_RANGE_MID",
-                                position_side=current_position
-                            )
-                        
-                        # Check SL
-                        if live_price >= sl:
-                            logger.info(
-                                f"[{self.context.id}] Short SL hit (above range): "
-                                f"{live_price:.8f} >= {sl:.8f}"
-                            )
-                            current_position = self.position
-                            self.position = None
-                            self.entry_price = None
-                            return StrategySignal(
-                                action="BUY",
-                                symbol=self.context.symbol,
-                                confidence=0.85,
-                                price=live_price,
-                                exit_reason="SL_RANGE_BREAK",
-                                position_side=current_position
-                            )
+                # Check entry candle protection (consistent with older/duplicate paths)
+                on_entry_candle = (self.entry_candle_time is not None and 
+                                  self.last_closed_candle_time is not None and 
+                                  self.entry_candle_time == self.last_closed_candle_time)
+                
+                # Check TP/SL using unified helper (consistent with other paths)
+                exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                if exit_signal:
+                    return exit_signal
             
             # Only block new entries when no valid range is detected
             if not range_valid or range_high is None or range_low is None or range_mid is None:
@@ -363,6 +455,36 @@ class RangeMeanReversionStrategy(Strategy):
                 self.range_low = range_low
                 self.range_mid = range_mid
                 self.range_valid = True
+                self.range_invalid_count = 0  # Reset invalid count when range becomes valid
+            else:
+                # Range is invalid - increment invalid count
+                self.range_invalid_count += 1
+                # If range has been invalid for too long, reset range_valid to False
+                # This prevents using stale range data after market stops ranging
+                # CRITICAL: Only clear range when position is None (flat)
+                # If position is open, keep last-known range for exit management
+                if self.range_invalid_count >= self.max_range_invalid_candles:
+                    if self.position is None:
+                        # Safe to clear: no open position
+                        if self.range_valid:
+                            logger.warning(
+                                f"[{self.context.id}] Range has been invalid for {self.range_invalid_count} candles. "
+                                f"Resetting range_valid to False (no open position)."
+                            )
+                        self.range_valid = False
+                        self.range_high = None
+                        self.range_low = None
+                        self.range_mid = None
+                        self.range_invalid_count = 0  # Reset counter after clearing range
+                    else:
+                        # Keep last-known range for exit management (position is open)
+                        logger.warning(
+                            f"[{self.context.id}] Range has been invalid for {self.range_invalid_count} candles, "
+                            f"but keeping last-known range because position is open "
+                            f"(position={self.position}, entry_price={self.entry_price}). "
+                            f"This ensures TP/SL can still exit the position."
+                        )
+                        self.range_invalid_count = 0  # Stop counter from growing forever
             
             # Calculate range zones for entry signals (only if valid range)
             if range_valid and range_high is not None and range_low is not None and range_mid is not None:
@@ -375,7 +497,31 @@ class RangeMeanReversionStrategy(Strategy):
             
             # No position - check for entry signals (only if valid range)
             if self.position is None:
-                # Calculate RSI
+                # BUG FIX: Check cooldown before generating entry signals
+                if self.cooldown_left > 0:
+                    self.cooldown_left -= 1
+                    logger.debug(
+                        f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
+                        f"Price: {live_price:.8f}"
+                    )
+                    return StrategySignal(
+                        action="HOLD",
+                        symbol=self.context.symbol,
+                        confidence=0.1,
+                        price=live_price
+                    )
+                
+                # OPTIMIZATION: Early return if no valid range (saves RSI calculation)
+                if not range_valid or range_high is None or range_low is None or range_mid is None:
+                    logger.debug(f"[{self.context.id}] HOLD: No valid range detected for entry signals")
+                    return StrategySignal(
+                        action="HOLD",
+                        symbol=self.context.symbol,
+                        confidence=0.0,
+                        price=live_price
+                    )
+                
+                # Calculate RSI (only if valid range exists)
                 closed_klines = klines[:-1]  # Exclude current forming candle
                 closes = [float(k[4]) for k in closed_klines]
                 rsi = calculate_rsi(closes, self.rsi_period)
@@ -397,6 +543,7 @@ class RangeMeanReversionStrategy(Strategy):
                     )
                     self.position = "LONG"
                     self.entry_price = live_price
+                    self.entry_candle_time = last_closed_time  # Track entry candle
                     return StrategySignal(
                         action="BUY",
                         symbol=self.context.symbol,
@@ -413,6 +560,7 @@ class RangeMeanReversionStrategy(Strategy):
                     )
                     self.position = "SHORT"
                     self.entry_price = live_price
+                    self.entry_candle_time = last_closed_time  # Track entry candle
                     return StrategySignal(
                         action="SELL",
                         symbol=self.context.symbol,

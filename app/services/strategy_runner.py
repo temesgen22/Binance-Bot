@@ -379,8 +379,22 @@ class StrategyRunner:
             logger.info(f"Cleaned up {len(dead_tasks)} dead task(s) from active tasks")
 
     async def start(self, strategy_id: str) -> StrategySummary:
+        # BUG FIX: Load strategy from database if not in memory
         if strategy_id not in self._strategies:
-            raise StrategyNotFoundError(strategy_id)
+            if self.strategy_service and self.user_id:
+                try:
+                    # Try to load from database
+                    strategies = self.strategy_service.list_strategies(self.user_id)
+                    for summary in strategies:
+                        self._strategies[summary.id] = summary
+                    # Check again after loading
+                    if strategy_id not in self._strategies:
+                        raise StrategyNotFoundError(strategy_id)
+                except Exception as exc:
+                    logger.warning(f"Failed to load strategy {strategy_id} from database: {exc}")
+                    raise StrategyNotFoundError(strategy_id) from exc
+            else:
+                raise StrategyNotFoundError(strategy_id)
         
         # Clean up any dead/completed tasks before checking limit
         # This prevents dead tasks from counting toward concurrent limit
@@ -465,8 +479,22 @@ class StrategyRunner:
         return summary
 
     async def stop(self, strategy_id: str) -> StrategySummary:
+        # BUG FIX: Load strategy from database if not in memory
         if strategy_id not in self._strategies:
-            raise StrategyNotFoundError(strategy_id)
+            if self.strategy_service and self.user_id:
+                try:
+                    # Try to load from database
+                    strategies = self.strategy_service.list_strategies(self.user_id)
+                    for summary in strategies:
+                        self._strategies[summary.id] = summary
+                    # Check again after loading
+                    if strategy_id not in self._strategies:
+                        raise StrategyNotFoundError(strategy_id)
+                except Exception as exc:
+                    logger.warning(f"Failed to load strategy {strategy_id} from database: {exc}")
+                    raise StrategyNotFoundError(strategy_id) from exc
+            else:
+                raise StrategyNotFoundError(strategy_id)
         summary = self._strategies[strategy_id]
         
         # Cancel any open TP/SL orders first
@@ -1480,6 +1508,31 @@ class StrategyRunner:
                         position_side=summary.position_side,
                         entry_price=summary.entry_price,
                     )
+                    
+                    # CRITICAL: For range mean reversion, set entry_candle_time after successful order execution
+                    # This ensures entry candle protection uses correct candle time, matching backtesting behavior
+                    # Strategy may have set it when generating signal, but we update it after order execution
+                    # to ensure it matches when position actually opened
+                    if summary.position_side is not None and summary.entry_price is not None:
+                        # Position was opened - ensure entry_candle_time is set correctly
+                        if hasattr(strategy, 'last_closed_candle_time') and strategy.last_closed_candle_time is not None:
+                            strategy.entry_candle_time = strategy.last_closed_candle_time
+                            logger.debug(
+                                f"[{summary.id}] Set entry_candle_time={strategy.entry_candle_time} "
+                                f"after order execution (matches backtesting behavior)"
+                            )
+                        # If last_closed_candle_time is None, strategy will set it on next evaluation
+                        # This is acceptable - entry candle protection will work from next candle
+                    
+                    # For range mean reversion, verify range state is preserved (for debugging)
+                    from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
+                    if isinstance(strategy, RangeMeanReversionStrategy):
+                        if hasattr(strategy, 'range_valid') and strategy.range_valid:
+                            logger.debug(
+                                f"[{summary.id}] Range state preserved after order execution: "
+                                f"high={strategy.range_high}, low={strategy.range_low}, mid={strategy.range_mid}"
+                            )
+                    
                     logger.debug(
                         f"[{summary.id}] Synced strategy state after order execution: "
                         f"position={summary.position_side}, entry_price={summary.entry_price}"

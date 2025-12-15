@@ -39,6 +39,7 @@ class StrategyReport(BaseModel):
     
     strategy_id: str = Field(description="Strategy unique ID")
     strategy_name: str = Field(description="Strategy name")
+    strategy_type: Optional[str] = Field(default=None, description="Strategy type (scalping, range_mean_reversion, etc.)")
     symbol: str = Field(description="Trading symbol (e.g., BTCUSDT)")
     created_at: Optional[datetime] = Field(default=None, description="Strategy creation time")
     stopped_at: Optional[datetime] = Field(default=None, description="Strategy stop time (None if still running)")

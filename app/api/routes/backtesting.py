@@ -13,7 +13,7 @@ from app.core.my_binance_client import BinanceClient
 from app.strategies.base import StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
-from app.strategies.indicators import calculate_ema
+from app.strategies.indicators import calculate_ema, calculate_rsi
 from app.risk.manager import RiskManager, PositionSizingResult
 from loguru import logger
 
@@ -327,19 +327,39 @@ async def run_backtest(
     strategy_position: Optional[Literal["LONG", "SHORT"]] = None
     strategy_entry_price: Optional[float] = None
     
+    # Track if position was just closed in current iteration (to prevent immediate re-entry)
+    position_just_closed_this_iteration = False
+    
     # Process each candle
-    slow_period = int(request.params.get("ema_slow", 21))
-    fast_period = int(request.params.get("ema_fast", 8))
-    min_required_candles = slow_period + 1  # Need slow_period for EMA + 1 forming candle
-    logger.info(f"Starting backtest: Processing {len(filtered_klines)} candles for {request.symbol} from {request.start_time} to {request.end_time}")
-    logger.info(f"Strategy: {request.strategy_type}, Params: {request.params}")
-    logger.info(f"EMA periods: Fast={fast_period}, Slow={slow_period}. Will start evaluating after {min_required_candles} candles for stable EMAs.")
+    # Calculate minimum required candles based on strategy type
+    if request.strategy_type == "range_mean_reversion":
+        lookback = int(request.params.get("lookback_period", 150))
+        ema_slow = int(request.params.get("ema_slow_period", 50))
+        rsi_p = int(request.params.get("rsi_period", 14))
+        min_required_candles = max(lookback + 1, ema_slow + 1, rsi_p + 1)
+        logger.info(f"Starting backtest: Processing {len(filtered_klines)} candles for {request.symbol} from {request.start_time} to {request.end_time}")
+        logger.info(f"Strategy: {request.strategy_type}, Params: {request.params}")
+        logger.info(f"Range mean reversion requires: lookback={lookback}, ema_slow={ema_slow}, rsi_period={rsi_p}. Will start evaluating after {min_required_candles} candles.")
+    else:
+        # Scalping strategy
+        slow_period = int(request.params.get("ema_slow", 21))
+        fast_period = int(request.params.get("ema_fast", 8))
+        min_required_candles = slow_period + 1  # Need slow_period for EMA + 1 forming candle
+        logger.info(f"Starting backtest: Processing {len(filtered_klines)} candles for {request.symbol} from {request.start_time} to {request.end_time}")
+        logger.info(f"Strategy: {request.strategy_type}, Params: {request.params}")
+        logger.info(f"EMA periods: Fast={fast_period}, Slow={slow_period}. Will start evaluating after {min_required_candles} candles for stable EMAs.")
     
     # Track signal statistics
     signal_counts = {"BUY": 0, "SELL": 0, "HOLD": 0, "CLOSE": 0, "ERROR": 0}
     
+    # Track indicator data for range mean reversion charting
+    range_indicator_snapshots = []  # List of indicator snapshots per candle
+    
     for i, kline in enumerate(filtered_klines):
         mock_client.current_index = i
+        
+        # Reset flag at start of each iteration
+        position_just_closed_this_iteration = False
         
         # Get current price (close price of current candle)
         current_price = float(kline[4])
@@ -351,12 +371,9 @@ async def run_backtest(
         # IMPORTANT: The strategy expects the last kline to be "forming" (not closed)
         # Strategy does: closed_klines = klines[:-1] and last_closed = closed_klines[-1]
         # This requires at least 2 klines: one closed (klines[0]) and one forming (klines[1])
-        # Also need enough candles for EMAs to stabilize (slow_period = 21 by default)
-        # Skip until we have enough candles for EMA calculation + 1 for forming candle
-        slow_period = int(request.params.get("ema_slow", 21))
-        min_required_candles = slow_period + 1  # slow_period for EMA + 1 forming candle
+        # min_required_candles was already calculated before the loop - reuse it here
         if i < min_required_candles:
-            # Not enough klines yet - need at least slow_period + 1 for stable EMAs
+            # Not enough klines yet - need at least required periods + 1 for stable indicators
             continue
         
         strategy_klines = filtered_klines[:i+1]
@@ -401,6 +418,84 @@ async def run_backtest(
         finally:
             # Restore original get_klines
             mock_client.get_klines = original_get_klines
+        
+        # Capture indicator snapshot for range mean reversion
+        if request.strategy_type == "range_mean_reversion" and i >= min_required_candles:
+            candle_timestamp = int(kline[0]) // 1000
+            snapshot = {
+                "time": candle_timestamp,
+                "range_high": None,
+                "range_low": None,
+                "range_mid": None,
+                "range_valid": False,
+                "rsi": None,
+                "ema_fast": None,
+                "ema_slow": None,
+                "ema_spread_pct": None,
+                "buy_zone_upper": None,
+                "sell_zone_lower": None,
+                "tp1": None,
+                "tp2": None,
+                "sl": None,
+                "position_side": None
+            }
+            
+            # Capture range state
+            if hasattr(strategy, 'range_valid') and hasattr(strategy, 'range_high') and \
+               hasattr(strategy, 'range_low') and hasattr(strategy, 'range_mid'):
+                snapshot["range_valid"] = strategy.range_valid
+                snapshot["range_high"] = strategy.range_high
+                snapshot["range_low"] = strategy.range_low
+                snapshot["range_mid"] = strategy.range_mid
+                
+                # Calculate entry zones if range is valid
+                if strategy.range_valid and strategy.range_high is not None and strategy.range_low is not None:
+                    range_size = strategy.range_high - strategy.range_low
+                    buy_zone_pct = float(request.params.get("buy_zone_pct", 0.2))
+                    sell_zone_pct = float(request.params.get("sell_zone_pct", 0.2))
+                    snapshot["buy_zone_upper"] = strategy.range_low + (range_size * buy_zone_pct)
+                    snapshot["sell_zone_lower"] = strategy.range_high - (range_size * sell_zone_pct)
+                    
+                    # Calculate TP/SL levels if position is open
+                    if hasattr(strategy, 'position') and strategy.position is not None:
+                        snapshot["position_side"] = strategy.position
+                        tp_buffer_pct = float(request.params.get("tp_buffer_pct", 0.001))
+                        sl_buffer_pct = float(request.params.get("sl_buffer_pct", 0.002))
+                        
+                        if strategy.position == "LONG":
+                            snapshot["tp1"] = strategy.range_mid
+                            snapshot["tp2"] = strategy.range_high - (range_size * tp_buffer_pct)
+                            snapshot["sl"] = strategy.range_low - (range_size * sl_buffer_pct)
+                        else:  # SHORT
+                            snapshot["tp1"] = strategy.range_mid
+                            snapshot["tp2"] = strategy.range_low + (range_size * tp_buffer_pct)
+                            snapshot["sl"] = strategy.range_high + (range_size * sl_buffer_pct)
+            
+            # Calculate RSI if we have enough data
+            if i >= min_required_candles:
+                closing_prices = [float(k[4]) for k in filtered_klines[:i+1]]
+                rsi_period = int(request.params.get("rsi_period", 14))
+                if len(closing_prices) >= rsi_period + 1:
+                    snapshot["rsi"] = calculate_rsi(closing_prices, rsi_period)
+            
+            # Calculate EMA fast and slow
+            if i >= min_required_candles:
+                closing_prices = [float(k[4]) for k in filtered_klines[:i+1]]
+                ema_fast_period = int(request.params.get("ema_fast_period", 20))
+                ema_slow_period = int(request.params.get("ema_slow_period", 50))
+                
+                if len(closing_prices) >= ema_fast_period:
+                    snapshot["ema_fast"] = calculate_ema(closing_prices, ema_fast_period)
+                if len(closing_prices) >= ema_slow_period:
+                    snapshot["ema_slow"] = calculate_ema(closing_prices, ema_slow_period)
+                
+                # Calculate EMA spread percentage
+                if snapshot["ema_fast"] is not None and snapshot["ema_slow"] is not None:
+                    ema_mid = (snapshot["ema_fast"] + snapshot["ema_slow"]) / 2
+                    if ema_mid > 0:
+                        snapshot["ema_spread_pct"] = abs(snapshot["ema_fast"] - snapshot["ema_slow"]) / ema_mid
+            
+            range_indicator_snapshots.append(snapshot)
             
         # Check for TP/SL on open position
         # CRITICAL: Use high/low prices to check if TP/SL was hit during the candle
@@ -429,7 +524,11 @@ async def run_backtest(
                     # Strategy detected exit but no price - check if it was hit during candle
                     exit_price = current_price  # Fallback to close price
                 exit_reason = signal.exit_reason
-                logger.info(f"Strategy detected exit: {exit_reason} at price {exit_price:.8f}")
+                # Log trailing stop exits specifically for debugging
+                if "TRAILING" in exit_reason:
+                    logger.info(f"✅ Trailing stop exit detected: {exit_reason} at price {exit_price:.8f} (strategy signal)")
+                else:
+                    logger.info(f"Strategy detected exit: {exit_reason} at price {exit_price:.8f}")
             elif signal.action in ("SELL", "BUY"):
                 # Check if signal action matches closing the current position
                 # SELL signal when LONG is open, or BUY signal when SHORT is open
@@ -449,42 +548,135 @@ async def run_backtest(
                 
                 # Only use fixed TP/SL if trailing stop is disabled
                 if not trailing_stop_enabled:
-                    take_profit_pct = float(request.params.get("take_profit_pct", 0.004))
-                    stop_loss_pct = float(request.params.get("stop_loss_pct", 0.002))
+                    # CRITICAL: Check if we're on the entry candle (prevent immediate exits)
+                    # This matches the strategy's _check_tp_sl() behavior
+                    on_entry_candle = False
+                    if hasattr(strategy, 'entry_candle_time') and hasattr(strategy, 'last_closed_candle_time'):
+                        if strategy.entry_candle_time is not None and strategy.last_closed_candle_time is not None:
+                            on_entry_candle = (strategy.entry_candle_time == strategy.last_closed_candle_time)
                     
-                    if position_side == "LONG":
-                        tp_price = entry_price * (1 + take_profit_pct)
-                        sl_price = entry_price * (1 - stop_loss_pct)
-                        # Check if TP/SL was hit during the candle using high/low
-                        # TP is hit if high >= tp_price, SL is hit if low <= sl_price
-                        # Priority: TP takes precedence if both are hit (more favorable)
-                        if candle_high >= tp_price:
-                            # TP hit during candle - exit at TP price (not close price)
-                            exit_price = tp_price
-                            exit_reason = "TP"
-                            logger.info(f"TP hit during candle: high={candle_high:.8f} >= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
-                        elif candle_low <= sl_price:
-                            # SL hit during candle - exit at SL price (not close price)
-                            exit_price = sl_price
-                            exit_reason = "SL"
-                            logger.info(f"SL hit during candle: low={candle_low:.8f} <= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
-                    else:  # SHORT
-                        tp_price = entry_price * (1 - take_profit_pct)
-                        sl_price = entry_price * (1 + stop_loss_pct)
-                        # For SHORT: TP is hit if low <= tp_price, SL is hit if high >= sl_price
-                        # Priority: TP takes precedence if both are hit (more favorable)
-                        if candle_low <= tp_price:
-                            # TP hit during candle - exit at TP price
-                            exit_price = tp_price
-                            exit_reason = "TP"
-                            logger.info(f"TP hit during candle: low={candle_low:.8f} <= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
-                        elif candle_high >= sl_price:
-                            # SL hit during candle - exit at SL price
-                            exit_price = sl_price
-                            exit_reason = "SL"
-                            logger.info(f"SL hit during candle: high={candle_high:.8f} >= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
+                    if on_entry_candle:
+                        logger.debug(f"Skipping fixed TP/SL check on entry candle (entry_candle_time={strategy.entry_candle_time}, last_closed={strategy.last_closed_candle_time})")
+                    else:
+                        take_profit_pct = float(request.params.get("take_profit_pct", 0.004))
+                        stop_loss_pct = float(request.params.get("stop_loss_pct", 0.002))
+                        
+                        if position_side == "LONG":
+                            tp_price = entry_price * (1 + take_profit_pct)
+                            sl_price = entry_price * (1 - stop_loss_pct)
+                            # Check if TP/SL was hit during the candle using high/low
+                            # TP is hit if high >= tp_price, SL is hit if low <= sl_price
+                            # Priority: SL first (conservative - assume worse outcome if both hit)
+                            # This matches range mean reversion strategy for consistency
+                            if candle_low <= sl_price:
+                                # SL hit during candle - exit at SL price (not close price)
+                                exit_price = sl_price
+                                exit_reason = "SL"
+                                logger.info(f"SL hit during candle: low={candle_low:.8f} <= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
+                            elif candle_high >= tp_price:
+                                # TP hit during candle - exit at TP price (not close price)
+                                exit_price = tp_price
+                                exit_reason = "TP"
+                                logger.info(f"TP hit during candle: high={candle_high:.8f} >= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
+                        else:  # SHORT
+                            tp_price = entry_price * (1 - take_profit_pct)
+                            sl_price = entry_price * (1 + stop_loss_pct)
+                            # For SHORT: TP is hit if low <= tp_price, SL is hit if high >= sl_price
+                            # Priority: SL first (conservative - assume worse outcome if both hit)
+                            # This matches range mean reversion strategy for consistency
+                            if candle_high >= sl_price:
+                                # SL hit during candle - exit at SL price
+                                exit_price = sl_price
+                                exit_reason = "SL"
+                                logger.info(f"SL hit during candle: high={candle_high:.8f} >= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
+                            elif candle_low <= tp_price:
+                                # TP hit during candle - exit at TP price
+                                exit_price = tp_price
+                                exit_reason = "TP"
+                                logger.info(f"TP hit during candle: low={candle_low:.8f} <= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
+            elif request.strategy_type == "range_mean_reversion":
+                # CRITICAL FIX: Check intra-candle TP/SL independently of strategy exit_reason
+                # Problem: Strategy uses get_price() which returns close price in backtesting
+                # Strategy may not detect TP/SL if close price doesn't hit it, even though
+                # high/low prices did hit TP/SL during the candle.
+                # Also, signal.price may be close price, not the actual TP/SL level price.
+                # Solution: For range TP/SL exits, always use intra-candle logic to get exact TP/SL price.
+                # Only trust signal.price for non-range exits (manual, range invalidation, etc.)
+                
+                # Check if exit_reason is a range TP/SL reason
+                range_tp_sl_reasons = ["TP_RANGE_HIGH", "TP_RANGE_MID", "TP_RANGE_LOW", "SL_RANGE_BREAK"]
+                is_range_tp_sl_exit = signal.exit_reason in range_tp_sl_reasons if signal.exit_reason else False
+                
+                # For range TP/SL exits, always use intra-candle logic to get exact price
+                # For non-range exits (manual, range invalidation, etc.), trust signal.price
+                if signal.exit_reason and not is_range_tp_sl_exit:
+                    # Non-range exit - trust strategy's signal.price
+                    if signal.price is not None:
+                        exit_price = signal.price
+                        exit_reason = signal.exit_reason
+                        logger.info(f"Range mean reversion non-range exit detected by strategy: {exit_reason} at price {exit_price:.8f}")
+                
+                # CRITICAL: For range TP/SL exits, always check intra-candle to get exact TP/SL price
+                # This ensures we exit at the actual TP/SL level, not the close price
+                # Also handles cases where TP/SL was hit during candle but strategy didn't see it
+                if (is_range_tp_sl_exit or exit_price is None) and hasattr(strategy, 'range_valid') and hasattr(strategy, 'range_high') and hasattr(strategy, 'range_low') and hasattr(strategy, 'range_mid'):
+                    if strategy.range_valid and strategy.range_high is not None and strategy.range_low is not None and strategy.range_mid is not None:
+                        range_size = strategy.range_high - strategy.range_low
+                        tp_buffer_pct = float(request.params.get("tp_buffer_pct", 0.001))
+                        sl_buffer_pct = float(request.params.get("sl_buffer_pct", 0.002))
+                        
+                        # Check entry candle protection (block TP on entry candle, allow SL)
+                        on_entry_candle = False
+                        if hasattr(strategy, 'entry_candle_time') and hasattr(strategy, 'last_closed_candle_time'):
+                            if strategy.entry_candle_time is not None and strategy.last_closed_candle_time is not None:
+                                on_entry_candle = (strategy.entry_candle_time == strategy.last_closed_candle_time)
+                        
+                        if position_side == "LONG":
+                            tp1 = strategy.range_mid
+                            tp2 = strategy.range_high - (range_size * tp_buffer_pct)
+                            sl = strategy.range_low - (range_size * sl_buffer_pct)
+                            
+                            # Check intra-candle TP/SL using high/low prices
+                            # Priority: TP2 > TP1 > SL
+                            # SL can trigger even on entry candle (critical exit)
+                            if candle_low <= sl:
+                                exit_price = sl
+                                exit_reason = "SL_RANGE_BREAK"
+                                logger.info(f"SL hit during candle (intra-candle check): low={candle_low:.8f} <= sl={sl:.8f}, exiting at {exit_price:.8f}")
+                            elif not on_entry_candle:
+                                # Block TP exits on entry candle
+                                if candle_high >= tp2:
+                                    exit_price = tp2
+                                    exit_reason = "TP_RANGE_HIGH"
+                                    logger.info(f"TP2 hit during candle (intra-candle check): high={candle_high:.8f} >= tp2={tp2:.8f}, exiting at {exit_price:.8f}")
+                                elif candle_high >= tp1:
+                                    exit_price = tp1
+                                    exit_reason = "TP_RANGE_MID"
+                                    logger.info(f"TP1 hit during candle (intra-candle check): high={candle_high:.8f} >= tp1={tp1:.8f}, exiting at {exit_price:.8f}")
+                        else:  # SHORT
+                            tp1 = strategy.range_mid
+                            tp2 = strategy.range_low + (range_size * tp_buffer_pct)
+                            sl = strategy.range_high + (range_size * sl_buffer_pct)
+                            
+                            # Check intra-candle TP/SL using high/low prices
+                            # Priority: TP2 > TP1 > SL
+                            # SL can trigger even on entry candle (critical exit)
+                            if candle_high >= sl:
+                                exit_price = sl
+                                exit_reason = "SL_RANGE_BREAK"
+                                logger.info(f"SL hit during candle (intra-candle check): high={candle_high:.8f} >= sl={sl:.8f}, exiting at {exit_price:.8f}")
+                            elif not on_entry_candle:
+                                # Block TP exits on entry candle
+                                if candle_low <= tp2:
+                                    exit_price = tp2
+                                    exit_reason = "TP_RANGE_LOW"
+                                    logger.info(f"TP2 hit during candle (intra-candle check): low={candle_low:.8f} <= tp2={tp2:.8f}, exiting at {exit_price:.8f}")
+                                elif candle_low <= tp1:
+                                    exit_price = tp1
+                                    exit_reason = "TP_RANGE_MID"
+                                    logger.info(f"TP1 hit during candle (intra-candle check): low={candle_low:.8f} <= tp1={tp1:.8f}, exiting at {exit_price:.8f}")
             else:
-                # Range mean reversion - use strategy's internal TP/SL
+                # Other strategy types - use strategy's internal TP/SL
                 if signal.exit_reason:
                     exit_price = current_price
                     exit_reason = signal.exit_reason
@@ -503,8 +695,10 @@ async def run_backtest(
                 else:  # SHORT
                     pnl = (entry_price - real_exit_price) * current_trade.quantity * request.leverage
                 
-                # Calculate exit fee
-                exit_fee = current_trade.notional * AVERAGE_FEE_RATE
+                # Calculate exit fee using exit notional (not entry notional)
+                # Exit notional = quantity * exit_price (price may have changed)
+                exit_notional = current_trade.quantity * real_exit_price
+                exit_fee = exit_notional * AVERAGE_FEE_RATE
                 
                 # Net PnL (entry_fee already deducted when trade was opened)
                 net_pnl = pnl - exit_fee
@@ -540,16 +734,37 @@ async def run_backtest(
                         position_side=None,
                         entry_price=None
                     )
+                    # CRITICAL: Ensure cooldown is set if strategy doesn't have it set
+                    # This handles cases where exit was triggered by backtesting's TP/SL check
+                    # (not strategy's exit signal, which would have already set cooldown)
+                    # Works for both scalping and range mean reversion strategies
+                    if hasattr(strategy, 'cooldown_left') and hasattr(strategy, 'cooldown_candles'):
+                        if strategy.cooldown_left == 0:  # Only set if not already set by strategy
+                            strategy.cooldown_left = strategy.cooldown_candles
+                            logger.debug(f"Set cooldown={strategy.cooldown_left} candles after {exit_reason} exit (backtesting TP/SL)")
                     logger.debug(f"Synced strategy state: position=None after {exit_reason} exit")
                 
                 # Reset strategy state
                 strategy_position = None
                 strategy_entry_price = None
                 current_trade = None
+                
+                # CRITICAL: Mark that position was just closed in this iteration
+                # This prevents immediate re-entry in the same candle, ensuring cooldown is respected
+                # The signal was generated BEFORE we closed the position, so any entry signals in it
+                # should be blocked by cooldown. We'll process them in the next candle iteration.
+                position_just_closed_this_iteration = True
+                logger.debug(f"Position closed at candle {i}, will skip new entry signals in same candle to respect cooldown")
         
         # Process new signals (only if no open position)
         # CRITICAL: Only process trades within the backtest time range
         if signal.action in ("BUY", "SELL"):
+            # CRITICAL: Skip entry signals if we just closed a position in this same candle iteration
+            # This ensures cooldown is respected - the signal was generated before we closed the position
+            if position_just_closed_this_iteration:
+                logger.debug(f"Skipping {signal.action} signal at candle {i}: position was just closed, cooldown active")
+                continue
+            
             # Ensure trade is within backtest time range
             if candle_time < request.start_time:
                 logger.warning(f"Skipping {signal.action} signal at candle {i}: candle_time {candle_time} is before start_time {request.start_time}")
@@ -588,16 +803,18 @@ async def run_backtest(
                 else:  # SHORT
                     real_entry_price = current_price * (1 - SPREAD_OFFSET)  # Sell at bid price
                 
-                # Calculate entry fee
-                entry_fee = sizing.notional * AVERAGE_FEE_RATE
+                # Calculate executed notional using real entry price (with spread)
+                # This matches exit fee logic which uses exit notional
+                entry_notional = sizing.quantity * real_entry_price
+                entry_fee = entry_notional * AVERAGE_FEE_RATE
                 
-                # Check if we have enough balance
+                # Check if we have enough balance for entry fee
                 if balance < entry_fee:
                     logger.warning(f"Insufficient balance for trade: balance={balance:.2f}, entry_fee={entry_fee:.2f}")
                     continue  # Skip trade if insufficient balance
                 
                 # Create new trade
-                logger.info(f"Creating {position_side} trade: entry={real_entry_price:.8f} (spread-adjusted from {current_price:.8f}), quantity={sizing.quantity:.8f}, notional={sizing.notional:.2f}")
+                logger.info(f"Creating {position_side} trade: entry={real_entry_price:.8f} (spread-adjusted from {current_price:.8f}), quantity={sizing.quantity:.8f}, executed_notional={entry_notional:.2f}")
                 current_trade = Trade(
                     entry_time=candle_time,
                     exit_time=None,
@@ -605,7 +822,7 @@ async def run_backtest(
                     exit_price=None,
                     position_side=position_side,
                     quantity=sizing.quantity,
-                    notional=sizing.notional,
+                    notional=entry_notional,  # Store executed notional (not sizing estimate)
                     entry_fee=entry_fee,
                     exit_fee=None,
                     pnl=None,
@@ -626,6 +843,25 @@ async def run_backtest(
                         position_side=position_side,
                         entry_price=real_entry_price  # Use spread-adjusted entry price
                     )
+                    # CRITICAL: Set entry_candle_time to prevent same-candle exits
+                    # Use the last closed candle time from the strategy (where entry signal was generated)
+                    if hasattr(strategy, 'last_closed_candle_time') and strategy.last_closed_candle_time is not None:
+                        strategy.entry_candle_time = strategy.last_closed_candle_time
+                        logger.debug(f"Set entry_candle_time={strategy.entry_candle_time} to prevent same-candle exits")
+                    else:
+                        # Fallback: use current candle's open time (in milliseconds)
+                        strategy.entry_candle_time = int(kline[0])
+                        logger.debug(f"Set entry_candle_time={strategy.entry_candle_time} (fallback to current candle)")
+                    
+                    # CRITICAL: For range mean reversion, ensure range state is preserved
+                    # Range state should already be set by strategy during evaluate(), but verify
+                    if request.strategy_type == "range_mean_reversion":
+                        if hasattr(strategy, 'range_valid') and strategy.range_valid:
+                            logger.debug(
+                                f"Range state preserved: high={strategy.range_high}, "
+                                f"low={strategy.range_low}, mid={strategy.range_mid}"
+                            )
+                    
                     logger.debug(f"Synced strategy state: position={position_side} @ {real_entry_price:.8f} after opening trade")
                 
                 # Add to trades list
@@ -655,8 +891,10 @@ async def run_backtest(
             else:  # SHORT
                 pnl = (entry_price - real_exit_price) * current_trade.quantity * request.leverage
             
-            # Calculate exit fee
-            exit_fee = current_trade.notional * AVERAGE_FEE_RATE
+            # Calculate exit fee using exit notional (not entry notional)
+            # Exit notional = quantity * exit_price (price may have changed)
+            exit_notional = current_trade.quantity * real_exit_price
+            exit_fee = exit_notional * AVERAGE_FEE_RATE
             
             # Net PnL (entry_fee already deducted when trade was opened)
             net_pnl = pnl - exit_fee
@@ -691,6 +929,11 @@ async def run_backtest(
                     position_side=None,
                     entry_price=None
                 )
+                # CRITICAL: Ensure cooldown is set if strategy doesn't have it set
+                if hasattr(strategy, 'cooldown_left') and hasattr(strategy, 'cooldown_candles'):
+                    if strategy.cooldown_left == 0:  # Only set if not already set by strategy
+                        strategy.cooldown_left = strategy.cooldown_candles
+                        logger.debug(f"Set cooldown={strategy.cooldown_left} candles after CLOSE signal")
                 logger.debug(f"Synced strategy state: position=None after CLOSE signal")
             
             # Reset strategy state
@@ -722,8 +965,10 @@ async def run_backtest(
         else:  # SHORT
             pnl = (entry_price - real_exit_price) * current_trade.quantity * request.leverage
         
-        # Calculate exit fee
-        exit_fee = current_trade.notional * AVERAGE_FEE_RATE
+        # Calculate exit fee using exit notional (not entry notional)
+        # Exit notional = quantity * exit_price (price may have changed)
+        exit_notional = current_trade.quantity * real_exit_price
+        exit_fee = exit_notional * AVERAGE_FEE_RATE
         
         # Net PnL (entry_fee already deducted when trade was opened)
         net_pnl = pnl - exit_fee
@@ -787,9 +1032,41 @@ async def run_backtest(
             float(k[5])   # volume
         ])
     
-    # Calculate EMA indicators for charting
+    # Calculate indicators for charting
     indicators_data = None
-    if request.strategy_type == "scalping":
+    if request.strategy_type == "range_mean_reversion":
+        # Build indicators data from snapshots
+        indicators_data = {
+            "range_high": [{"time": s["time"], "value": s["range_high"]} for s in range_indicator_snapshots if s["range_high"] is not None],
+            "range_low": [{"time": s["time"], "value": s["range_low"]} for s in range_indicator_snapshots if s["range_low"] is not None],
+            "range_mid": [{"time": s["time"], "value": s["range_mid"]} for s in range_indicator_snapshots if s["range_mid"] is not None],
+            "buy_zone_upper": [{"time": s["time"], "value": s["buy_zone_upper"]} for s in range_indicator_snapshots if s["buy_zone_upper"] is not None],
+            "sell_zone_lower": [{"time": s["time"], "value": s["sell_zone_lower"]} for s in range_indicator_snapshots if s["sell_zone_lower"] is not None],
+            "rsi": [{"time": s["time"], "value": s["rsi"]} for s in range_indicator_snapshots if s["rsi"] is not None],
+            "ema_fast": [{"time": s["time"], "value": s["ema_fast"]} for s in range_indicator_snapshots if s["ema_fast"] is not None],
+            "ema_slow": [{"time": s["time"], "value": s["ema_slow"]} for s in range_indicator_snapshots if s["ema_slow"] is not None],
+            "ema_spread_pct": [{"time": s["time"], "value": s["ema_spread_pct"]} for s in range_indicator_snapshots if s["ema_spread_pct"] is not None],
+            "tp_sl_levels": [
+                {
+                    "time": s["time"],
+                    "tp1": s["tp1"],
+                    "tp2": s["tp2"],
+                    "sl": s["sl"],
+                    "position_side": s["position_side"]
+                }
+                for s in range_indicator_snapshots
+                if s["position_side"] is not None and (s["tp1"] is not None or s["tp2"] is not None or s["sl"] is not None)
+            ],
+            "rsi_period": int(request.params.get("rsi_period", 14)),
+            "rsi_oversold": float(request.params.get("rsi_oversold", 40)),
+            "rsi_overbought": float(request.params.get("rsi_overbought", 60)),
+            "ema_fast_period": int(request.params.get("ema_fast_period", 20)),
+            "ema_slow_period": int(request.params.get("ema_slow_period", 50)),
+            "max_ema_spread_pct": float(request.params.get("max_ema_spread_pct", 0.005)),
+            "buy_zone_pct": float(request.params.get("buy_zone_pct", 0.2)),
+            "sell_zone_pct": float(request.params.get("sell_zone_pct", 0.2))
+        }
+    elif request.strategy_type == "scalping":
         # Extract closing prices
         closing_prices = [float(k[4]) for k in filtered_klines]
         

@@ -525,62 +525,228 @@ def get_trading_report(
                     logger.warning(f"Error fetching klines for strategy {strategy.id}: {klines_exc}")
                     klines_data = None
                 
-                # Calculate EMA indicators for charting if klines are available and strategy is scalping
+                # Calculate indicators for charting if klines are available
                 indicators_data = None
-                if klines_data and strategy.strategy_type == "scalping":
+                if klines_data:
                     try:
-                        from app.strategies.indicators import calculate_ema
+                        from app.strategies.indicators import calculate_ema, calculate_rsi
                         
                         # Extract closing prices
                         closing_prices = [float(k[4]) for k in klines_data]
                         
-                        # Get EMA periods from strategy params
-                        fast_period = 8  # default
-                        slow_period = 21  # default
-                        if hasattr(strategy, 'params') and strategy.params:
-                            if isinstance(strategy.params, dict):
-                                fast_period = int(strategy.params.get('ema_fast', 8))
-                                slow_period = int(strategy.params.get('ema_slow', 21))
-                            elif hasattr(strategy.params, 'ema_fast'):
-                                fast_period = int(getattr(strategy.params, 'ema_fast', 8))
-                                slow_period = int(getattr(strategy.params, 'ema_slow', 21))
+                        # Get strategy type (handle both enum and string)
+                        strategy_type_str = None
+                        if hasattr(strategy, 'strategy_type'):
+                            if hasattr(strategy.strategy_type, 'value'):
+                                strategy_type_str = strategy.strategy_type.value
+                            else:
+                                strategy_type_str = str(strategy.strategy_type)
                         
-                        # Calculate EMA fast and slow
-                        ema_fast_values = []
-                        ema_slow_values = []
-                        
-                        for i in range(len(closing_prices)):
-                            # EMA fast
-                            prices_up_to_i = closing_prices[:i+1]
-                            ema_fast = calculate_ema(prices_up_to_i, fast_period) if len(prices_up_to_i) >= fast_period else None
-                            ema_fast_values.append(ema_fast)
+                        if strategy_type_str == "scalping":
+                            # Scalping strategy: Calculate EMA fast and slow
+                            fast_period = 8  # default
+                            slow_period = 21  # default
+                            if hasattr(strategy, 'params') and strategy.params:
+                                if isinstance(strategy.params, dict):
+                                    fast_period = int(strategy.params.get('ema_fast', 8))
+                                    slow_period = int(strategy.params.get('ema_slow', 21))
+                                elif hasattr(strategy.params, 'ema_fast'):
+                                    fast_period = int(getattr(strategy.params, 'ema_fast', 8))
+                                    slow_period = int(getattr(strategy.params, 'ema_slow', 21))
                             
-                            # EMA slow
-                            ema_slow = calculate_ema(prices_up_to_i, slow_period) if len(prices_up_to_i) >= slow_period else None
-                            ema_slow_values.append(ema_slow)
-                        
-                        # Create indicators data with timestamps matching klines
-                        indicators_data = {
-                            "ema_fast": [
-                                {"time": int(k[0]) // 1000, "value": ema_fast_values[i]} 
-                                for i, k in enumerate(klines_data) 
-                                if ema_fast_values[i] is not None
-                            ],
-                            "ema_slow": [
-                                {"time": int(k[0]) // 1000, "value": ema_slow_values[i]} 
-                                for i, k in enumerate(klines_data) 
-                                if ema_slow_values[i] is not None
-                            ],
-                            "ema_fast_period": fast_period,
-                            "ema_slow_period": slow_period
-                        }
+                            # Calculate EMA fast and slow
+                            ema_fast_values = []
+                            ema_slow_values = []
+                            
+                            for i in range(len(closing_prices)):
+                                # EMA fast
+                                prices_up_to_i = closing_prices[:i+1]
+                                ema_fast = calculate_ema(prices_up_to_i, fast_period) if len(prices_up_to_i) >= fast_period else None
+                                ema_fast_values.append(ema_fast)
+                                
+                                # EMA slow
+                                ema_slow = calculate_ema(prices_up_to_i, slow_period) if len(prices_up_to_i) >= slow_period else None
+                                ema_slow_values.append(ema_slow)
+                            
+                            # Create indicators data with timestamps matching klines
+                            indicators_data = {
+                                "ema_fast": [
+                                    {"time": int(k[0]) // 1000, "value": ema_fast_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if ema_fast_values[i] is not None
+                                ],
+                                "ema_slow": [
+                                    {"time": int(k[0]) // 1000, "value": ema_slow_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if ema_slow_values[i] is not None
+                                ],
+                                "ema_fast_period": fast_period,
+                                "ema_slow_period": slow_period
+                            }
+                        elif strategy_type_str == "range_mean_reversion":
+                            # Range mean reversion strategy: Calculate EMA, RSI, and basic range detection
+                            # Get parameters from strategy
+                            lookback_period = 150
+                            ema_fast_period = 20
+                            ema_slow_period = 50
+                            rsi_period = 14
+                            rsi_oversold = 40
+                            rsi_overbought = 60
+                            buy_zone_pct = 0.2
+                            sell_zone_pct = 0.2
+                            
+                            if hasattr(strategy, 'params') and strategy.params:
+                                if isinstance(strategy.params, dict):
+                                    lookback_period = int(strategy.params.get('lookback_period', 150))
+                                    ema_fast_period = int(strategy.params.get('ema_fast_period', 20))
+                                    ema_slow_period = int(strategy.params.get('ema_slow_period', 50))
+                                    rsi_period = int(strategy.params.get('rsi_period', 14))
+                                    rsi_oversold = float(strategy.params.get('rsi_oversold', 40))
+                                    rsi_overbought = float(strategy.params.get('rsi_overbought', 60))
+                                    buy_zone_pct = float(strategy.params.get('buy_zone_pct', 0.2))
+                                    sell_zone_pct = float(strategy.params.get('sell_zone_pct', 0.2))
+                                elif hasattr(strategy.params, 'lookback_period'):
+                                    lookback_period = int(getattr(strategy.params, 'lookback_period', 150))
+                                    ema_fast_period = int(getattr(strategy.params, 'ema_fast_period', 20))
+                                    ema_slow_period = int(getattr(strategy.params, 'ema_slow_period', 50))
+                                    rsi_period = int(getattr(strategy.params, 'rsi_period', 14))
+                                    rsi_oversold = float(getattr(strategy.params, 'rsi_oversold', 40))
+                                    rsi_overbought = float(getattr(strategy.params, 'rsi_overbought', 60))
+                                    buy_zone_pct = float(getattr(strategy.params, 'buy_zone_pct', 0.2))
+                                    sell_zone_pct = float(getattr(strategy.params, 'sell_zone_pct', 0.2))
+                            
+                            # Calculate EMA fast and slow
+                            ema_fast_values = []
+                            ema_slow_values = []
+                            for i in range(len(closing_prices)):
+                                prices_up_to_i = closing_prices[:i+1]
+                                ema_fast = calculate_ema(prices_up_to_i, ema_fast_period) if len(prices_up_to_i) >= ema_fast_period else None
+                                ema_slow = calculate_ema(prices_up_to_i, ema_slow_period) if len(prices_up_to_i) >= ema_slow_period else None
+                                ema_fast_values.append(ema_fast)
+                                ema_slow_values.append(ema_slow)
+                            
+                            # Calculate RSI
+                            rsi_values = []
+                            for i in range(len(closing_prices)):
+                                prices_up_to_i = closing_prices[:i+1]
+                                rsi = calculate_rsi(prices_up_to_i, rsi_period) if len(prices_up_to_i) >= rsi_period + 1 else None
+                                rsi_values.append(rsi)
+                            
+                            # Simple range detection: calculate range for each lookback window
+                            range_high_values = []
+                            range_low_values = []
+                            range_mid_values = []
+                            buy_zone_upper_values = []
+                            sell_zone_lower_values = []
+                            
+                            for i in range(len(klines_data)):
+                                if i < lookback_period:
+                                    range_high_values.append(None)
+                                    range_low_values.append(None)
+                                    range_mid_values.append(None)
+                                    buy_zone_upper_values.append(None)
+                                    sell_zone_lower_values.append(None)
+                                else:
+                                    # Get lookback window
+                                    lookback_klines = klines_data[i - lookback_period:i]
+                                    highs = [float(k[2]) for k in lookback_klines]
+                                    lows = [float(k[3]) for k in lookback_klines]
+                                    
+                                    range_high = max(highs)
+                                    range_low = min(lows)
+                                    range_mid = (range_high + range_low) / 2
+                                    range_size = range_high - range_low
+                                    
+                                    range_high_values.append(range_high)
+                                    range_low_values.append(range_low)
+                                    range_mid_values.append(range_mid)
+                                    buy_zone_upper_values.append(range_low + (range_size * buy_zone_pct))
+                                    sell_zone_lower_values.append(range_high - (range_size * sell_zone_pct))
+                            
+                            # Calculate EMA spread percentage
+                            ema_spread_pct_values = []
+                            for i in range(len(klines_data)):
+                                if ema_fast_values[i] is not None and ema_slow_values[i] is not None:
+                                    ema_mid = (ema_fast_values[i] + ema_slow_values[i]) / 2
+                                    if ema_mid > 0:
+                                        spread = abs(ema_fast_values[i] - ema_slow_values[i]) / ema_mid
+                                        ema_spread_pct_values.append(spread)
+                                    else:
+                                        ema_spread_pct_values.append(None)
+                                else:
+                                    ema_spread_pct_values.append(None)
+                            
+                            # Create indicators data with timestamps matching klines
+                            indicators_data = {
+                                "range_high": [
+                                    {"time": int(k[0]) // 1000, "value": range_high_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if range_high_values[i] is not None
+                                ],
+                                "range_low": [
+                                    {"time": int(k[0]) // 1000, "value": range_low_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if range_low_values[i] is not None
+                                ],
+                                "range_mid": [
+                                    {"time": int(k[0]) // 1000, "value": range_mid_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if range_mid_values[i] is not None
+                                ],
+                                "buy_zone_upper": [
+                                    {"time": int(k[0]) // 1000, "value": buy_zone_upper_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if buy_zone_upper_values[i] is not None
+                                ],
+                                "sell_zone_lower": [
+                                    {"time": int(k[0]) // 1000, "value": sell_zone_lower_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if sell_zone_lower_values[i] is not None
+                                ],
+                                "rsi": [
+                                    {"time": int(k[0]) // 1000, "value": rsi_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if rsi_values[i] is not None
+                                ],
+                                "ema_fast": [
+                                    {"time": int(k[0]) // 1000, "value": ema_fast_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if ema_fast_values[i] is not None
+                                ],
+                                "ema_slow": [
+                                    {"time": int(k[0]) // 1000, "value": ema_slow_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if ema_slow_values[i] is not None
+                                ],
+                                "ema_spread_pct": [
+                                    {"time": int(k[0]) // 1000, "value": ema_spread_pct_values[i]} 
+                                    for i, k in enumerate(klines_data) 
+                                    if ema_spread_pct_values[i] is not None
+                                ],
+                                "rsi_period": rsi_period,
+                                "rsi_oversold": rsi_oversold,
+                                "rsi_overbought": rsi_overbought,
+                                "ema_fast_period": ema_fast_period,
+                                "ema_slow_period": ema_slow_period,
+                                "buy_zone_pct": buy_zone_pct,
+                                "sell_zone_pct": sell_zone_pct,
+                            }
                     except Exception as indicators_error:
                         logger.warning(f"Failed to calculate indicators for strategy {strategy.id}: {indicators_error}")
                         indicators_data = None
                 
+                # Get strategy type (handle both enum and string)
+                strategy_type_value = None
+                if hasattr(strategy, 'strategy_type'):
+                    if hasattr(strategy.strategy_type, 'value'):
+                        strategy_type_value = strategy.strategy_type.value
+                    else:
+                        strategy_type_value = str(strategy.strategy_type)
+                
                 strategy_report = StrategyReport(
                     strategy_id=strategy.id,
                     strategy_name=strategy.name,
+                    strategy_type=strategy_type_value,
                     symbol=strategy.symbol,
                     created_at=strategy.created_at,
                     stopped_at=stopped_at,
