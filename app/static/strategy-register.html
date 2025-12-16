@@ -268,7 +268,7 @@
                         </div>
                         <div class="form-group">
                             <label for="strategy_type">Strategy Type *</label>
-                            <select id="strategy_type" name="strategy_type" required onchange="updateStrategyParams()">
+                            <select id="strategy_type" name="strategy_type" required>
                                 <option value="">Select strategy type</option>
                                 <option value="scalping">Scalping (EMA-based)</option>
                                 <option value="range_mean_reversion">Range Mean-Reversion</option>
@@ -452,46 +452,84 @@
             }
         }
 
-        function updateStrategyParams() {
-            const strategyType = document.getElementById('strategy_type').value;
-            const container = document.getElementById('strategy-params-section');
-            
-            if (!strategyType || !strategyParams[strategyType]) {
-                container.innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
-                return;
-            }
-
-            const params = strategyParams[strategyType];
-            let html = '<div class="params-grid">';
-            
-            params.fields.forEach(field => {
-                html += '<div class="form-group">';
-                html += `<label for="params.${field.name}">${field.label}</label>`;
-                
-                if (field.type === 'select') {
-                    html += `<select id="params.${field.name}" name="params.${field.name}">`;
-                    field.options.forEach(opt => {
-                        html += `<option value="${opt}" ${opt === field.default ? 'selected' : ''}>${opt}</option>`;
-                    });
-                    html += '</select>';
-                } else if (field.type === 'checkbox') {
-                    html += `<div class="checkbox-group">`;
-                    html += `<input type="checkbox" id="params.${field.name}" name="params.${field.name}" ${field.default ? 'checked' : ''}>`;
-                    html += `<label for="params.${field.name}" style="margin: 0;">Enable</label>`;
-                    html += `</div>`;
-                } else {
-                    html += `<input type="${field.type}" id="params.${field.name}" name="params.${field.name}" value="${field.default}" min="${field.min || ''}" max="${field.max || ''}" step="${field.step || ''}">`;
-                    if (field.description) {
-                        html += `<small>${field.description}</small>`;
-                    }
+        // Make function globally accessible
+        window.updateStrategyParams = function() {
+            try {
+                const strategyTypeElement = document.getElementById('strategy_type');
+                if (!strategyTypeElement) {
+                    console.error('Strategy type element not found');
+                    return;
                 }
                 
+                const strategyType = strategyTypeElement.value;
+                const container = document.getElementById('strategy-params-section');
+                
+                if (!container) {
+                    console.error('Strategy params container not found');
+                    return;
+                }
+                
+                if (!strategyType || !strategyParams[strategyType]) {
+                    container.innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
+                    return;
+                }
+
+                const params = strategyParams[strategyType];
+                if (!params || !params.fields || !Array.isArray(params.fields)) {
+                    console.error('Invalid strategy params structure for:', strategyType);
+                    container.innerHTML = '<p style="color: #d32f2f;">Error: Invalid strategy parameters configuration</p>';
+                    return;
+                }
+
+                let html = '<div class="params-grid">';
+                
+                params.fields.forEach(field => {
+                    if (!field || !field.name || !field.label) {
+                        console.warn('Invalid field definition:', field);
+                        return;
+                    }
+                    
+                    html += '<div class="form-group">';
+                    html += `<label for="params.${field.name}">${field.label}</label>`;
+                    
+                    if (field.type === 'select') {
+                        html += `<select id="params.${field.name}" name="params.${field.name}">`;
+                        if (field.options && Array.isArray(field.options)) {
+                            field.options.forEach(opt => {
+                                html += `<option value="${opt}" ${opt === field.default ? 'selected' : ''}>${opt}</option>`;
+                            });
+                        }
+                        html += '</select>';
+                    } else if (field.type === 'checkbox') {
+                        html += `<div class="checkbox-group">`;
+                        html += `<input type="checkbox" id="params.${field.name}" name="params.${field.name}" ${field.default ? 'checked' : ''}>`;
+                        html += `<label for="params.${field.name}" style="margin: 0;">Enable</label>`;
+                        html += `</div>`;
+                    } else {
+                        const minAttr = field.min !== undefined ? `min="${field.min}"` : '';
+                        const maxAttr = field.max !== undefined ? `max="${field.max}"` : '';
+                        const stepAttr = field.step !== undefined ? `step="${field.step}"` : '';
+                        html += `<input type="${field.type}" id="params.${field.name}" name="params.${field.name}" value="${field.default || ''}" ${minAttr} ${maxAttr} ${stepAttr}>`;
+                        if (field.description) {
+                            html += `<small>${field.description}</small>`;
+                        }
+                    }
+                    
+                    html += '</div>';
+                });
+                
                 html += '</div>';
-            });
-            
-            html += '</div>';
-            container.innerHTML = html;
-        }
+                container.innerHTML = html;
+                
+                console.log('Strategy parameters updated for:', strategyType);
+            } catch (error) {
+                console.error('Error updating strategy params:', error);
+                const container = document.getElementById('strategy-params-section');
+                if (container) {
+                    container.innerHTML = '<p style="color: #d32f2f;">Error loading strategy parameters. Please check the console for details.</p>';
+                }
+            }
+        };
 
         async function loadAccounts() {
             const accountSelect = document.getElementById('account_id');
@@ -698,6 +736,17 @@
         });
 
         // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            // Attach strategy type change handler immediately when DOM is ready
+            const strategyTypeSelect = document.getElementById('strategy_type');
+            if (strategyTypeSelect) {
+                strategyTypeSelect.addEventListener('change', updateStrategyParams);
+                console.log('Strategy type change handler attached');
+            } else {
+                console.error('Strategy type select element not found during initialization');
+            }
+        });
+
         window.addEventListener('load', async () => {
             if (Auth.isAuthenticated()) {
                 await loadUserInfo();

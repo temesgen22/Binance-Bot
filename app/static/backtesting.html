@@ -412,7 +412,7 @@
 
                         <div class="form-group">
                             <label for="strategyType">Strategy Type *</label>
-                            <select id="strategyType" required onchange="updateStrategyParams()">
+                            <select id="strategyType" required>
                                 <option value="">Select strategy...</option>
                                 <option value="scalping">EMA Scalping</option>
                                 <option value="range_mean_reversion">Range Mean Reversion</option>
@@ -578,9 +578,22 @@
             }
         };
 
-        function updateStrategyParams() {
-            const strategyType = document.getElementById('strategyType').value;
+        // Make function globally accessible
+        window.updateStrategyParams = function() {
+            try {
+                const strategyTypeElement = document.getElementById('strategyType');
+                if (!strategyTypeElement) {
+                    console.error('Strategy type element not found');
+                    return;
+                }
+                
+                const strategyType = strategyTypeElement.value;
             const container = document.getElementById('paramsContainer');
+                
+                if (!container) {
+                    console.error('Params container not found');
+                    return;
+                }
             
             if (!strategyType || !strategyParams[strategyType]) {
                 container.innerHTML = '<p style="color: #666;">Select a strategy type to configure parameters</p>';
@@ -588,22 +601,35 @@
             }
 
             const params = strategyParams[strategyType];
+                if (!params || typeof params !== 'object') {
+                    console.error('Invalid strategy params structure for:', strategyType);
+                    container.innerHTML = '<p style="color: #d32f2f;">Error: Invalid strategy parameters configuration</p>';
+                    return;
+                }
+
             let html = '<div class="params-grid">';
             
             for (const [key, config] of Object.entries(params)) {
+                    if (!config || !config.label) {
+                        console.warn('Invalid field definition for:', key);
+                        continue;
+                    }
+                    
                 html += '<div class="form-group">';
                 html += `<label for="param_${key}">${config.label}</label>`;
                 
                 if (config.type === 'select') {
                     html += `<select id="param_${key}" name="${key}">`;
+                        if (config.options && Array.isArray(config.options)) {
                     for (const option of config.options) {
                         html += `<option value="${option}" ${option === config.value ? 'selected' : ''}>${option}</option>`;
+                            }
                     }
                     html += '</select>';
                 } else if (config.type === 'checkbox') {
                     html += `<input type="checkbox" id="param_${key}" name="${key}" ${config.value ? 'checked' : ''}>`;
                 } else {
-                    html += `<input type="${config.type}" id="param_${key}" name="${key}" value="${config.value}"`;
+                        html += `<input type="${config.type}" id="param_${key}" name="${key}" value="${config.value || ''}"`;
                     if (config.min !== undefined) html += ` min="${config.min}"`;
                     if (config.max !== undefined) html += ` max="${config.max}"`;
                     if (config.step !== undefined) html += ` step="${config.step}"`;
@@ -620,34 +646,64 @@
             
             html += '</div>';
             container.innerHTML = html;
-        }
+                
+                console.log('Strategy parameters updated for:', strategyType);
+            } catch (error) {
+                console.error('Error updating strategy params:', error);
+                const container = document.getElementById('paramsContainer');
+                if (container) {
+                    container.innerHTML = '<p style="color: #d32f2f;">Error loading strategy parameters. Please check the console for details.</p>';
+                }
+            }
+        };
 
-        function setTimePreset(hours) {
-            const now = new Date();
-            const endTime = new Date(now.getTime() - 60000); // 1 minute ago (to ensure closed candles)
-            const startTime = new Date(endTime.getTime() - (hours * 60 * 60 * 1000));
-            
-            document.getElementById('endTime').value = formatDateTimeLocal(endTime);
-            document.getElementById('startTime').value = formatDateTimeLocal(startTime);
-        }
-
-        function formatDateTimeLocal(date) {
+        // Make functions globally accessible
+        window.formatDateTimeLocal = function(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
             const day = String(date.getDate()).padStart(2, '0');
             const hours = String(date.getHours()).padStart(2, '0');
             const minutes = String(date.getMinutes()).padStart(2, '0');
             return `${year}-${month}-${day}T${hours}:${minutes}`;
-        }
+        };
 
-        function resetForm() {
+        window.setTimePreset = function(hours) {
+            try {
+                const now = new Date();
+                const endTime = new Date(now.getTime() - 60000); // 1 minute ago (to ensure closed candles)
+                const startTime = new Date(endTime.getTime() - (hours * 60 * 60 * 1000));
+                
+                const endTimeInput = document.getElementById('endTime');
+                const startTimeInput = document.getElementById('startTime');
+                
+                if (!endTimeInput || !startTimeInput) {
+                    console.error('Time input elements not found');
+                    return;
+                }
+                
+                endTimeInput.value = formatDateTimeLocal(endTime);
+                startTimeInput.value = formatDateTimeLocal(startTime);
+                console.log('Time preset set to last', hours, 'hours');
+            } catch (error) {
+                console.error('Error setting time preset:', error);
+            }
+        };
+
+        window.resetForm = function() {
+            try {
             document.getElementById('backtestForm').reset();
             document.getElementById('results').classList.remove('show');
             document.getElementById('error').style.display = 'none';
-            document.getElementById('strategyType').value = '';
+                const strategyTypeSelect = document.getElementById('strategyType');
+                if (strategyTypeSelect) {
+                    strategyTypeSelect.value = '';
+                }
             updateStrategyParams();
             setTimePreset(2); // Default to last 2 hours
+            } catch (error) {
+                console.error('Error resetting form:', error);
         }
+        };
 
         async function runBacktest(event) {
             event.preventDefault();
@@ -742,14 +798,23 @@
         let candlestickSeries = null;
         let markersSeries = null;
         let indicatorSeries = {}; // Store all indicator series for toggle control
-        
-        // Initialize chart renderer with backtesting-specific options
-        const chartRenderer = new ChartRenderer({
-            defaultHeight: 500,
-            secondsVisible: true, // Show seconds for second-based intervals
-            supportRangeMeanReversion: true,
-        });
+        let chartRenderer = null; // Will be initialized lazily when needed
         let indicatorToggles = {}; // Store toggle states
+        
+        // Lazy initialization of chart renderer
+        function getChartRenderer() {
+            if (!chartRenderer) {
+                if (typeof ChartRenderer === 'undefined') {
+                    throw new Error('ChartRenderer class not loaded. Please ensure chart-utils.js is loaded correctly.');
+                }
+                chartRenderer = new ChartRenderer({
+                    defaultHeight: 500,
+                    secondsVisible: true, // Show seconds for second-based intervals
+                    supportRangeMeanReversion: true,
+                });
+            }
+            return chartRenderer;
+        }
 
         function createIndicatorToggles(result) {
             const controlsDiv = document.getElementById('indicatorControls');
@@ -1099,7 +1164,7 @@
             
             // Create chart using shared utility
             try {
-                chart = chartRenderer.createChart(chartContainer, chartHeight);
+                chart = getChartRenderer().createChart(chartContainer, chartHeight);
             } catch (e) {
                 console.error('Error creating chart:', e);
                 chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart. Please refresh the page.</p>';
@@ -1108,7 +1173,7 @@
             
             // Add candlestick series using shared utility
             try {
-                candlestickSeries = chartRenderer.createCandlestickSeries(chart);
+                candlestickSeries = getChartRenderer().createCandlestickSeries(chart);
             } catch (e) {
                 console.error('Error creating candlestick series:', e);
                 chartContainer.innerHTML = '<p style="color: #d32f2f; padding: 20px; text-align: center;">Error creating chart series. Please refresh the page.</p>';
@@ -1118,7 +1183,7 @@
             }
             
             // Process klines data using shared utility
-            const candlestickData = chartRenderer.processKlineData(result.klines); // Remove null entries
+            const candlestickData = getChartRenderer().processKlineData(result.klines); // Remove null entries
             
             if (candlestickData.length === 0) {
                 chartContainer.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No valid chart data available.</p>';
@@ -1142,52 +1207,52 @@
             }
             
             // Add EMA indicator lines using shared utility
-            const emaLines = chartRenderer.addEMALines(chart, result.indicators);
-            if (emaLines) {
-                // Store for toggle control
-                indicatorSeries.emaFast = emaLines.emaFast;
-                indicatorSeries.emaSlow = emaLines.emaSlow;
-            }
+            try {
+                const emaLines = getChartRenderer().addEMALines(chart, result.indicators);
+                if (emaLines) {
+                    // Store for toggle control
+                    indicatorSeries.emaFast = emaLines.emaFast;
+                    indicatorSeries.emaSlow = emaLines.emaSlow;
+                }
+                
+                // Add EMA spread line if available (for range mean reversion)
+                // Use separate price scale for EMA spread percentage (0-1 range)
+                if (isRangeMeanReversion && result.indicators.ema_spread_pct) {
+                    const emaSpreadSeries = chart.addLineSeries({
+                        color: '#9C27B0',
+                        lineWidth: 1,
+                        lineStyle: 2, // Dashed
+                        title: 'EMA Spread %',
+                        priceLineVisible: false,
+                        lastValueVisible: true,
+                        priceScaleId: 'emaSpread', // Separate scale for percentage
+                    });
+                    emaSpreadSeries.setData(result.indicators.ema_spread_pct);
+                    indicatorSeries.emaSpread = emaSpreadSeries;
                     
-                    // Add EMA spread line if available (for range mean reversion)
-                    // Use separate price scale for EMA spread percentage (0-1 range)
-                    if (isRangeMeanReversion && result.indicators.ema_spread_pct) {
-                        const emaSpreadSeries = chart.addLineSeries({
-                            color: '#9C27B0',
+                    // Configure EMA spread price scale
+                    chart.priceScale('emaSpread').applyOptions({
+                        scaleMargins: {
+                            top: 0.1,
+                            bottom: 0.1,
+                        },
+                    });
+                    
+                    // Add max threshold line
+                    if (result.indicators.max_ema_spread_pct) {
+                        const thresholdValue = result.indicators.max_ema_spread_pct;
+                        emaSpreadSeries.createPriceLine({
+                            price: thresholdValue,
+                            color: '#f44336',
                             lineWidth: 1,
                             lineStyle: 2, // Dashed
-                            title: 'EMA Spread %',
-                            priceLineVisible: false,
-                            lastValueVisible: true,
-                            priceScaleId: 'emaSpread', // Separate scale for percentage
+                            axisLabelVisible: true,
+                            title: 'Max EMA Spread',
                         });
-                        emaSpreadSeries.setData(result.indicators.ema_spread_pct);
-                        indicatorSeries.emaSpread = emaSpreadSeries;
-                        
-                        // Configure EMA spread price scale
-                        chart.priceScale('emaSpread').applyOptions({
-                            scaleMargins: {
-                                top: 0.1,
-                                bottom: 0.1,
-                            },
-                        });
-                        
-                        // Add max threshold line
-                        if (result.indicators.max_ema_spread_pct) {
-                            const thresholdValue = result.indicators.max_ema_spread_pct;
-                            emaSpreadSeries.createPriceLine({
-                                price: thresholdValue,
-                                color: '#f44336',
-                                lineWidth: 1,
-                                lineStyle: 2, // Dashed
-                                axisLabelVisible: true,
-                                title: 'Max EMA Spread',
-                            });
-                        }
                     }
-                } catch (e) {
-                    console.warn('Error adding EMA lines:', e);
                 }
+            } catch (e) {
+                console.warn('Error adding EMA lines:', e);
             }
             
             try {
@@ -1211,7 +1276,7 @@
             }
             
             // Setup OHLC display using shared utility
-            chartRenderer.setupOHLCDisplay(chart, candlestickSeries, candlestickData, result.indicators, {
+            getChartRenderer().setupOHLCDisplay(chart, candlestickSeries, candlestickData, result.indicators, {
                 ohlcBoxId: 'ohlc-info-backtest',
                 openId: 'ohlc-open-backtest',
                 highId: 'ohlc-high-backtest',
@@ -1227,21 +1292,21 @@
             });
             
             // Add markers for buy/sell signals using shared utility
-            const markers = chartRenderer.createTradeMarkers(result.trades, {
+            const markers = getChartRenderer().createTradeMarkers(result.trades, {
                 positionSideField: 'position_side', // backtesting format
                 pnlField: 'net_pnl', // backtesting format
-            });
-            
-            if (markers.length > 0) {
-                try {
-                    candlestickSeries.setMarkers(markers);
-                } catch (e) {
-                    console.warn('Error setting markers:', e);
+                });
+                
+                if (markers.length > 0) {
+                    try {
+                        candlestickSeries.setMarkers(markers);
+                    } catch (e) {
+                        console.warn('Error setting markers:', e);
                 }
             }
             
             // Fit content using shared utility
-            chartRenderer.fitContent(chart);
+            getChartRenderer().fitContent(chart);
         }
 
         function displayResults(result) {
@@ -1388,6 +1453,53 @@
             results.classList.add('show');
         }
 
+        // Initialize strategy type change handler - works whether DOM is ready or not
+        function attachStrategyTypeHandler() {
+            const strategyTypeSelect = document.getElementById('strategyType');
+            if (strategyTypeSelect) {
+                // Check if listener is already attached
+                if (strategyTypeSelect.hasAttribute('data-listener-attached')) {
+                    console.log('Backtesting: Strategy type handler already attached');
+                    return true;
+                }
+                
+                // Add event listener
+                strategyTypeSelect.addEventListener('change', function(e) {
+                    console.log('Strategy type changed to:', e.target.value);
+                    updateStrategyParams();
+                });
+                strategyTypeSelect.setAttribute('data-listener-attached', 'true');
+                console.log('Backtesting: Strategy type change handler attached');
+                return true;
+            } else {
+                console.warn('Backtesting: Strategy type select element not found, will retry on DOMContentLoaded');
+                return false;
+            }
+        }
+
+        // Try to attach immediately if DOM is already ready
+        if (document.readyState === 'loading') {
+            // DOM is still loading, wait for DOMContentLoaded
+            window.addEventListener('DOMContentLoaded', () => {
+                attachStrategyTypeHandler();
+                // If a strategy type is already selected, update params
+                const strategyTypeSelect = document.getElementById('strategyType');
+                if (strategyTypeSelect && strategyTypeSelect.value) {
+                    console.log('Strategy type already selected on load:', strategyTypeSelect.value);
+                    updateStrategyParams();
+                }
+            });
+        } else {
+            // DOM is already loaded, attach immediately
+            attachStrategyTypeHandler();
+            // If a strategy type is already selected, update params
+            const strategyTypeSelect = document.getElementById('strategyType');
+            if (strategyTypeSelect && strategyTypeSelect.value) {
+                console.log('Strategy type already selected:', strategyTypeSelect.value);
+                updateStrategyParams();
+            }
+        }
+
         // Handle window resize for chart
         let resizeTimeout;
         window.addEventListener('resize', () => {
@@ -1423,6 +1535,11 @@
                 await loadUserInfo();
             }
             setTimePreset(2);
+            
+            // Ensure strategy type handler is attached (fallback)
+            setTimeout(() => {
+                attachStrategyTypeHandler();
+            }, 100);
         });
     </script>
 </body>
