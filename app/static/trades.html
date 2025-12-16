@@ -426,6 +426,7 @@
                 <a href="/test-accounts/">🔐 Test Accounts</a>
                 <a href="/register">🚀 Register Strategy</a>
                 <a href="/docs">📖 API Docs</a>
+                <a href="/static/settings.html">⚙️ Settings</a>
                 <span id="user-info" style="margin-left: 20px;"></span>
                 <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
             </div>
@@ -543,6 +544,7 @@
     </div>
 
     <script src="/static/auth.js"></script>
+    <script src="/static/settings.js"></script>
     <script>
         // Check authentication IMMEDIATELY - before any other code runs
         (function() {
@@ -816,8 +818,32 @@
                 
                 // Date/Time - format timestamp if available
                 if (trade.timestamp) {
-                    const date = new Date(trade.timestamp);
-                    html += `<td>${date.toLocaleString()}</td>`;
+                    // Use UserSettings if available, otherwise fallback to UTC format
+                    const formatDate = (dateString) => {
+                        if (typeof UserSettings !== 'undefined') {
+                            return UserSettings.formatDate(dateString);
+                        }
+                        // Fallback for when settings.js is not loaded
+                        if (!dateString) return 'N/A';
+                        try {
+                            const date = new Date(dateString);
+                            if (isNaN(date.getTime())) {
+                                console.warn('Invalid date string:', dateString);
+                                return 'Invalid Date';
+                            }
+                            const year = date.getUTCFullYear();
+                            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                            const day = String(date.getUTCDate()).padStart(2, '0');
+                            const hours = String(date.getUTCHours()).padStart(2, '0');
+                            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                            const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
+                        } catch (e) {
+                            console.warn('Error formatting date:', dateString, e);
+                            return 'Invalid Date';
+                        }
+                    };
+                    html += `<td>${formatDate(trade.timestamp)}</td>`;
                 } else {
                     html += '<td>N/A</td>';
                 }

@@ -190,6 +190,47 @@
         .success-message.show {
             display: block;
         }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .setting-item input[type="password"],
+        .setting-item input[type="email"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .password-strength {
+            margin-top: 5px;
+            font-size: 0.85em;
+            color: #666;
+        }
+
+        .password-strength.weak {
+            color: #dc3545;
+        }
+
+        .password-strength.medium {
+            color: #ffc107;
+        }
+
+        .password-strength.strong {
+            color: #28a745;
+        }
     </style>
 </head>
 <body>
@@ -211,6 +252,65 @@
         <div class="content">
             <div class="success-message" id="successMessage">
                 Settings saved successfully!
+            </div>
+            <div class="error-message" id="errorMessage">
+                An error occurred. Please try again.
+            </div>
+
+            <!-- Profile Information Section -->
+            <div class="settings-section">
+                <h2>👤 Profile Information</h2>
+                
+                <div class="setting-item">
+                    <label for="profileUsername">Username</label>
+                    <div class="description">Your username (cannot be changed)</div>
+                    <input type="text" id="profileUsername" disabled style="background: #f0f0f0; cursor: not-allowed;">
+                </div>
+
+                <div class="setting-item">
+                    <label for="profileEmail">Email</label>
+                    <div class="description">Your email address</div>
+                    <input type="email" id="profileEmail" placeholder="your.email@example.com">
+                </div>
+
+                <div class="setting-item">
+                    <label for="profileFullName">Full Name</label>
+                    <div class="description">Your full name (optional)</div>
+                    <input type="text" id="profileFullName" placeholder="John Doe" maxlength="255">
+                </div>
+
+                <div class="buttons" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+                    <button type="button" class="btn btn-primary" onclick="updateProfile()">💾 Update Profile</button>
+                </div>
+            </div>
+
+            <!-- Change Password Section -->
+            <div class="settings-section">
+                <h2>🔒 Change Password</h2>
+                
+                <div class="setting-item">
+                    <label for="currentPassword">Current Password</label>
+                    <div class="description">Enter your current password</div>
+                    <input type="password" id="currentPassword" placeholder="Current password">
+                </div>
+
+                <div class="setting-item">
+                    <label for="newPassword">New Password</label>
+                    <div class="description">Enter your new password (minimum 8 characters)</div>
+                    <input type="password" id="newPassword" placeholder="New password" minlength="8">
+                    <div class="password-strength" id="passwordStrength"></div>
+                </div>
+
+                <div class="setting-item">
+                    <label for="confirmPassword">Confirm New Password</label>
+                    <div class="description">Re-enter your new password to confirm</div>
+                    <input type="password" id="confirmPassword" placeholder="Confirm new password" minlength="8">
+                    <div class="password-strength" id="passwordMatch"></div>
+                </div>
+
+                <div class="buttons" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+                    <button type="button" class="btn btn-primary" onclick="changePassword()">🔒 Change Password</button>
+                </div>
             </div>
 
             <form id="settingsForm">
@@ -393,6 +493,224 @@
 
         // Load settings on page load
         loadSettings();
+
+        // Load user profile information
+        async function loadUserProfile() {
+            try {
+                const response = await authFetch('/api/auth/me');
+                if (!response.ok) {
+                    throw new Error('Failed to load user profile');
+                }
+                const user = await response.json();
+                
+                document.getElementById('profileUsername').value = user.username || '';
+                document.getElementById('profileEmail').value = user.email || '';
+                document.getElementById('profileFullName').value = user.full_name || '';
+            } catch (error) {
+                console.error('Error loading user profile:', error);
+                showError('Failed to load user profile. Please refresh the page.');
+            }
+        }
+
+        // Update profile
+        async function updateProfile() {
+            const email = document.getElementById('profileEmail').value.trim();
+            const fullName = document.getElementById('profileFullName').value.trim();
+
+            // Validate email
+            if (!email) {
+                showError('Email is required');
+                return;
+            }
+
+            // Basic email validation
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                showError('Please enter a valid email address');
+                return;
+            }
+
+            try {
+                const response = await authFetch('/api/auth/profile', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: email,
+                        full_name: fullName || null
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to update profile');
+                }
+
+                const updatedUser = await response.json();
+                showSuccess('Profile updated successfully!');
+                
+                // Update displayed values
+                document.getElementById('profileEmail').value = updatedUser.email || '';
+                document.getElementById('profileFullName').value = updatedUser.full_name || '';
+            } catch (error) {
+                console.error('Error updating profile:', error);
+                showError(error.message || 'Failed to update profile. Please try again.');
+            }
+        }
+
+        // Change password
+        async function changePassword() {
+            const currentPassword = document.getElementById('currentPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+
+            // Validate inputs
+            if (!currentPassword) {
+                showError('Please enter your current password');
+                return;
+            }
+
+            if (!newPassword) {
+                showError('Please enter a new password');
+                return;
+            }
+
+            if (newPassword.length < 8) {
+                showError('New password must be at least 8 characters long');
+                return;
+            }
+
+            if (newPassword !== confirmPassword) {
+                showError('New passwords do not match');
+                return;
+            }
+
+            try {
+                const response = await authFetch('/api/auth/change-password', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        current_password: currentPassword,
+                        new_password: newPassword
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to change password');
+                }
+
+                showSuccess('Password changed successfully!');
+                
+                // Clear password fields
+                document.getElementById('currentPassword').value = '';
+                document.getElementById('newPassword').value = '';
+                document.getElementById('confirmPassword').value = '';
+                document.getElementById('passwordStrength').textContent = '';
+                document.getElementById('passwordMatch').textContent = '';
+            } catch (error) {
+                console.error('Error changing password:', error);
+                showError(error.message || 'Failed to change password. Please try again.');
+            }
+        }
+
+        // Password strength checker
+        function checkPasswordStrength(password) {
+            if (!password) {
+                document.getElementById('passwordStrength').textContent = '';
+                return;
+            }
+
+            let strength = 0;
+            let feedback = [];
+
+            if (password.length >= 8) strength++;
+            else feedback.push('at least 8 characters');
+
+            if (/[a-z]/.test(password)) strength++;
+            else feedback.push('lowercase letters');
+
+            if (/[A-Z]/.test(password)) strength++;
+            else feedback.push('uppercase letters');
+
+            if (/[0-9]/.test(password)) strength++;
+            else feedback.push('numbers');
+
+            if (/[^a-zA-Z0-9]/.test(password)) strength++;
+            else feedback.push('special characters');
+
+            const strengthElement = document.getElementById('passwordStrength');
+            strengthElement.className = 'password-strength';
+
+            if (strength <= 2) {
+                strengthElement.textContent = 'Weak password. Consider adding: ' + feedback.join(', ');
+                strengthElement.classList.add('weak');
+            } else if (strength <= 3) {
+                strengthElement.textContent = 'Medium password. Consider adding: ' + feedback.join(', ');
+                strengthElement.classList.add('medium');
+            } else {
+                strengthElement.textContent = 'Strong password!';
+                strengthElement.classList.add('strong');
+            }
+        }
+
+        // Password match checker
+        function checkPasswordMatch() {
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const matchElement = document.getElementById('passwordMatch');
+
+            if (!confirmPassword) {
+                matchElement.textContent = '';
+                return;
+            }
+
+            if (newPassword === confirmPassword) {
+                matchElement.textContent = '✓ Passwords match';
+                matchElement.className = 'password-strength strong';
+            } else {
+                matchElement.textContent = '✗ Passwords do not match';
+                matchElement.className = 'password-strength weak';
+            }
+        }
+
+        // Show success message
+        function showSuccess(message) {
+            const successMsg = document.getElementById('successMessage');
+            successMsg.textContent = message;
+            successMsg.classList.add('show');
+            const errorMsg = document.getElementById('errorMessage');
+            errorMsg.classList.remove('show');
+            setTimeout(() => {
+                successMsg.classList.remove('show');
+            }, 5000);
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorMsg = document.getElementById('errorMessage');
+            errorMsg.textContent = message;
+            errorMsg.classList.add('show');
+            const successMsg = document.getElementById('successMessage');
+            successMsg.classList.remove('show');
+            setTimeout(() => {
+                errorMsg.classList.remove('show');
+            }, 5000);
+        }
+
+        // Event listeners for password fields
+        document.getElementById('newPassword').addEventListener('input', function() {
+            checkPasswordStrength(this.value);
+            checkPasswordMatch();
+        });
+
+        document.getElementById('confirmPassword').addEventListener('input', checkPasswordMatch);
+
+        // Load user profile on page load
+        loadUserProfile();
     </script>
 </body>
 </html>

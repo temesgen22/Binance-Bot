@@ -41,12 +41,12 @@ class StrategyParams(BaseModel):
     ema_fast_period: int = Field(default=20, ge=5, le=100, description="Fast EMA period for trend filter")
     ema_slow_period: int = Field(default=50, ge=10, le=200, description="Slow EMA period for trend filter")
     max_ema_spread_pct: float = Field(default=0.005, ge=0, le=0.02, description="Maximum EMA spread percentage for valid range (0.005 = 0.5%)")
-    max_atr_multiplier: float = Field(default=2.0, gt=0, le=10, description="Maximum ATR multiplier for range volatility check")
+    max_atr_multiplier: float = Field(default=2.0, gt=0, le=100, description="Maximum ATR multiplier for range volatility check")
     rsi_period: int = Field(default=14, ge=5, le=50, description="RSI calculation period")
     rsi_oversold: float = Field(default=40, ge=0, le=50, description="RSI oversold threshold for long entries")
     rsi_overbought: float = Field(default=60, ge=50, le=100, description="RSI overbought threshold for short entries")
-    tp_buffer_pct: float = Field(default=0.001, ge=0, le=0.01, description="Take profit buffer percentage from range boundary (0.001 = 0.1%)")
-    sl_buffer_pct: float = Field(default=0.002, ge=0, le=0.01, description="Stop loss buffer percentage beyond range boundary (0.002 = 0.2%)")
+    tp_buffer_pct: float = Field(default=0.001, ge=0, le=0.05, description="Take profit buffer percentage from range boundary (0.001 = 0.1%)")
+    sl_buffer_pct: float = Field(default=0.002, ge=0, le=0.05, description="Stop loss buffer percentage beyond range boundary (0.002 = 0.2%)")
 
 
 class CreateStrategyRequest(BaseModel):

@@ -381,3 +381,129 @@ def logout() -> dict:
         "message": "Logged out successfully. Please remove tokens from client storage."
     }
 
+
+class ChangePasswordRequest(BaseModel):
+    """Change password request."""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=8, max_length=100, description="New password (minimum 8 characters)")
+
+
+class UpdateProfileRequest(BaseModel):
+    """Update profile request."""
+    email: Optional[EmailStr] = Field(None, description="Email address")
+    full_name: Optional[str] = Field(None, max_length=255, description="Full name")
+
+
+@router.post("/change-password", response_model=dict)
+def change_password(
+    request: ChangePasswordRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db_session_dependency)
+) -> dict:
+    """Change user password.
+    
+    Requires the current password to be provided for verification.
+    """
+    from app.api.deps import get_current_user
+    
+    user = get_current_user(credentials, db)
+    db_service = DatabaseService(db)
+    
+    # Verify current password
+    if not verify_password(request.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    
+    # Check if new password is the same as current password
+    if verify_password(request.new_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password"
+        )
+    
+    # Hash new password
+    new_password_hash = get_password_hash(request.new_password)
+    
+    # Update password
+    try:
+        db_service.update_user(user.id, password_hash=new_password_hash)
+        logger.info(f"Password changed for user: {user.username} ({user.id})")
+        return {"message": "Password changed successfully"}
+    except Exception as e:
+        logger.error(f"Failed to change password for user {user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to change password"
+        )
+
+
+@router.put("/profile", response_model=UserResponse)
+def update_profile(
+    request: UpdateProfileRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db_session_dependency)
+) -> UserResponse:
+    """Update user profile information.
+    
+    Allows updating email and full_name. Email must be unique if changed.
+    """
+    from app.api.deps import get_current_user
+    
+    user = get_current_user(credentials, db)
+    db_service = DatabaseService(db)
+    
+    updates = {}
+    
+    # Update email if provided and different
+    if request.email is not None and request.email != user.email:
+        # Check if email is already taken by another user
+        existing_user = db_service.get_user_by_email(request.email)
+        if existing_user and existing_user.id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        updates["email"] = request.email
+    
+    # Update full_name if provided
+    if request.full_name is not None:
+        updates["full_name"] = request.full_name
+    
+    # If no updates, return current user
+    if not updates:
+        return UserResponse.from_user(user)
+    
+    # Update user
+    try:
+        updated_user = db_service.update_user(user.id, **updates)
+        if not updated_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        logger.info(f"Profile updated for user: {user.username} ({user.id})")
+        return UserResponse.from_user(updated_user)
+    except IntegrityError as e:
+        db.rollback()
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        logger.error(f"Failed to update profile: {error_msg}")
+        
+        if 'email' in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to update profile: {error_msg}"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update profile for user {user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update profile"
+        )
+

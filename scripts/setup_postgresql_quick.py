@@ -13,9 +13,37 @@ sys.path.insert(0, str(project_root))
 from loguru import logger
 
 
+def database_exists():
+    """Check if the binance_bot database already exists."""
+    try:
+        # Use psql to query pg_database system catalog
+        result = subprocess.run(
+            ["psql", "-U", "postgres", "-tAc", "SELECT 1 FROM pg_database WHERE datname='binance_bot';"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip() == "1":
+            return True
+        return False
+    except Exception:
+        # If check fails, we'll try to create and handle the error
+        return None
+
+
 def create_database():
-    """Create the binance_bot database."""
-    logger.info("Creating database 'binance_bot'...")
+    """Create the binance_bot database if it doesn't exist."""
+    logger.info("Checking if database 'binance_bot' exists...")
+    
+    # First, check if database already exists
+    exists = database_exists()
+    if exists is True:
+        logger.info("✓ Database 'binance_bot' already exists - skipping creation")
+        return True
+    elif exists is False:
+        logger.info("Database 'binance_bot' does not exist. Creating...")
+    else:
+        logger.info("Could not verify database existence. Attempting to create...")
     
     try:
         # Try to create database
@@ -30,7 +58,7 @@ def create_database():
             logger.info("✓ Database 'binance_bot' created successfully")
             return True
         elif "already exists" in result.stderr.lower():
-            logger.info("✓ Database 'binance_bot' already exists")
+            logger.info("✓ Database 'binance_bot' already exists (detected during creation)")
             return True
         else:
             logger.warning(f"⚠ Error creating database: {result.stderr}")
