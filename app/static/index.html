@@ -176,17 +176,34 @@
             cursor: pointer;
         }
 
+        /* Additional responsive styles for log viewer */
         @media (max-width: 768px) {
-            .filter-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .filter-actions {
+            .stats-bar {
                 flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
             }
 
-            .btn {
+            .stat-item {
                 width: 100%;
+            }
+
+            .logs-container {
+                padding: 15px;
+                max-height: 500px;
+            }
+
+            .log-entry {
+                padding: 12px;
+            }
+
+            .log-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .log-meta {
+                font-size: 0.8em;
             }
         }
     </style>
@@ -194,6 +211,7 @@
 <body>
     <div class="container">
         <div class="header">
+            <button class="menu-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
             <h1>🤖 Binance Bot Log Viewer</h1>
             <p>Real-time log monitoring and filtering</p>
             <div class="nav-links">

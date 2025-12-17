@@ -279,10 +279,17 @@
             justify-content: space-between;
         }
 
+        .trades-table-wrapper {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 20px -25px 0;
+            padding: 0 25px;
+        }
+
         .trades-table {
             width: 100%;
+            min-width: 800px;
             border-collapse: collapse;
-            margin-top: 20px;
             background: white;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             border-radius: 8px;
@@ -331,6 +338,32 @@
             margin-bottom: 10px;
         }
 
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+            .trades-table-wrapper {
+                margin: 20px -15px 0;
+                padding: 0 15px;
+            }
+
+            .trades-table {
+                font-size: 0.85em;
+            }
+
+            .trades-table th,
+            .trades-table td {
+                padding: 10px 8px;
+            }
+
+            .tabs {
+                flex-wrap: wrap;
+            }
+
+            .tab {
+                padding: 10px 16px;
+                font-size: 0.9em;
+            }
+        }
+
         .refresh-controls {
             display: flex;
             justify-content: space-between;
@@ -354,6 +387,7 @@
 <body>
     <div class="container">
         <div class="header">
+            <button class="menu-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
             <h1>📊 Trade & Profit/Loss Viewer</h1>
             <p>Monitor your trading performance and position PnL</p>
             <div class="nav-links">
@@ -621,7 +655,7 @@
             });
 
             html += '</tbody></table>';
-            content.innerHTML = html;
+            content.innerHTML = '<div class="trades-table-wrapper">' + html + '</div>';
         }
 
         function displayPositions(pnlData) {
@@ -815,7 +849,7 @@
             });
 
             html += '</tbody></table>';
-            content.innerHTML = html;
+            content.innerHTML = '<div class="trades-table-wrapper">' + html + '</div>';
         }
 
         function switchTab(tabName) {

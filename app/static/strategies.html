@@ -155,8 +155,16 @@
             color: #555;
         }
 
+        .strategies-table-wrapper {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 0 -25px;
+            padding: 0 25px;
+        }
+
         .strategies-table {
             width: 100%;
+            min-width: 1000px;
             border-collapse: collapse;
             background: white;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -455,11 +463,54 @@
             background: #f8d7da;
             color: #721c24;
         }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+            .strategies-table-wrapper {
+                margin: 0 -15px;
+                padding: 0 15px;
+            }
+
+            .strategies-table {
+                font-size: 0.85em;
+            }
+
+            .strategies-table th,
+            .strategies-table td {
+                padding: 10px 8px;
+            }
+
+            .rank-badge {
+                width: 30px;
+                height: 30px;
+                font-size: 1em;
+            }
+
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ranking-controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .rank-selector {
+                width: 100%;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .rank-selector select {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
+            <button class="menu-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
             <h1>🏆 Strategy Performance & Ranking</h1>
             <p>Compare strategy performance and rank by profitability</p>
             <div class="nav-links">
@@ -752,7 +803,7 @@
             });
 
             html += '</tbody></table>';
-            content.innerHTML = html;
+            content.innerHTML = '<div class="strategies-table-wrapper">' + html + '</div>';
         }
 
         function generateStrategyDetails(strategy) {

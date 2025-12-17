@@ -10,7 +10,7 @@ body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
-    padding: 20px;
+    padding: 10px;
 }
 
 .container {
@@ -25,18 +25,41 @@ body {
 .header {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
-    padding: 30px;
+    padding: 20px;
     text-align: center;
+    position: relative;
 }
 
 .header h1 {
-    font-size: 2.5em;
-    margin-bottom: 10px;
+    font-size: 1.8em;
+    margin-bottom: 8px;
+    line-height: 1.2;
 }
 
 .header p {
     opacity: 0.9;
-    font-size: 1.1em;
+    font-size: 0.95em;
+}
+
+/* Mobile Menu Toggle Button */
+.menu-toggle {
+    display: none;
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    font-size: 1.5em;
+    padding: 8px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    z-index: 1000;
+    transition: background 0.3s;
+}
+
+.menu-toggle:hover {
+    background: rgba(255, 255, 255, 0.3);
 }
 
 .nav-links {
@@ -44,40 +67,49 @@ body {
     display: flex;
     justify-content: center;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
+    transition: max-height 0.3s ease, opacity 0.3s ease;
 }
 
 .nav-links a {
     color: white;
     text-decoration: none;
-    padding: 8px 16px;
+    padding: 8px 12px;
     border-radius: 5px;
     background: rgba(255, 255, 255, 0.2);
     transition: background 0.3s, opacity 0.3s;
     opacity: 0.9;
+    font-size: 0.9em;
+    white-space: nowrap;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
-.nav-links a:hover {
+.nav-links a:hover,
+.nav-links a:active {
     opacity: 1;
     background: rgba(255, 255, 255, 0.3);
     text-decoration: none;
 }
 
 .nav-links #user-info {
-    margin-left: 20px;
+    margin-left: 10px;
     color: white;
     display: flex;
     align-items: center;
+    font-size: 0.9em;
 }
 
 .nav-links .logout-link {
-    margin-left: 10px;
+    margin-left: 8px;
     color: white;
     text-decoration: none;
-    padding: 8px 16px;
+    padding: 8px 12px;
     border-radius: 5px;
     background: rgba(255, 255, 255, 0.2);
     transition: background 0.3s;
+    font-size: 0.9em;
+    touch-action: manipulation;
 }
 
 .nav-links .logout-link:hover {
@@ -85,44 +117,44 @@ body {
 }
 
 .filters {
-    padding: 25px;
+    padding: 20px;
     background: #f8f9fa;
     border-bottom: 2px solid #e9ecef;
 }
 
 .filters h2 {
-    margin-bottom: 20px;
+    margin-bottom: 15px;
     color: #333;
-    font-size: 1.5em;
+    font-size: 1.3em;
 }
 
 .filter-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 15px;
-    margin-bottom: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 15px;
 }
 
 .filter-row {
     display: flex;
-    gap: 15px;
+    gap: 12px;
     align-items: end;
     flex-wrap: wrap;
-    margin-bottom: 20px;
+    margin-bottom: 15px;
 }
 
 .filter-group {
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-width: 200px;
+    min-width: 150px;
 }
 
 .filter-group label {
     margin-bottom: 5px;
     font-weight: 600;
     color: #555;
-    font-size: 0.9em;
+    font-size: 0.85em;
 }
 
 .filter-group input,
@@ -130,8 +162,12 @@ body {
     padding: 10px;
     border: 2px solid #ddd;
     border-radius: 6px;
-    font-size: 1em;
+    font-size: 0.95em;
     transition: border-color 0.3s;
+    width: 100%;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
 }
 
 .filter-group input:focus,
@@ -142,18 +178,22 @@ body {
 
 .filter-actions {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
+    align-items: center;
 }
 
 .btn {
-    padding: 12px 24px;
+    padding: 12px 20px;
     border: none;
     border-radius: 6px;
-    font-size: 1em;
+    font-size: 0.95em;
     font-weight: 600;
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    min-height: 44px; /* Touch-friendly minimum size */
 }
 
 .btn:hover {
@@ -192,14 +232,14 @@ body {
 }
 
 .content {
-    padding: 30px;
+    padding: 20px;
 }
 
 .loading {
     text-align: center;
-    padding: 40px;
+    padding: 30px;
     color: #666;
-    font-size: 1.2em;
+    font-size: 1.1em;
 }
 
 .error {
@@ -209,6 +249,7 @@ body {
     border-radius: 6px;
     margin-bottom: 20px;
     border-left: 4px solid #c33;
+    word-wrap: break-word;
 }
 
 .success-message {
@@ -219,6 +260,7 @@ body {
     margin-bottom: 20px;
     border: 1px solid #c3e6cb;
     display: none;
+    word-wrap: break-word;
 }
 
 .success-message.show {
@@ -233,9 +275,274 @@ body {
     margin-bottom: 20px;
     border: 1px solid #f5c6cb;
     display: none;
+    word-wrap: break-word;
 }
 
 .error-message.show {
     display: block;
+}
+
+/* Responsive Tables */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -20px;
+    padding: 0 20px;
+}
+
+.table-responsive table {
+    width: 100%;
+    min-width: 600px; /* Minimum width for table content */
+}
+
+/* Responsive Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    padding: 15px;
+}
+
+.stat-card h3 {
+    font-size: 0.85em;
+}
+
+.stat-card .value {
+    font-size: 1.5em;
+}
+
+/* Responsive Design - Mobile First Approach */
+
+/* Small devices (phones, 576px and down) */
+@media (max-width: 575.98px) {
+    body {
+        padding: 5px;
+    }
+
+    .container {
+        border-radius: 8px;
+    }
+
+    .header {
+        padding: 15px;
+    }
+
+    .header h1 {
+        font-size: 1.4em;
+        padding-right: 50px; /* Space for menu toggle */
+    }
+
+    .header p {
+        font-size: 0.85em;
+    }
+
+    .menu-toggle {
+        display: block;
+    }
+
+    .nav-links {
+        display: none;
+        flex-direction: column;
+        width: 100%;
+        max-height: 0;
+        overflow: hidden;
+        margin-top: 10px;
+        gap: 5px;
+    }
+
+    .nav-links.active {
+        display: flex;
+        max-height: 1000px;
+    }
+
+    .nav-links a {
+        width: 100%;
+        text-align: left;
+        padding: 12px;
+        font-size: 0.9em;
+    }
+
+    .nav-links #user-info {
+        margin-left: 0;
+        margin-top: 5px;
+        width: 100%;
+    }
+
+    .nav-links .logout-link {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .filters {
+        padding: 15px;
+    }
+
+    .filters h2 {
+        font-size: 1.1em;
+    }
+
+    .filter-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .filter-row {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .filter-group {
+        min-width: 100%;
+    }
+
+    .filter-actions {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .filter-actions .btn {
+        width: 100%;
+    }
+
+    .content {
+        padding: 15px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .stat-card {
+        padding: 12px;
+    }
+
+    .stat-card .value {
+        font-size: 1.3em;
+    }
+}
+
+/* Medium devices (tablets, 576px to 991.98px) */
+@media (min-width: 576px) and (max-width: 991.98px) {
+    body {
+        padding: 10px;
+    }
+
+    .header {
+        padding: 25px;
+    }
+
+    .header h1 {
+        font-size: 2em;
+    }
+
+    .nav-links {
+        gap: 8px;
+    }
+
+    .nav-links a {
+        padding: 8px 14px;
+        font-size: 0.9em;
+    }
+
+    .filters {
+        padding: 20px;
+    }
+
+    .filter-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .content {
+        padding: 20px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+}
+
+/* Large devices (desktops, 992px and up) */
+@media (min-width: 992px) {
+    body {
+        padding: 20px;
+    }
+
+    .header {
+        padding: 30px;
+    }
+
+    .header h1 {
+        font-size: 2.5em;
+    }
+
+    .header p {
+        font-size: 1.1em;
+    }
+
+    .nav-links {
+        gap: 10px;
+    }
+
+    .nav-links a {
+        padding: 8px 16px;
+        font-size: 1em;
+    }
+
+    .filters {
+        padding: 25px;
+    }
+
+    .filters h2 {
+        font-size: 1.5em;
+    }
+
+    .filter-grid {
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 15px;
+    }
+
+    .content {
+        padding: 30px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+    }
+}
+
+/* Extra large devices (large desktops, 1400px and up) */
+@media (min-width: 1400px) {
+    .container {
+        max-width: 1600px;
+    }
+}
+
+/* Print styles */
+@media print {
+    body {
+        background: white;
+        padding: 0;
+    }
+
+    .container {
+        box-shadow: none;
+        border-radius: 0;
+    }
+
+    .header {
+        background: #667eea;
+    }
+
+    .nav-links,
+    .menu-toggle,
+    .filter-actions,
+    .btn {
+        display: none;
+    }
 }
 
