@@ -129,26 +129,79 @@ class MockBinanceClient:
         self.balance = new_balance
 
 
-async def run_backtest(
-    request: BacktestRequest,
-    client: BinanceClient
-) -> BacktestResult:
-    """Run backtesting on historical data."""
+def _calculate_backtest_statistics(
+    trades: list[Trade],
+    initial_balance: float,
+    final_balance: float
+) -> dict:
+    """Calculate backtest statistics from completed trades.
     
-    # Ensure start_time and end_time are timezone-aware (UTC)
-    if request.start_time.tzinfo is None:
-        request.start_time = request.start_time.replace(tzinfo=timezone.utc)
-    if request.end_time.tzinfo is None:
-        request.end_time = request.end_time.replace(tzinfo=timezone.utc)
+    Args:
+        trades: List of all trades (completed and open)
+        initial_balance: Starting balance
+        final_balance: Ending balance
+        
+    Returns:
+        Dictionary with calculated statistics
+    """
+    completed_trades = [t for t in trades if not t.is_open]
+    open_trades = [t for t in trades if t.is_open]
     
-    # Fetch historical klines
-    start_timestamp = int(request.start_time.timestamp() * 1000)
-    end_timestamp = int(request.end_time.timestamp() * 1000)
+    total_pnl = final_balance - initial_balance
+    total_return_pct = (total_pnl / initial_balance) * 100 if initial_balance > 0 else 0
     
-    # Determine interval from params or default
-    interval = request.params.get("kline_interval", "1m" if request.strategy_type == "scalping" else "5m")
+    winning_trades = [t for t in completed_trades if t.net_pnl and t.net_pnl > 0]
+    losing_trades = [t for t in completed_trades if t.net_pnl and t.net_pnl <= 0]
     
-    # Fetch historical klines using python-binance directly
+    win_rate = (len(winning_trades) / len(completed_trades) * 100) if completed_trades else 0.0
+    
+    total_fees = sum((t.entry_fee + (t.exit_fee or 0)) for t in trades)
+    
+    avg_profit_per_trade = sum((t.net_pnl or 0) for t in completed_trades) / len(completed_trades) if completed_trades else 0.0
+    
+    largest_win = max((t.net_pnl or 0) for t in completed_trades) if completed_trades else 0.0
+    largest_loss = min((t.net_pnl or 0) for t in completed_trades) if completed_trades else 0.0
+    
+    return {
+        "completed_trades": completed_trades,
+        "open_trades": open_trades,
+        "total_pnl": total_pnl,
+        "total_return_pct": total_return_pct,
+        "winning_trades": winning_trades,
+        "losing_trades": losing_trades,
+        "win_rate": win_rate,
+        "total_fees": total_fees,
+        "avg_profit_per_trade": avg_profit_per_trade,
+        "largest_win": largest_win,
+        "largest_loss": largest_loss,
+    }
+
+
+async def _fetch_historical_klines(
+    client: BinanceClient,
+    symbol: str,
+    interval: str,
+    start_time: datetime,
+    end_time: datetime
+) -> list[list]:
+    """Fetch historical klines with multiple fallback strategies.
+    
+    Args:
+        client: BinanceClient instance
+        symbol: Trading symbol (e.g., 'BTCUSDT')
+        interval: Kline interval (e.g., '1m', '5m', '1h')
+        start_time: Start time (timezone-aware datetime)
+        end_time: End time (timezone-aware datetime)
+        
+    Returns:
+        List of klines in Binance format
+        
+    Raises:
+        HTTPException: If klines cannot be fetched or insufficient data
+    """
+    start_timestamp = int(start_time.timestamp() * 1000)
+    end_timestamp = int(end_time.timestamp() * 1000)
+    
     # Calculate how many candles we need
     interval_seconds_map = {
         "1s": 1, "3s": 3, "5s": 5, "10s": 10, "30s": 30,  # Second-based intervals for high-frequency trading
@@ -172,9 +225,9 @@ async def run_backtest(
             # Use futures_klines with startTime/endTime (timestamps in milliseconds) for unambiguous UTC
             try:
                 limit = min(estimated_candles, 1500)
-                logger.info(f"Fetching historical klines for {request.symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
+                logger.info(f"Fetching historical klines for {symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
                 klines = rest.futures_klines(
-                    symbol=request.symbol,
+                    symbol=symbol,
                     interval=interval,
                     limit=limit,
                     startTime=start_timestamp,
@@ -194,12 +247,12 @@ async def run_backtest(
                 # Fallback: try futures_historical_klines with string format
                 if hasattr(rest, 'futures_historical_klines'):
                     # Use string format as fallback (may have timezone interpretation issues)
-                    start_str = request.start_time.strftime("%d %b %Y %H:%M:%S")
-                    end_str = request.end_time.strftime("%d %b %Y %H:%M:%S")
+                    start_str = start_time.strftime("%d %b %Y %H:%M:%S")
+                    end_str = end_time.strftime("%d %b %Y %H:%M:%S")
                     logger.info(f"Fallback: Using futures_historical_klines with string format: {start_str} to {end_str}")
                     try:
                         klines = rest.futures_historical_klines(
-                            symbol=request.symbol,
+                            symbol=symbol,
                             interval=interval,
                             start_str=start_str,
                             end_str=end_str
@@ -228,7 +281,7 @@ async def run_backtest(
                     limit = min(estimated_candles, 1500)
                     logger.warning(f"Using last fallback: futures_klines with limit={limit}, then filtering")
                     try:
-                        klines = rest.futures_klines(symbol=request.symbol, interval=interval, limit=limit)
+                        klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
                         # Filter by time range
                         all_klines = [
                             k for k in (klines or [])
@@ -247,7 +300,7 @@ async def run_backtest(
             try:
                 limit = min(estimated_candles, 1500)
                 logger.info(f"Trying fallback method with limit={limit}")
-                klines = rest.futures_klines(symbol=request.symbol, interval=interval, limit=limit)
+                klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
                 all_klines = [
                     k for k in (klines or [])
                     if start_timestamp <= int(k[0]) <= end_timestamp
@@ -280,7 +333,7 @@ async def run_backtest(
         if start_timestamp <= int(k[0]) <= end_timestamp
     ]
     
-    logger.info(f"Filtered to {len(filtered_klines)} klines in time range {request.start_time} to {request.end_time}")
+    logger.info(f"Filtered to {len(filtered_klines)} klines in time range {start_time} to {end_time}")
     
     if not filtered_klines:
         raise HTTPException(
@@ -288,8 +341,42 @@ async def run_backtest(
             detail="No klines found in the specified time range"
         )
     
+    return filtered_klines
+
+
+async def run_backtest(
+    request: BacktestRequest,
+    client: BinanceClient
+) -> BacktestResult:
+    """Run backtesting on historical data."""
+    
+    # Ensure start_time and end_time are timezone-aware (UTC)
+    if request.start_time.tzinfo is None:
+        request.start_time = request.start_time.replace(tzinfo=timezone.utc)
+    if request.end_time.tzinfo is None:
+        request.end_time = request.end_time.replace(tzinfo=timezone.utc)
+    
+    # Determine interval from params or default
+    interval = request.params.get("kline_interval", "1m" if request.strategy_type == "scalping" else "5m")
+    
+    # Calculate interval_seconds for strategy context
+    interval_seconds_map = {
+        "1s": 1, "3s": 3, "5s": 5, "10s": 10, "30s": 30,  # Second-based intervals for high-frequency trading
+        "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400
+    }
+    interval_seconds = interval_seconds_map.get(interval, 60)
+    
+    # Fetch historical klines
+    filtered_klines = await _fetch_historical_klines(
+        client=client,
+        symbol=request.symbol,
+        interval=interval,
+        start_time=request.start_time,
+        end_time=request.end_time
+    )
+    
     # Create strategy context
-    # Calculate interval_seconds from kline_interval (already calculated above)
     context = StrategyContext(
         id="backtest",
         name="Backtest Strategy",
@@ -297,7 +384,7 @@ async def run_backtest(
         leverage=request.leverage,
         risk_per_trade=request.risk_per_trade,
         params=request.params,
-        interval_seconds=interval_seconds  # Calculated from kline_interval
+        interval_seconds=interval_seconds
     )
     
     # Create mock client for strategy (with initial balance)
@@ -986,12 +1073,24 @@ async def run_backtest(
         balance += net_pnl
         mock_client.update_balance(balance)  # Update mock client balance
     
-    # Calculate statistics
-    completed_trades = [t for t in trades if not t.is_open]
-    open_trades = [t for t in trades if t.is_open]
-    
     # Log signal statistics
     logger.info(f"Signal statistics: {signal_counts}")
+    
+    # Calculate statistics
+    stats = _calculate_backtest_statistics(trades, request.initial_balance, balance)
+    
+    completed_trades = stats["completed_trades"]
+    open_trades = stats["open_trades"]
+    total_pnl = stats["total_pnl"]
+    total_return_pct = stats["total_return_pct"]
+    winning_trades = stats["winning_trades"]
+    losing_trades = stats["losing_trades"]
+    win_rate = stats["win_rate"]
+    total_fees = stats["total_fees"]
+    avg_profit_per_trade = stats["avg_profit_per_trade"]
+    largest_win = stats["largest_win"]
+    largest_loss = stats["largest_loss"]
+    
     logger.info(f"Backtest completed: {len(completed_trades)} completed trades, {len(open_trades)} open trades, {len(trades)} total")
     if len(trades) == 0:
         logger.warning("No trades were executed during backtest.")
@@ -1001,21 +1100,6 @@ async def run_backtest(
             logger.warning("  - Market conditions don't match strategy criteria")
             logger.warning("  - EMA periods need more candles to stabilize")
             logger.warning("  - Strategy parameters are too restrictive")
-    
-    total_pnl = balance - request.initial_balance
-    total_return_pct = (total_pnl / request.initial_balance) * 100 if request.initial_balance > 0 else 0
-    
-    winning_trades = [t for t in completed_trades if t.net_pnl and t.net_pnl > 0]
-    losing_trades = [t for t in completed_trades if t.net_pnl and t.net_pnl <= 0]
-    
-    win_rate = (len(winning_trades) / len(completed_trades) * 100) if completed_trades else 0.0
-    
-    total_fees = sum((t.entry_fee + (t.exit_fee or 0)) for t in trades)
-    
-    avg_profit_per_trade = sum((t.net_pnl or 0) for t in completed_trades) / len(completed_trades) if completed_trades else 0.0
-    
-    largest_win = max((t.net_pnl or 0) for t in completed_trades) if completed_trades else 0.0
-    largest_loss = min((t.net_pnl or 0) for t in completed_trades) if completed_trades else 0.0
     
     # Convert trades to dict for response
     trades_dict = [t.model_dump() for t in trades]

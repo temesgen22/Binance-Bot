@@ -15,7 +15,7 @@ from app.core.exceptions import (
     BinanceNetworkError,
     BinanceAuthenticationError,
 )
-from app.api.deps import get_client_manager, get_current_user, get_db_session_dependency
+from app.api.deps import get_client_manager, get_current_user, get_db_session_dependency, get_account_service
 from app.models.db_models import User
 
 
@@ -44,6 +44,213 @@ class TestAccountResponse(BaseModel):
     details: Optional[dict] = None
 
 
+def _extract_permissions(account_info: dict) -> list[str]:
+    """Extract permissions from Binance account info.
+    
+    Args:
+        account_info: Account info dictionary from Binance API
+        
+    Returns:
+        List of permission strings
+    """
+    permissions = []
+    if account_info.get("canTrade", False):
+        permissions.append("FUTURES_TRADING")
+    if account_info.get("canDeposit", False):
+        permissions.append("DEPOSIT")
+    if account_info.get("canWithdraw", False):
+        permissions.append("WITHDRAW")
+    
+    # If no permissions found, assume basic access
+    if not permissions:
+        permissions = ["BASIC_ACCESS"]
+    
+    return permissions
+
+
+def _test_binance_account_credentials(
+    api_key: str,
+    api_secret: str,
+    testnet: bool
+) -> dict:
+    """Test Binance account credentials and return account information.
+    
+    This function centralizes the account testing logic to eliminate duplication
+    across test_account() and test_existing_account() endpoints.
+    
+    Args:
+        api_key: Binance API key
+        api_secret: Binance API secret
+        testnet: Whether to use testnet
+        
+    Returns:
+        Dictionary containing:
+        - account_info: Raw account info from Binance
+        - balance: Account balance (float or None)
+        - permissions: List of permission strings
+        
+    Raises:
+        Exception: Any exception from Binance API calls
+    """
+    # Create client with provided credentials
+    client = BinanceClient(
+        api_key=api_key,
+        api_secret=api_secret,
+        testnet=testnet
+    )
+    
+    # Test connection and authentication
+    rest = client._ensure()
+    account_info = rest.futures_account()
+    
+    # Extract account balance (may not be available)
+    account_balance = None
+    try:
+        account_balance = client.futures_account_balance()
+    except Exception:
+        pass  # Balance might not be available
+    
+    # Extract permissions from account info
+    permissions = _extract_permissions(account_info)
+    
+    return {
+        "account_info": account_info,
+        "balance": account_balance,
+        "permissions": permissions,
+    }
+
+
+def _build_test_account_response(
+    account_data: dict,
+    account_name: Optional[str],
+    testnet: bool
+) -> TestAccountResponse:
+    """Build TestAccountResponse from account test data.
+    
+    Args:
+        account_data: Dictionary returned from _test_binance_account_credentials
+        account_name: Optional account name for display
+        testnet: Whether this is a testnet account
+        
+    Returns:
+        TestAccountResponse with account information
+    """
+    account_info = account_data["account_info"]
+    
+    return TestAccountResponse(
+        success=True,
+        account_name=account_name,
+        testnet=testnet,
+        connection_status="✅ Connected",
+        authentication_status="✅ Authenticated",
+        account_info={
+            "total_wallet_balance": float(account_info.get("totalWalletBalance", 0)),
+            "total_unrealized_profit": float(account_info.get("totalUnrealizedProfit", 0)),
+            "available_balance": float(account_info.get("availableBalance", 0)),
+            "margin_balance": float(account_info.get("marginBalance", 0)),
+        },
+        balance=account_data["balance"],
+        permissions=account_data["permissions"],
+        details={
+            "account_type": "FUTURES",
+            "can_trade": account_info.get("canTrade", False),
+            "can_deposit": account_info.get("canDeposit", False),
+            "can_withdraw": account_info.get("canWithdraw", False),
+        }
+    )
+
+
+def _handle_test_account_error(
+    exc: Exception,
+    account_name: Optional[str],
+    testnet: bool
+) -> TestAccountResponse:
+    """Handle errors for account testing endpoints.
+    
+    This function centralizes error handling logic to eliminate duplication
+    across test_account() and test_existing_account() endpoints.
+    
+    Args:
+        exc: The exception that was raised
+        account_name: Optional account name for the response
+        testnet: Whether this is a testnet account
+        
+    Returns:
+        TestAccountResponse with appropriate error details
+    """
+    error_msg = str(exc)
+    
+    # Handle specific exception types
+    if isinstance(exc, BinanceNetworkError):
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="❌ Connection Failed",
+            authentication_status="❓ Not Tested",
+            error=f"Network error: {error_msg}",
+            details={"error_type": "NETWORK_ERROR"}
+        )
+    
+    elif isinstance(exc, BinanceAuthenticationError):
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="✅ Connected",
+            authentication_status="❌ Authentication Failed",
+            error=f"Authentication error: {error_msg}",
+            details={"error_type": "AUTHENTICATION_ERROR"}
+        )
+    
+    elif isinstance(exc, BinanceAPIError):
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="✅ Connected",
+            authentication_status="❌ API Error",
+            error=f"Binance API error: {error_msg}",
+            details={"error_type": "API_ERROR"}
+        )
+    
+    # Handle generic authentication errors (check for specific error messages)
+    elif "Invalid API-key" in error_msg or "Signature" in error_msg:
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="✅ Connected",
+            authentication_status="❌ Authentication Failed",
+            error=f"Invalid API credentials: {error_msg}",
+            details={"error_type": "AUTHENTICATION_ERROR"}
+        )
+    
+    # Generic authentication error (other authentication failures)
+    elif "authentication" in error_msg.lower() or "auth" in error_msg.lower():
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="✅ Connected",
+            authentication_status="❌ Authentication Failed",
+            error=f"Authentication error: {error_msg}",
+            details={"error_type": "AUTHENTICATION_ERROR"}
+        )
+    
+    # Generic fallback for unexpected errors
+    else:
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="❌ Unknown Error",
+            authentication_status="❓ Not Tested",
+            error=f"Unexpected error: {error_msg}",
+            details={"error_type": "UNKNOWN_ERROR"}
+        )
+
+
 @router.post("/api/test-account", response_model=TestAccountResponse)
 async def test_account(request: TestAccountRequest) -> TestAccountResponse:
     """Test a Binance API key account.
@@ -62,132 +269,25 @@ async def test_account(request: TestAccountRequest) -> TestAccountResponse:
         Test results with detailed status information
     """
     try:
-        # Create client with provided credentials
-        client = BinanceClient(
+        # Test account credentials using shared helper
+        account_data = _test_binance_account_credentials(
             api_key=request.api_key,
             api_secret=request.api_secret,
             testnet=request.testnet
         )
         
-        # Test 1: Connection and Authentication
-        # Try to get account information (this requires valid API key)
-        try:
-            rest = client._ensure()
-            
-            # Test connection by getting account info
-            account_info = rest.futures_account()
-            
-            # Extract account information
-            account_balance = None
-            try:
-                account_balance = client.futures_account_balance()
-            except Exception:
-                pass  # Balance might not be available
-            
-            # Get API key permissions from account info
-            permissions = []
-            # Check if futures trading is enabled
-            if account_info.get("canTrade", False):
-                permissions.append("FUTURES_TRADING")
-            if account_info.get("canDeposit", False):
-                permissions.append("DEPOSIT")
-            if account_info.get("canWithdraw", False):
-                permissions.append("WITHDRAW")
-            
-            # If no permissions found, assume basic access
-            if not permissions:
-                permissions = ["BASIC_ACCESS"]
-            
-            # Prepare response
-            return TestAccountResponse(
-                success=True,
-                account_name=request.account_name,
-                testnet=request.testnet,
-                connection_status="✅ Connected",
-                authentication_status="✅ Authenticated",
-                account_info={
-                    "total_wallet_balance": float(account_info.get("totalWalletBalance", 0)),
-                    "total_unrealized_profit": float(account_info.get("totalUnrealizedProfit", 0)),
-                    "available_balance": float(account_info.get("availableBalance", 0)),
-                    "margin_balance": float(account_info.get("marginBalance", 0)),
-                },
-                balance=account_balance,
-                permissions=permissions,
-                details={
-                    "account_type": "FUTURES",
-                    "can_trade": account_info.get("canTrade", False),
-                    "can_deposit": account_info.get("canDeposit", False),
-                    "can_withdraw": account_info.get("canWithdraw", False),
-                }
-            )
-            
-        except Exception as auth_exc:
-            # Authentication failed
-            error_msg = str(auth_exc)
-            if "Invalid API-key" in error_msg or "Signature" in error_msg:
-                return TestAccountResponse(
-                    success=False,
-                    account_name=request.account_name,
-                    testnet=request.testnet,
-                    connection_status="✅ Connected",
-                    authentication_status="❌ Authentication Failed",
-                    error=f"Invalid API credentials: {error_msg}",
-                    details={"error_type": "AUTHENTICATION_ERROR"}
-                )
-            else:
-                return TestAccountResponse(
-                    success=False,
-                    account_name=request.account_name,
-                    testnet=request.testnet,
-                    connection_status="✅ Connected",
-                    authentication_status="❌ Authentication Failed",
-                    error=f"Authentication error: {error_msg}",
-                    details={"error_type": "AUTHENTICATION_ERROR"}
-                )
-    
-    except BinanceNetworkError as e:
-        return TestAccountResponse(
-            success=False,
+        # Build and return response
+        return _build_test_account_response(
+            account_data=account_data,
             account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="❌ Connection Failed",
-            authentication_status="❓ Not Tested",
-            error=f"Network error: {str(e)}",
-            details={"error_type": "NETWORK_ERROR"}
+            testnet=request.testnet
         )
     
-    except BinanceAuthenticationError as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="✅ Connected",
-            authentication_status="❌ Authentication Failed",
-            error=f"Authentication error: {str(e)}",
-            details={"error_type": "AUTHENTICATION_ERROR"}
-        )
-    
-    except BinanceAPIError as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="✅ Connected",
-            authentication_status="❌ API Error",
-            error=f"Binance API error: {str(e)}",
-            details={"error_type": "API_ERROR"}
-        )
+    except (BinanceNetworkError, BinanceAuthenticationError, BinanceAPIError) as e:
+        return _handle_test_account_error(e, request.account_name, request.testnet)
     
     except Exception as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="❌ Unknown Error",
-            authentication_status="❓ Not Tested",
-            error=f"Unexpected error: {str(e)}",
-            details={"error_type": "UNKNOWN_ERROR"}
-        )
+        return _handle_test_account_error(e, request.account_name, request.testnet)
 
 
 @router.get("/api/test-account/quick")
@@ -230,7 +330,7 @@ async def quick_test(
 async def test_existing_account(
     account_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ) -> TestAccountResponse:
     """Test an existing account from database by account_id.
     
@@ -239,9 +339,8 @@ async def test_existing_account(
     
     Args:
         account_id: The account ID to test
-        request: FastAPI request object
         current_user: Current authenticated user
-        db: Database session
+        account_service: AccountService dependency
         
     Returns:
         Test results with detailed status information
@@ -249,20 +348,6 @@ async def test_existing_account(
     Raises:
         HTTPException: If account not found
     """
-    from app.services.account_service import AccountService
-    from app.core.redis_storage import RedisStorage
-    from app.core.config import get_settings
-    
-    # Get account from database
-    settings = get_settings()
-    redis_storage = None
-    if settings.redis_enabled:
-        redis_storage = RedisStorage(
-            redis_url=settings.redis_url,
-            enabled=settings.redis_enabled
-        )
-    
-    account_service = AccountService(db, redis_storage)
     account_config = account_service.get_account(current_user.id, account_id)
     
     if not account_config:
@@ -279,126 +364,24 @@ async def test_existing_account(
         account_name=account_config.name or account_id
     )
     
-    # Use the existing test_account endpoint logic
-    # We'll call the internal test logic directly
+    # Test account credentials using shared helper
     try:
-        # Create client with account credentials
-        client = BinanceClient(
+        account_data = _test_binance_account_credentials(
             api_key=request.api_key,
             api_secret=request.api_secret,
             testnet=request.testnet
         )
         
-        # Test connection and authentication
-        try:
-            rest = client._ensure()
-            account_info = rest.futures_account()
-            
-            # Extract account information
-            account_balance = None
-            try:
-                account_balance = client.futures_account_balance()
-            except Exception:
-                pass  # Balance might not be available
-            
-            # Get permissions from account info
-            permissions = []
-            if account_info.get("canTrade", False):
-                permissions.append("FUTURES_TRADING")
-            if account_info.get("canDeposit", False):
-                permissions.append("DEPOSIT")
-            if account_info.get("canWithdraw", False):
-                permissions.append("WITHDRAW")
-            
-            if not permissions:
-                permissions = ["BASIC_ACCESS"]
-            
-            return TestAccountResponse(
-                success=True,
-                account_name=request.account_name,
-                testnet=request.testnet,
-                connection_status="✅ Connected",
-                authentication_status="✅ Authenticated",
-                account_info={
-                    "total_wallet_balance": float(account_info.get("totalWalletBalance", 0)),
-                    "total_unrealized_profit": float(account_info.get("totalUnrealizedProfit", 0)),
-                    "available_balance": float(account_info.get("availableBalance", 0)),
-                    "margin_balance": float(account_info.get("marginBalance", 0)),
-                },
-                balance=account_balance,
-                permissions=permissions,
-                details={
-                    "account_type": "FUTURES",
-                    "can_trade": account_info.get("canTrade", False),
-                    "can_deposit": account_info.get("canDeposit", False),
-                    "can_withdraw": account_info.get("canWithdraw", False),
-                }
-            )
-            
-        except Exception as auth_exc:
-            error_msg = str(auth_exc)
-            if "Invalid API-key" in error_msg or "Signature" in error_msg:
-                return TestAccountResponse(
-                    success=False,
-                    account_name=request.account_name,
-                    testnet=request.testnet,
-                    connection_status="✅ Connected",
-                    authentication_status="❌ Authentication Failed",
-                    error=f"Invalid API credentials: {error_msg}",
-                    details={"error_type": "AUTHENTICATION_ERROR"}
-                )
-            else:
-                return TestAccountResponse(
-                    success=False,
-                    account_name=request.account_name,
-                    testnet=request.testnet,
-                    connection_status="✅ Connected",
-                    authentication_status="❌ Authentication Failed",
-                    error=f"Authentication error: {error_msg}",
-                    details={"error_type": "AUTHENTICATION_ERROR"}
-                )
-    
-    except BinanceNetworkError as e:
-        return TestAccountResponse(
-            success=False,
+        # Build and return response
+        return _build_test_account_response(
+            account_data=account_data,
             account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="❌ Connection Failed",
-            authentication_status="❓ Not Tested",
-            error=f"Network error: {str(e)}",
-            details={"error_type": "NETWORK_ERROR"}
+            testnet=request.testnet
         )
     
-    except BinanceAuthenticationError as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="✅ Connected",
-            authentication_status="❌ Authentication Failed",
-            error=f"Authentication error: {str(e)}",
-            details={"error_type": "AUTHENTICATION_ERROR"}
-        )
-    
-    except BinanceAPIError as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="✅ Connected",
-            authentication_status="❌ API Error",
-            error=f"Binance API error: {str(e)}",
-            details={"error_type": "API_ERROR"}
-        )
+    except (BinanceNetworkError, BinanceAuthenticationError, BinanceAPIError) as e:
+        return _handle_test_account_error(e, request.account_name, request.testnet)
     
     except Exception as e:
-        return TestAccountResponse(
-            success=False,
-            account_name=request.account_name,
-            testnet=request.testnet,
-            connection_status="❌ Unknown Error",
-            authentication_status="❓ Not Tested",
-            error=f"Unexpected error: {str(e)}",
-            details={"error_type": "UNKNOWN_ERROR"}
-        )
+        return _handle_test_account_error(e, request.account_name, request.testnet)
 

@@ -163,10 +163,34 @@ def get_strategy_runner(
         # Inject TradeService
         enhanced_runner.trade_service = trade_service
         
-        # Copy in-memory strategies from base runner (for backward compatibility)
-        enhanced_runner._strategies = base_runner._strategies.copy()
-        enhanced_runner._tasks = base_runner._tasks.copy()
-        enhanced_runner._trades = base_runner._trades.copy()
+        # Share tasks with base runner (tasks run in the same event loop)
+        # This ensures tasks started by per-user runners are visible to all runners
+        enhanced_runner._tasks = base_runner._tasks
+        enhanced_runner._trades = base_runner._trades
+        
+        # Copy base runner's strategies for backward compatibility, but user's strategies take precedence
+        # (user strategies are loaded from database in StrategyRunner.__init__)
+        for strategy_id, summary in base_runner._strategies.items():
+            if strategy_id not in enhanced_runner._strategies:
+                enhanced_runner._strategies[strategy_id] = summary
+        
+        # Restore running strategies for this user (only if not already restored)
+        # Use a flag in app state to track which users have been restored
+        app_state = request.app.state
+        if not hasattr(app_state, '_strategy_restore_flags'):
+            app_state._strategy_restore_flags = set()
+        
+        restore_key = f"user_{current_user.id}"
+        if restore_key not in app_state._strategy_restore_flags:
+            # First time this user's strategies are accessed - restore running ones
+            import asyncio
+            try:
+                # Schedule restoration in background (non-blocking)
+                asyncio.create_task(enhanced_runner.restore_running_strategies())
+                app_state._strategy_restore_flags.add(restore_key)
+            except Exception as exc:
+                from loguru import logger
+                logger.error(f"Failed to schedule strategy restoration for user {current_user.id}: {exc}")
         
         return enhanced_runner
     
@@ -192,3 +216,37 @@ def get_client_manager(request: Request) -> BinanceClientManager:
             detail="BinanceClientManager not initialized"
         )
     return request.app.state.binance_client_manager
+
+
+def get_account_service(
+    request: Request,
+    db: Session = Depends(get_db_session_dependency)
+):
+    """Get AccountService with Redis storage (cached per request).
+    
+    This dependency eliminates duplication of Redis/AccountService initialization
+    across multiple endpoints. The service is cached in request.state to avoid
+    recreating it multiple times within the same request.
+    
+    Returns:
+        AccountService instance with Redis storage configured
+    """
+    # Cache in request state to avoid recreating on each dependency call
+    if hasattr(request.state, 'account_service'):
+        return request.state.account_service
+    
+    from app.services.account_service import AccountService
+    from app.core.redis_storage import RedisStorage
+    from app.core.config import get_settings
+    
+    settings = get_settings()
+    redis_storage = None
+    if settings.redis_enabled:
+        redis_storage = RedisStorage(
+            redis_url=settings.redis_url,
+            enabled=settings.redis_enabled
+        )
+    
+    account_service = AccountService(db, redis_storage)
+    request.state.account_service = account_service
+    return account_service

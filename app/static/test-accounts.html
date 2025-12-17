@@ -5,65 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Test API Accounts</title>
     <script src="/static/auth.js"></script>
+    <link rel="stylesheet" href="/static/common.css">
+    <script src="/static/common.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
+        /* Page-specific styles - common styles are in common.css */
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            opacity: 0.9;
-            font-size: 1.1em;
-        }
-
-        .nav-links {
-            margin-top: 20px;
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .nav-links a {
-            color: white;
-            text-decoration: none;
-            padding: 8px 16px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 6px;
-            transition: background 0.3s;
-        }
-
-        .nav-links a:hover {
-            background: rgba(255, 255, 255, 0.3);
+            max-width: 1400px; /* Override common.css for this page */
         }
 
         .content {
@@ -442,8 +389,8 @@
                 <a href="/backtesting">🔬 Backtesting</a>
                 <a href="/reports/">📋 Reports</a>
                 <a href="/static/settings.html">⚙️ Settings</a>
-                <span id="user-info" style="margin-left: 20px;"></span>
-                <a href="#" onclick="logout(); return false;" style="margin-left: 10px;">🚪 Logout</a>
+                <span id="user-info"></span>
+                <a href="#" onclick="logout(); return false;" class="logout-link">🚪 Logout</a>
             </div>
         </div>
 
@@ -550,17 +497,7 @@
         })();
 
         // Load user info
-        async function loadUserInfo() {
-            try {
-                const user = await AuthAPI.getCurrentUser();
-                const userInfo = document.getElementById('user-info');
-                if (userInfo) {
-                    userInfo.textContent = `👤 ${user.username}`;
-                }
-            } catch (e) {
-                console.error('Failed to load user info:', e);
-            }
-        }
+        // loadUserInfo is now in common.js
 
         // Logout function is now global from auth.js
 
@@ -771,7 +708,7 @@
         // Load accounts when page loads
         // Load user info on page load
         if (Auth.isAuthenticated()) {
-            loadUserInfo();
+            // loadUserInfo is called automatically by common.js
         }
         loadExistingAccounts();
 

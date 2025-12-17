@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from pathlib import Path
 
@@ -153,7 +154,110 @@ def create_app() -> FastAPI:
             enabled=settings.telegram_enabled,
         )
 
-    app = FastAPI(title="Binance Trading Bot", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Lifespan context manager for startup and shutdown.
+        
+        Note: When the server is stopped (Ctrl+C), a CancelledError may be raised
+        by Starlette/Uvicorn's lifespan handler. This is expected behavior and harmless.
+        The cleanup code in the finally block will still execute.
+        """
+        # Startup
+        try:
+            # Initialize database connection pool
+            init_database()
+            
+            app.state.binance_client = default_client  # For backward compatibility
+            app.state.binance_client_manager = client_manager
+            app.state.strategy_runner = runner
+            app.state.background_tasks: list[asyncio.Task] = []
+            
+            # Restore running strategies after server restart
+            # This ensures strategies that were running before restart are automatically started
+            try:
+                await runner.restore_running_strategies()
+            except Exception as exc:
+                logger.error(f"Failed to restore running strategies on startup: {exc}", exc_info=True)
+            
+            # Start Telegram command handler if enabled
+            if telegram_command_handler:
+                telegram_command_handler.start()
+                logger.info("Telegram command handler started")
+            
+            yield
+        except asyncio.CancelledError:
+            # Handle cancellation during yield (when shutdown is triggered)
+            logger.info("Lifespan cancelled, performing cleanup...")
+            # Fall through to finally block
+        finally:
+            # Shutdown - handle gracefully even if cancelled
+            # Note: CancelledError may be raised during shutdown, which is expected behavior
+            try:
+                # Stop all running strategies
+                try:
+                    if hasattr(app.state, 'strategy_runner') and app.state.strategy_runner:
+                        runner_instance = app.state.strategy_runner
+                        # Cancel all strategy tasks
+                        if hasattr(runner_instance, '_tasks'):
+                            tasks_to_cancel = list(runner_instance._tasks.values())
+                            for task in tasks_to_cancel:
+                                if not task.done():
+                                    task.cancel()
+                            # Wait for tasks to finish cancelling (with timeout)
+                            if tasks_to_cancel:
+                                try:
+                                    await asyncio.wait_for(
+                                        asyncio.gather(*tasks_to_cancel, return_exceptions=True),
+                                        timeout=5.0
+                                    )
+                                except (asyncio.TimeoutError, asyncio.CancelledError):
+                                    logger.debug("Strategy tasks cancellation completed (timeout or cancelled)")
+                                except Exception as e:
+                                    logger.warning(f"Error waiting for strategy tasks to cancel: {e}")
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.debug(f"Error cancelling strategy tasks: {type(e).__name__}")
+                
+                # Stop Telegram command handler
+                try:
+                    if telegram_command_handler:
+                        telegram_command_handler.stop()
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.debug(f"Error stopping Telegram handler: {type(e).__name__}")
+                
+                # Cancel background tasks
+                try:
+                    if hasattr(app.state, 'background_tasks'):
+                        for task in app.state.background_tasks:
+                            if not task.done():
+                                task.cancel()
+                        # Wait for background tasks to finish (with timeout)
+                        if app.state.background_tasks:
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.gather(*app.state.background_tasks, return_exceptions=True),
+                                    timeout=2.0
+                                )
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                pass  # Ignore timeout/cancellation during shutdown
+                            except Exception as e:
+                                logger.warning(f"Error waiting for background tasks to cancel: {e}")
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.debug(f"Error cancelling background tasks: {type(e).__name__}")
+                
+                # Close database connections (critical - must complete)
+                try:
+                    close_database()
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.warning(f"Error closing database: {type(e).__name__}")
+            except asyncio.CancelledError:
+                # Final catch-all for any remaining CancelledError
+                # This is expected during shutdown and can be safely ignored
+                pass
+            except Exception as e:
+                # Log any unexpected errors but don't re-raise
+                logger.error(f"Unexpected error during shutdown: {e}", exc_info=True)
+
+    app = FastAPI(title="Binance Trading Bot", version="0.1.0", lifespan=lifespan)
 
     # Register exception handlers (order matters - most specific first)
     app.add_exception_handler(BinanceRateLimitError, binance_rate_limit_handler)
@@ -170,33 +274,6 @@ def create_app() -> FastAPI:
     app.add_exception_handler(BinanceBotException, binance_bot_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(Exception, general_exception_handler)
-
-    @app.on_event("startup")
-    async def startup() -> None:  # pragma: no cover
-        # Initialize database connection pool
-        init_database()
-        
-        app.state.binance_client = default_client  # For backward compatibility
-        app.state.binance_client_manager = client_manager
-        app.state.strategy_runner = runner
-        app.state.background_tasks: list[asyncio.Task] = []
-        
-        # Start Telegram command handler if enabled
-        if telegram_command_handler:
-            telegram_command_handler.start()
-            logger.info("Telegram command handler started")
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:  # pragma: no cover
-        # Stop Telegram command handler
-        if telegram_command_handler:
-            telegram_command_handler.stop()
-        
-        # Close database connections
-        close_database()
-        
-        for task in app.state.background_tasks:
-            task.cancel()
 
     # Serve static files (GUI)
     static_dir = Path(__file__).parent / "static"
@@ -266,19 +343,33 @@ def create_app() -> FastAPI:
             }
         )
     
-    # Helper function to serve trades GUI
-    async def _serve_trades_gui():
-        """Helper function to serve the Trade & PnL Viewer GUI."""
-        trades_path = static_dir / "trades.html"
-        abs_trades_path = trades_path.resolve()
+    # Generic helper function to serve GUI HTML files
+    async def _serve_gui_file(filename: str, display_name: str = None) -> FileResponse:
+        """Generic function to serve GUI HTML files.
+        
+        Args:
+            filename: Name of the HTML file to serve (e.g., "trades.html")
+            display_name: Optional display name for error messages (defaults to filename)
+        
+        Returns:
+            FileResponse with the HTML file
+        
+        Raises:
+            HTTPException: If file is not found
+        """
+        if display_name is None:
+            display_name = filename
+        
+        file_path = static_dir / filename
+        abs_file_path = file_path.resolve()
         abs_static_dir = static_dir.resolve()
         
-        # Try multiple path variations
+        # Try multiple path variations in case of path resolution issues
         possible_paths = [
-            abs_trades_path,
-            trades_path,
-            abs_static_dir / "trades.html",
-            static_dir / "trades.html",
+            abs_file_path,
+            file_path,
+            abs_static_dir / filename,
+            static_dir / filename,
         ]
         
         for path in possible_paths:
@@ -293,7 +384,7 @@ def create_app() -> FastAPI:
         raise HTTPException(
             status_code=404,
             detail={
-                "message": "Trade & PnL Viewer GUI not found.",
+                "message": f"{display_name} not found.",
                 "tried_paths": [str(p) for p in possible_paths],
                 "static_dir": str(abs_static_dir),
                 "static_dir_exists": abs_static_dir.exists(),
@@ -314,242 +405,72 @@ def create_app() -> FastAPI:
     app.include_router(market_analyzer_router)  # Market analyzer API
     app.include_router(backtesting_router)  # Backtesting API
     
-    # Serve backtesting.html for Strategy Backtesting
-    async def _serve_backtesting_gui():
-        """Helper function to serve the Strategy Backtesting GUI."""
-        backtesting_path = static_dir / "backtesting.html"
-        abs_backtesting_path = backtesting_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_backtesting_path,
-            backtesting_path,
-            abs_static_dir / "backtesting.html",
-            static_dir / "backtesting.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Strategy Backtesting GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
-    
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)
     async def backtesting_gui():
         """Serve the Strategy Backtesting GUI (without trailing slash)."""
-        return await _serve_backtesting_gui()
+        return await _serve_gui_file("backtesting.html", "Strategy Backtesting GUI")
     
     @app.get("/backtesting/", tags=["gui"], include_in_schema=False)
     async def backtesting_gui_with_slash():
         """Serve the Strategy Backtesting GUI (with trailing slash)."""
-        return await _serve_backtesting_gui()
+        return await _serve_gui_file("backtesting.html", "Strategy Backtesting GUI")
     
     # GUI routes - registered AFTER API routers
     # FastAPI matches more specific routes first, so /trades/list will match before /trades
     @app.get("/trades", tags=["gui"], include_in_schema=False)
     async def trades_gui():
         """Serve the Trade & PnL Viewer GUI (without trailing slash)."""
-        return await _serve_trades_gui()
+        return await _serve_gui_file("trades.html", "Trade & PnL Viewer GUI")
     
     @app.get("/trades/", tags=["gui"], include_in_schema=False)
     async def trades_gui_with_slash():
         """Serve the Trade & PnL Viewer GUI (with trailing slash)."""
-        return await _serve_trades_gui()
-    
-    # Serve strategies.html for Strategy Performance Viewer
-    async def _serve_strategies_gui():
-        """Helper function to serve the Strategy Performance GUI."""
-        strategies_path = static_dir / "strategies.html"
-        abs_strategies_path = strategies_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_strategies_path,
-            strategies_path,
-            abs_static_dir / "strategies.html",
-            static_dir / "strategies.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Strategy Performance GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
+        return await _serve_gui_file("trades.html", "Trade & PnL Viewer GUI")
     
     # GUI routes for strategies - registered AFTER API routers
     @app.get("/strategies", tags=["gui"], include_in_schema=False)
     async def strategies_gui():
         """Serve the Strategy Performance & Ranking GUI (without trailing slash)."""
-        return await _serve_strategies_gui()
+        return await _serve_gui_file("strategies.html", "Strategy Performance GUI")
     
     @app.get("/strategies/", tags=["gui"], include_in_schema=False)
     async def strategies_gui_with_slash():
         """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
-        return await _serve_strategies_gui()
-    
-    # Serve test-accounts.html for API Account Testing
-    async def _serve_test_accounts_gui():
-        """Helper function to serve the Test API Accounts GUI."""
-        test_accounts_path = static_dir / "test-accounts.html"
-        abs_test_accounts_path = test_accounts_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_test_accounts_path,
-            test_accounts_path,
-            abs_static_dir / "test-accounts.html",
-            static_dir / "test-accounts.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Test API Accounts GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
+        return await _serve_gui_file("strategies.html", "Strategy Performance GUI")
     
     # GUI routes for test accounts
     @app.get("/test-accounts", tags=["gui"], include_in_schema=False)
     async def test_accounts_gui():
         """Serve the Test API Accounts GUI (without trailing slash)."""
-        return await _serve_test_accounts_gui()
+        return await _serve_gui_file("test-accounts.html", "Test API Accounts GUI")
     
     @app.get("/test-accounts/", tags=["gui"], include_in_schema=False)
     async def test_accounts_gui_with_slash():
         """Serve the Test API Accounts GUI (with trailing slash)."""
-        return await _serve_test_accounts_gui()
-    
-    # Serve reports.html for Trading Reports
-    async def _serve_reports_gui():
-        """Helper function to serve the Trading Reports GUI."""
-        reports_path = static_dir / "reports.html"
-        abs_reports_path = reports_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_reports_path,
-            reports_path,
-            abs_static_dir / "reports.html",
-            static_dir / "reports.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Trading Reports GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
+        return await _serve_gui_file("test-accounts.html", "Test API Accounts GUI")
     
     # GUI routes for reports - registered AFTER API routers
     @app.get("/reports", tags=["gui"], include_in_schema=False)
     async def reports_gui():
         """Serve the Trading Reports GUI (without trailing slash)."""
-        return await _serve_reports_gui()
+        return await _serve_gui_file("reports.html", "Trading Reports GUI")
     
     @app.get("/reports/", tags=["gui"], include_in_schema=False)
     async def reports_gui_with_slash():
         """Serve the Trading Reports GUI (with trailing slash)."""
-        return await _serve_reports_gui()
-    
-    # Serve strategy-register.html for Strategy Registration
-    async def _serve_strategy_register_gui():
-        """Helper function to serve the Strategy Registration GUI."""
-        register_path = static_dir / "strategy-register.html"
-        abs_register_path = register_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_register_path,
-            register_path,
-            abs_static_dir / "strategy-register.html",
-            static_dir / "strategy-register.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Strategy Registration GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
+        return await _serve_gui_file("reports.html", "Trading Reports GUI")
     
     # GUI routes for strategy registration - registered AFTER API routers
     @app.get("/strategy-register", tags=["gui"], include_in_schema=False)
     async def strategy_register_gui():
         """Serve the Strategy Registration GUI (without trailing slash)."""
-        return await _serve_strategy_register_gui()
+        return await _serve_gui_file("strategy-register.html", "Strategy Registration GUI")
     
     @app.get("/strategy-register/", tags=["gui"], include_in_schema=False)
     async def strategy_register_gui_with_slash():
         """Serve the Strategy Registration GUI (with trailing slash)."""
-        return await _serve_strategy_register_gui()
+        return await _serve_gui_file("strategy-register.html", "Strategy Registration GUI")
     
     # Keep /register route for backward compatibility (redirects to strategy-register)
     @app.get("/register", tags=["gui"], include_in_schema=False)
@@ -558,50 +479,16 @@ def create_app() -> FastAPI:
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url="/strategy-register", status_code=301)
     
-    # Serve market-analyzer.html for Market Analyzer
-    async def _serve_market_analyzer_gui():
-        """Helper function to serve the Market Analyzer GUI."""
-        market_analyzer_path = static_dir / "market-analyzer.html"
-        abs_market_analyzer_path = market_analyzer_path.resolve()
-        abs_static_dir = static_dir.resolve()
-        
-        # Try multiple path variations
-        possible_paths = [
-            abs_market_analyzer_path,
-            market_analyzer_path,
-            abs_static_dir / "market-analyzer.html",
-            static_dir / "market-analyzer.html",
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                return FileResponse(
-                    path=str(path),
-                    media_type="text/html"
-                )
-        
-        # If file not found, return detailed error
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Market Analyzer GUI not found.",
-                "tried_paths": [str(p) for p in possible_paths],
-                "static_dir": str(abs_static_dir),
-                "static_dir_exists": abs_static_dir.exists(),
-            }
-        )
-    
     # GUI routes for market analyzer - registered AFTER API routers
     @app.get("/market-analyzer", tags=["gui"], include_in_schema=False)
     async def market_analyzer_gui():
         """Serve the Market Analyzer GUI (without trailing slash)."""
-        return await _serve_market_analyzer_gui()
+        return await _serve_gui_file("market-analyzer.html", "Market Analyzer GUI")
     
     @app.get("/market-analyzer/", tags=["gui"], include_in_schema=False)
     async def market_analyzer_gui_with_slash():
         """Serve the Market Analyzer GUI (with trailing slash)."""
-        return await _serve_market_analyzer_gui()
+        return await _serve_gui_file("market-analyzer.html", "Market Analyzer GUI")
     
     # Diagnostic endpoint to check if register.html exists (for debugging)
     @app.get("/debug/check-register-file", tags=["debug"], include_in_schema=False)

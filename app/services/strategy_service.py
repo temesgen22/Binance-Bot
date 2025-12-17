@@ -13,22 +13,20 @@ from sqlalchemy.orm import Session
 from loguru import logger
 
 from app.core.redis_storage import RedisStorage
-from app.services.database_service import DatabaseService
+from app.services.base_cache_service import BaseCacheService
 from app.models.strategy import StrategySummary, StrategyState, StrategyType
 from app.models.db_models import Strategy as DBStrategy
 
 
-class StrategyService:
+class StrategyService(BaseCacheService):
     """Service for managing strategies with database + Redis cache-aside pattern."""
     
     def __init__(self, db: Session, redis_storage: Optional[RedisStorage] = None):
-        self.db_service = DatabaseService(db)
-        self.redis = redis_storage
-        self._cache_ttl = 3600  # 1 hour cache TTL
+        super().__init__(db, redis_storage, cache_ttl=3600)
     
     def _redis_key(self, user_id: UUID, strategy_id: str) -> str:
         """Generate Redis key for strategy with user_id."""
-        return f"binance_bot:user:{user_id}:strategy:{strategy_id}"
+        return super()._redis_key(user_id, strategy_id, "strategy")
     
     def _redis_state_key(self, user_id: UUID, strategy_id: str) -> str:
         """Generate Redis key for strategy runtime state."""
@@ -147,17 +145,13 @@ class StrategyService:
         2. If not found, check database
         3. Cache the result in Redis
         """
+        key = self._redis_key(user_id, strategy_id)
+        
         # Try Redis first
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, strategy_id)
-                cached = self.redis._client.get(key) if self.redis._client else None
-                if cached:
-                    data = json.loads(cached)
-                    logger.debug(f"Cache HIT for strategy {strategy_id}")
-                    return self._dict_to_strategy_summary(data)
-            except Exception as e:
-                logger.warning(f"Redis cache read error for strategy {strategy_id}: {e}")
+        cached_data = self._get_from_cache(key)
+        if cached_data:
+            logger.debug(f"Cache HIT for strategy {strategy_id}")
+            return self._dict_to_strategy_summary(cached_data)
         
         # Cache miss - check database
         logger.debug(f"Cache MISS for strategy {strategy_id}, checking database")
@@ -170,18 +164,8 @@ class StrategyService:
         summary = self._db_strategy_to_summary(db_strategy)
         
         # Cache in Redis
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, strategy_id)
-                data = self._strategy_summary_to_dict(summary)
-                if self.redis._client:
-                    self.redis._client.setex(
-                        key,
-                        self._cache_ttl,
-                        json.dumps(data, default=str)
-                    )
-            except Exception as e:
-                logger.warning(f"Redis cache write error for strategy {strategy_id}: {e}")
+        data = self._strategy_summary_to_dict(summary)
+        self._save_to_cache(key, data)
         
         return summary
     
@@ -225,18 +209,9 @@ class StrategyService:
         summary = self._db_strategy_to_summary(db_strategy)
         
         # Cache in Redis
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, strategy_id)
-                data = self._strategy_summary_to_dict(summary)
-                if self.redis._client:
-                    self.redis._client.setex(
-                        key,
-                        self._cache_ttl,
-                        json.dumps(data, default=str)
-                    )
-            except Exception as e:
-                logger.warning(f"Redis cache write error for strategy {strategy_id}: {e}")
+        key = self._redis_key(user_id, strategy_id)
+        data = self._strategy_summary_to_dict(summary)
+        self._save_to_cache(key, data)
         
         return summary
     
@@ -257,13 +232,8 @@ class StrategyService:
         summary = self._db_strategy_to_summary(db_strategy)
         
         # Invalidate cache (will be refreshed on next read)
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, strategy_id)
-                if self.redis._client:
-                    self.redis._client.delete(key)
-            except Exception as e:
-                logger.warning(f"Redis cache delete error for strategy {strategy_id}: {e}")
+        key = self._redis_key(user_id, strategy_id)
+        self._invalidate_cache(key)
         
         return summary
     
@@ -336,14 +306,9 @@ class StrategyService:
         
         if success:
             # Delete from cache
-            if self.redis and self.redis.enabled:
-                try:
-                    key = self._redis_key(user_id, strategy_id)
-                    state_key = self._redis_state_key(user_id, strategy_id)
-                    if self.redis._client:
-                        self.redis._client.delete(key, state_key)
-                except Exception as e:
-                    logger.warning(f"Redis cache delete error for strategy {strategy_id}: {e}")
+            key = self._redis_key(user_id, strategy_id)
+            state_key = self._redis_state_key(user_id, strategy_id)
+            self._invalidate_cache(key, state_key)
         
         return success
 

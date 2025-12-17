@@ -181,7 +181,23 @@ class StrategyRunner:
                     summary = self._strategies[strategy_id]
                     if summary.status == StrategyState.running:
                         summary.status = StrategyState.error
-                        self._save_to_redis(strategy_id, summary)
+                        # Update database FIRST (source of truth), then Redis
+                        if self.strategy_service and self.user_id:
+                            try:
+                                self.strategy_service.update_strategy(
+                                    user_id=self.user_id,
+                                    strategy_id=strategy_id,
+                                    status=StrategyState.error.value
+                                )
+                                # Only save to Redis after database update succeeds
+                                self._save_to_redis(strategy_id, summary)
+                            except Exception as e:
+                                logger.error(f"Failed to update strategy {strategy_id} status to 'error' in database: {e}")
+                                # Still save to Redis for backward compatibility if database fails
+                                self._save_to_redis(strategy_id, summary)
+                        else:
+                            # No database mode - save to Redis only
+                            self._save_to_redis(strategy_id, summary)
                         logger.warning(
                             f"Strategy {strategy_id} task completed unexpectedly. "
                             f"Marking as error status."
@@ -364,7 +380,23 @@ class StrategyRunner:
                     summary = self._strategies[strategy_id]
                     if summary.status == StrategyState.running:
                         summary.status = StrategyState.error
-                        self._save_to_redis(strategy_id, summary)
+                        # Update database FIRST (source of truth), then Redis
+                        if self.strategy_service and self.user_id:
+                            try:
+                                self.strategy_service.update_strategy(
+                                    user_id=self.user_id,
+                                    strategy_id=strategy_id,
+                                    status=StrategyState.error.value
+                                )
+                                # Only save to Redis after database update succeeds
+                                self._save_to_redis(strategy_id, summary)
+                            except Exception as e:
+                                logger.error(f"Failed to update strategy {strategy_id} status to 'error' in database: {e}")
+                                # Still save to Redis for backward compatibility if database fails
+                                self._save_to_redis(strategy_id, summary)
+                        else:
+                            # No database mode - save to Redis only
+                            self._save_to_redis(strategy_id, summary)
                         logger.warning(
                             f"Strategy {strategy_id} task completed unexpectedly. "
                             f"Marking as error status."
@@ -405,8 +437,20 @@ class StrategyRunner:
                 current=len(self._tasks),
                 max_allowed=self.max_concurrent
             )
+        # Check if strategy is already running
+        # If task exists and is not done, strategy is actually running
         if strategy_id in self._tasks:
-            raise StrategyAlreadyRunningError(strategy_id)
+            task = self._tasks[strategy_id]
+            if not task.done():
+                raise StrategyAlreadyRunningError(strategy_id)
+            else:
+                # Task exists but is done (crashed/completed), remove it
+                logger.warning(f"Strategy {strategy_id} has a dead task, cleaning up and restarting")
+                del self._tasks[strategy_id]
+        
+        # Also check if status says running but no task exists (restore scenario)
+        if summary.status == StrategyState.running and strategy_id not in self._tasks:
+            logger.info(f"Strategy {strategy_id} has status 'running' but no active task, will start it now")
 
         summary = self._strategies[strategy_id]
         
@@ -447,9 +491,9 @@ class StrategyRunner:
         task = asyncio.create_task(self._run_loop(strategy, summary, account_risk, account_executor))
         self._tasks[strategy_id] = task
         summary.status = StrategyState.running
-        self._save_to_redis(strategy_id, summary)
         
-        # Update database if strategy_service is available (multi-user mode)
+        # Update database FIRST (source of truth), then Redis
+        # This prevents data loss if database update fails
         if self.strategy_service and self.user_id:
             try:
                 self.strategy_service.update_strategy(
@@ -458,8 +502,16 @@ class StrategyRunner:
                     status=StrategyState.running.value
                 )
                 logger.debug(f"Updated strategy {strategy_id} status to 'running' in database")
+                # Only save to Redis after database update succeeds
+                self._save_to_redis(strategy_id, summary)
             except Exception as e:
-                logger.warning(f"Failed to update strategy status in database: {e}")
+                logger.error(f"Failed to update strategy status in database: {e}. Redis not updated to prevent data loss.")
+                # Don't update Redis if database update failed - prevents inconsistency
+                # The strategy will still run in memory, but status won't persist
+                raise  # Re-raise to prevent strategy from appearing started
+        else:
+            # No database mode - save to Redis only (backward compatibility)
+            self._save_to_redis(strategy_id, summary)
         
         # Log strategy start
         account_name = self.client_manager.get_account_config(account_id)
@@ -551,9 +603,9 @@ class StrategyRunner:
         if task:
             task.cancel()
         summary.status = StrategyState.stopped
-        self._save_to_redis(strategy_id, summary)
         
-        # Update database if strategy_service is available (multi-user mode)
+        # Update database FIRST (source of truth), then Redis
+        # This prevents data loss if database update fails
         if self.strategy_service and self.user_id:
             try:
                 self.strategy_service.update_strategy(
@@ -562,8 +614,14 @@ class StrategyRunner:
                     status=StrategyState.stopped.value
                 )
                 logger.debug(f"Updated strategy {strategy_id} status to 'stopped' in database")
+                # Only save to Redis after database update succeeds
+                self._save_to_redis(strategy_id, summary)
             except Exception as e:
-                logger.warning(f"Failed to update strategy status in database: {e}")
+                logger.error(f"Failed to update strategy status in database: {e}. Redis not updated to prevent data loss.")
+                # Don't update Redis if database update failed - prevents inconsistency
+        else:
+            # No database mode - save to Redis only (backward compatibility)
+            self._save_to_redis(strategy_id, summary)
         
         # Get final PnL before sending notification
         final_pnl = None
@@ -1071,10 +1129,11 @@ class StrategyRunner:
                 if self.redis:
                     self._save_to_redis(summary.id, summary)
             
+            running_count = len([s for s in self._strategies.values() if s.status == StrategyState.running])
             logger.info(
                 f"Successfully loaded {len(strategies)} strategies from database. "
                 f"Strategies in memory: {len(self._strategies)}, "
-                f"Running strategies: {len([s for s in self._strategies.values() if s.status == StrategyState.running])}"
+                f"Running strategies (to be restored): {running_count}"
             )
         except Exception as exc:
             logger.error(f"Failed to load strategies from database: {exc}", exc_info=True)
@@ -1136,13 +1195,180 @@ class StrategyRunner:
                     logger.warning(f"Failed to load strategy {strategy_id} from Redis: {exc}", exc_info=True)
                     continue
             
+            running_count = len([s for s in self._strategies.values() if s.status == StrategyState.running])
             logger.info(
                 f"Successfully loaded {loaded_count} strategies and {trades_loaded_count} trades from Redis. "
                 f"Strategies in memory: {len(self._strategies)}, "
-                f"Running strategies: {len([s for s in self._strategies.values() if s.status == StrategyState.running])}"
+                f"Running strategies (to be restored): {running_count}"
             )
         except Exception as exc:
             logger.error(f"Failed to load strategies from Redis: {exc}", exc_info=True)
+    
+    async def restore_running_strategies(self) -> None:
+        """Restore and start all strategies that were running before server restart.
+        
+        This should be called after strategies are loaded from Redis/database.
+        It will automatically start any strategy that has status == StrategyState.running
+        but doesn't have an active asyncio task.
+        """
+        from app.core.exceptions import StrategyNotFoundError, StrategyAlreadyRunningError, MaxConcurrentStrategiesError
+        
+        running_strategies = [
+            (strategy_id, summary)
+            for strategy_id, summary in self._strategies.items()
+            if summary.status == StrategyState.running and strategy_id not in self._tasks
+        ]
+        
+        if not running_strategies:
+            logger.info("No running strategies to restore")
+            return
+        
+        logger.info(f"Restoring {len(running_strategies)} running strategies after server restart...")
+        
+        restored_count = 0
+        failed_count = 0
+        
+        for strategy_id, summary in running_strategies:
+            try:
+                # Clean up any dead tasks before checking limit
+                self._cleanup_dead_tasks()
+                
+                # Check concurrent limit
+                if len(self._tasks) >= self.max_concurrent:
+                    logger.warning(
+                        f"Cannot restore strategy {strategy_id}: max concurrent strategies ({self.max_concurrent}) reached. "
+                        f"Please stop some strategies and restart manually."
+                    )
+                    # Mark as stopped since we can't start it
+                    summary.status = StrategyState.stopped
+                    # Update database FIRST (source of truth), then Redis
+                    if self.strategy_service and self.user_id:
+                        try:
+                            self.strategy_service.update_strategy(
+                                user_id=self.user_id,
+                                strategy_id=strategy_id,
+                                status=StrategyState.stopped.value
+                            )
+                            # Only save to Redis after database update succeeds
+                            self._save_to_redis(strategy_id, summary)
+                        except Exception as e:
+                            logger.error(f"Failed to update strategy {strategy_id} status in database: {e}")
+                            # Don't update Redis if database update failed
+                    else:
+                        # No database mode - save to Redis only
+                        self._save_to_redis(strategy_id, summary)
+                    failed_count += 1
+                    continue
+                
+                # Get account-specific client
+                account_id = getattr(summary, 'account_id', 'default') or 'default'
+                account_client = self._get_account_client(account_id)
+                if not account_client:
+                    logger.error(f"Cannot restore strategy {strategy_id}: Binance client not found for account '{account_id}'")
+                    summary.status = StrategyState.stopped
+                    # Update database FIRST (source of truth), then Redis
+                    if self.strategy_service and self.user_id:
+                        try:
+                            self.strategy_service.update_strategy(
+                                user_id=self.user_id,
+                                strategy_id=strategy_id,
+                                status=StrategyState.stopped.value
+                            )
+                            # Only save to Redis after database update succeeds
+                            self._save_to_redis(strategy_id, summary)
+                        except Exception as e:
+                            logger.error(f"Failed to update strategy {strategy_id} status in database: {e}")
+                            # Don't update Redis if database update failed
+                    else:
+                        # No database mode - save to Redis only
+                        self._save_to_redis(strategy_id, summary)
+                    failed_count += 1
+                    continue
+                
+                # Create account-specific risk manager and executor
+                account_risk = RiskManager(client=account_client)
+                account_executor = OrderExecutor(client=account_client)
+                
+                # For backward compatibility: if ema_crossover type, set default 5/20 EMA
+                params = summary.params.model_dump()
+                if summary.strategy_type == StrategyType.ema_crossover:
+                    if "ema_fast" not in params or params.get("ema_fast") == 8:
+                        params["ema_fast"] = 5
+                    if "ema_slow" not in params or params.get("ema_slow") == 21:
+                        params["ema_slow"] = 20
+                    # Also set default TP/SL if not specified
+                    if "take_profit_pct" not in params:
+                        params["take_profit_pct"] = 0.005  # 0.5%
+                    if "stop_loss_pct" not in params:
+                        params["stop_loss_pct"] = 0.003  # 0.3%
+                
+                context = StrategyContext(
+                    id=summary.id,
+                    name=summary.name,
+                    symbol=summary.symbol,
+                    leverage=summary.leverage,
+                    risk_per_trade=summary.risk_per_trade,
+                    params=params,
+                    interval_seconds=summary.params.interval_seconds,
+                    metadata={},
+                )
+                strategy = self.registry.build(summary.strategy_type, context, account_client)
+                task = asyncio.create_task(self._run_loop(strategy, summary, account_risk, account_executor))
+                self._tasks[strategy_id] = task
+                
+                # Status is already "running", ensure it's saved to database FIRST, then Redis
+                # Update database FIRST (source of truth), then Redis
+                if self.strategy_service and self.user_id:
+                    try:
+                        self.strategy_service.update_strategy(
+                            user_id=self.user_id,
+                            strategy_id=strategy_id,
+                            status=StrategyState.running.value
+                        )
+                        # Only save to Redis after database update succeeds
+                        self._save_to_redis(strategy_id, summary)
+                    except Exception as e:
+                        logger.error(f"Failed to update strategy {strategy_id} status in database: {e}")
+                        # Don't update Redis if database update failed - prevents inconsistency
+                else:
+                    # No database mode - save to Redis only (backward compatibility)
+                    self._save_to_redis(strategy_id, summary)
+                
+                account_name = self.client_manager.get_account_config(account_id)
+                account_display = account_name.name if account_name else account_id
+                logger.info(
+                    f"✅ Strategy RESTORED: {summary.id} ({summary.name}) | "
+                    f"Symbol: {summary.symbol} | Type: {summary.strategy_type.value} | "
+                    f"Leverage: {summary.leverage}x | Account: {account_id} ({account_display})"
+                )
+                restored_count += 1
+                
+            except Exception as exc:
+                logger.error(f"Failed to restore strategy {strategy_id}: {exc}", exc_info=True)
+                # Mark as stopped since restoration failed
+                summary.status = StrategyState.stopped
+                # Update database FIRST (source of truth), then Redis
+                if self.strategy_service and self.user_id:
+                    try:
+                        self.strategy_service.update_strategy(
+                            user_id=self.user_id,
+                            strategy_id=strategy_id,
+                            status=StrategyState.stopped.value
+                        )
+                        # Only save to Redis after database update succeeds
+                        self._save_to_redis(strategy_id, summary)
+                    except Exception as e:
+                        logger.error(f"Failed to update strategy {strategy_id} status in database: {e}")
+                        # Don't update Redis if database update failed
+                else:
+                    # No database mode - save to Redis only
+                    self._save_to_redis(strategy_id, summary)
+                failed_count += 1
+        
+        logger.info(
+            f"Strategy restoration complete: {restored_count} restored, {failed_count} failed. "
+            f"Total running strategies: {len(self._tasks)}"
+        )
     
     def _save_to_redis(self, strategy_id: str, summary: StrategySummary) -> None:
         """Save strategy to Redis."""

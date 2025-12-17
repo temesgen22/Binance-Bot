@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 import sys
+import time
 
 
 def _prefer_global_python_binance() -> None:
@@ -48,11 +49,21 @@ class BinanceClient:
             self._rest = None
         else:
             # python-binance uses testnet parameter
-            self._rest = Client(api_key=api_key, api_secret=api_secret, testnet=testnet)
+            self._rest = Client(
+                api_key=api_key, 
+                api_secret=api_secret, 
+                testnet=testnet,
+                requests_params={'timeout': 10}
+            )
+            # Sync time with Binance server on initialization
+            # This helps prevent -1021 timestamp errors
+            self._sync_time_with_binance()
         # Cache for symbol precision info
         self._precision_cache: Dict[str, int] = {}
         # Cache for minimum notional values
         self._min_notional_cache: Dict[str, float] = {}
+        # Time offset cache (difference between local time and Binance server time)
+        self._time_offset_ms: int = 0
 
     def _ensure(self):
         if self._rest is None:
@@ -62,6 +73,38 @@ class BinanceClient:
                 config_key="binance_client"
             )
         return self._rest
+    
+    def _sync_time_with_binance(self) -> None:
+        """Synchronize local time with Binance server time.
+        
+        This helps prevent -1021 timestamp errors by calculating the offset
+        between local time and Binance server time.
+        """
+        if self._rest is None:
+            return
+        
+        try:
+            # Get Binance server time
+            server_time = self._rest.get_server_time()
+            server_timestamp_ms = server_time.get('serverTime', 0)
+            
+            # Get local time in milliseconds
+            local_timestamp_ms = int(time.time() * 1000)
+            
+            # Calculate offset (positive means local time is ahead)
+            self._time_offset_ms = local_timestamp_ms - server_timestamp_ms
+            
+            if abs(self._time_offset_ms) > 1000:  # More than 1 second difference
+                logger.warning(
+                    f"Time synchronization issue detected: local time is "
+                    f"{self._time_offset_ms}ms {'ahead' if self._time_offset_ms > 0 else 'behind'} "
+                    f"Binance server time. Consider syncing your system clock."
+                )
+            else:
+                logger.debug(f"Time synchronized with Binance: offset={self._time_offset_ms}ms")
+        except Exception as exc:
+            logger.warning(f"Could not sync time with Binance server: {exc}. Continuing anyway.")
+            self._time_offset_ms = 0
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_current_leverage(self, symbol: str) -> int | None:
@@ -83,7 +126,27 @@ class BinanceClient:
             return None
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
-            if error_code == -1121:  # Invalid symbol
+            # Handle timestamp synchronization error (-1021)
+            if error_code == -1021:
+                logger.warning(
+                    f"Timestamp synchronization error for {symbol} leverage check: {exc}. "
+                    f"Attempting to resync time with Binance server."
+                )
+                # Resync time and retry once
+                self._sync_time_with_binance()
+                try:
+                    time.sleep(0.1)
+                    positions = rest.futures_position_information(symbol=symbol)
+                    if positions and len(positions) > 0:
+                        leverage = int(float(positions[0].get("leverage", "0")))
+                        return leverage if leverage > 0 else None
+                    return None
+                except Exception as retry_exc:
+                    logger.warning(
+                        f"Could not get current leverage for {symbol} after time sync retry: {retry_exc}"
+                    )
+                    return None
+            elif error_code == -1121:  # Invalid symbol
                 logger.warning(f"Invalid symbol for leverage check: {symbol}")
             else:
                 logger.warning(f"Could not get current leverage for {symbol}: {exc}")
@@ -896,6 +959,41 @@ class BinanceClient:
                         "leverage": int(pos.get("leverage", 1)),
                     }
             return None
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            # Handle timestamp synchronization error (-1021)
+            if error_code == -1021:
+                logger.warning(
+                    f"Timestamp synchronization error for {symbol}: {exc}. "
+                    f"Attempting to resync time with Binance server."
+                )
+                # Resync time and retry once
+                self._sync_time_with_binance()
+                try:
+                    # Small delay to allow time sync to take effect
+                    time.sleep(0.1)
+                    positions = rest.futures_position_information(symbol=symbol)
+                    for pos in positions:
+                        position_amt = float(pos.get("positionAmt", 0))
+                        if abs(position_amt) > 0:
+                            return {
+                                "symbol": pos.get("symbol"),
+                                "positionAmt": position_amt,
+                                "entryPrice": float(pos.get("entryPrice", 0)),
+                                "markPrice": float(pos.get("markPrice", 0)),
+                                "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
+                                "leverage": int(pos.get("leverage", 1)),
+                            }
+                    return None
+                except Exception as retry_exc:
+                    logger.error(
+                        f"Error getting position for {symbol} after time sync retry: {retry_exc}. "
+                        f"Please check your system clock synchronization."
+                    )
+                    return None
+            else:
+                logger.error(f"Error getting position for {symbol}: {exc}")
+                return None
         except Exception as exc:
             logger.error(f"Error getting position for {symbol}: {exc}")
             return None

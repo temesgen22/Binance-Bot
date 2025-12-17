@@ -12,22 +12,20 @@ from sqlalchemy.orm import Session
 from loguru import logger
 
 from app.core.redis_storage import RedisStorage
-from app.services.database_service import DatabaseService
+from app.services.base_cache_service import BaseCacheService
 from app.models.db_models import Account as DBAccount
 from app.core.config import BinanceAccountConfig
 
 
-class AccountService:
+class AccountService(BaseCacheService):
     """Service for managing accounts with database + Redis cache-aside pattern."""
     
     def __init__(self, db: Session, redis_storage: Optional[RedisStorage] = None):
-        self.db_service = DatabaseService(db)
-        self.redis = redis_storage
-        self._cache_ttl = 3600  # 1 hour cache TTL
+        super().__init__(db, redis_storage, cache_ttl=3600)
     
     def _redis_key(self, user_id: UUID, account_id: str) -> str:
         """Generate Redis key for account with user_id."""
-        return f"binance_bot:user:{user_id}:account:{account_id}"
+        return super()._redis_key(user_id, account_id, "account")
     
     def _redis_list_key(self, user_id: UUID) -> str:
         """Generate Redis key for user's account list."""
@@ -77,22 +75,18 @@ class AccountService:
         Returns:
             BinanceAccountConfig if found, None otherwise
         """
+        key = self._redis_key(user_id, account_id)
+        
         # Try Redis first
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, account_id)
-                cached = self.redis._client.get(key) if self.redis._client else None
-                if cached:
-                    data = json.loads(cached)
-                    logger.debug(f"Cache HIT for account {account_id}")
-                    # Note: Don't cache decrypted keys in Redis for security
-                    # Only cache metadata, fetch from DB for actual keys
-                    if decrypt_func and "api_key" in data:
-                        # If we have decrypted keys in cache, use them (not recommended for production)
-                        return BinanceAccountConfig(**data)
-                    # Otherwise, fall through to database
-            except Exception as e:
-                logger.warning(f"Redis cache read error for account {account_id}: {e}")
+        cached_data = self._get_from_cache(key)
+        if cached_data:
+            logger.debug(f"Cache HIT for account {account_id}")
+            # Note: Don't cache decrypted keys in Redis for security
+            # Only cache metadata, fetch from DB for actual keys
+            if decrypt_func and "api_key" in cached_data:
+                # If we have decrypted keys in cache, use them (not recommended for production)
+                return BinanceAccountConfig(**cached_data)
+            # Otherwise, fall through to database
         
         # Cache miss - check database
         logger.debug(f"Cache MISS for account {account_id}, checking database")
@@ -106,25 +100,15 @@ class AccountService:
         config = self._db_account_to_config(db_account, decrypt_func)
         
         # Cache metadata in Redis (but NOT decrypted keys for security)
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, account_id)
-                # Only cache non-sensitive metadata
-                metadata = {
-                    "account_id": config.account_id,
-                    "name": config.name,
-                    "testnet": config.testnet,
-                    "is_active": db_account.is_active,
-                    "is_default": db_account.is_default,
-                }
-                if self.redis._client:
-                    self.redis._client.setex(
-                        key,
-                        self._cache_ttl,
-                        json.dumps(metadata)
-                    )
-            except Exception as e:
-                logger.warning(f"Redis cache write error for account {account_id}: {e}")
+        # Only cache non-sensitive metadata
+        metadata = {
+            "account_id": config.account_id,
+            "name": config.name,
+            "testnet": config.testnet,
+            "is_active": db_account.is_active,
+            "is_default": db_account.is_default,
+        }
+        self._save_to_cache(key, metadata)
         
         return config
     
@@ -198,14 +182,9 @@ class AccountService:
         config = self._db_account_to_config(db_account, decrypt_func=None)
         
         # Invalidate cache
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, account_id)
-                list_key = self._redis_list_key(user_id)
-                if self.redis._client:
-                    self.redis._client.delete(key, list_key)
-            except Exception as e:
-                logger.warning(f"Redis cache delete error for account {account_id}: {e}")
+        key = self._redis_key(user_id, account_id)
+        list_key = self._redis_list_key(user_id)
+        self._invalidate_cache(key, list_key)
         
         return config
     
@@ -226,14 +205,9 @@ class AccountService:
         config = self._db_account_to_config(db_account)
         
         # Invalidate cache
-        if self.redis and self.redis.enabled:
-            try:
-                key = self._redis_key(user_id, account_id)
-                list_key = self._redis_list_key(user_id)
-                if self.redis._client:
-                    self.redis._client.delete(key, list_key)
-            except Exception as e:
-                logger.warning(f"Redis cache delete error for account {account_id}: {e}")
+        key = self._redis_key(user_id, account_id)
+        list_key = self._redis_list_key(user_id)
+        self._invalidate_cache(key, list_key)
         
         return config
     
@@ -244,14 +218,9 @@ class AccountService:
         
         if success:
             # Delete from cache
-            if self.redis and self.redis.enabled:
-                try:
-                    key = self._redis_key(user_id, account_id)
-                    list_key = self._redis_list_key(user_id)
-                    if self.redis._client:
-                        self.redis._client.delete(key, list_key)
-                except Exception as e:
-                    logger.warning(f"Redis cache delete error for account {account_id}: {e}")
+            key = self._redis_key(user_id, account_id)
+            list_key = self._redis_list_key(user_id)
+            self._invalidate_cache(key, list_key)
         
         return success
 

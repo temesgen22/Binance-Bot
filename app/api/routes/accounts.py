@@ -8,11 +8,9 @@ from pydantic import BaseModel, Field
 
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import BinanceAccountConfig
-from app.api.deps import get_current_user, get_db_session_dependency, get_client_manager
+from app.api.deps import get_current_user, get_db_session_dependency, get_client_manager, get_account_service
 from app.models.db_models import User
 from app.services.account_service import AccountService
-from app.core.redis_storage import RedisStorage
-from app.core.config import get_settings
 from sqlalchemy.orm import Session
 from loguru import logger
 
@@ -88,19 +86,10 @@ def get_client_manager(request: Request) -> BinanceClientManager:
 @router.get("/debug")
 def debug_accounts(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ) -> Dict:
     """Debug endpoint to check account loading status."""
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         db_accounts = account_service.db_service.get_user_accounts(current_user.id)
         
         return {
@@ -123,7 +112,7 @@ def debug_accounts(
 @router.get("/list", response_model=List[AccountResponse])
 def list_accounts(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency),
+    account_service: AccountService = Depends(get_account_service),
     include_env: bool = False
 ) -> List[AccountResponse]:
     """List all Binance accounts for the current user.
@@ -135,15 +124,6 @@ def list_accounts(
     
     # Get accounts from database (multi-user mode)
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         db_accounts = account_service.db_service.get_user_accounts(current_user.id)
         
         for acc in db_accounts:
@@ -164,19 +144,10 @@ def list_accounts(
 def create_account(
     request: CreateAccountRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ) -> AccountResponse:
     """Create a new Binance account for the current user."""
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         
         # Check if account_id already exists for this user
         existing = account_service.db_service.get_account_by_id(current_user.id, request.account_id)
@@ -223,19 +194,10 @@ def create_account(
 def get_account(
     account_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ) -> AccountResponse:
     """Get a specific account by ID."""
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         db_account = account_service.db_service.get_account_by_id(current_user.id, account_id)
         
         if not db_account:
@@ -261,19 +223,10 @@ def update_account(
     account_id: str,
     request: UpdateAccountRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ) -> AccountResponse:
     """Update an account."""
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         
         # Build update dict
         updates = {}
@@ -319,19 +272,10 @@ def update_account(
 def delete_account(
     account_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency)
+    account_service: AccountService = Depends(get_account_service)
 ):
     """Delete (deactivate) an account."""
     try:
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        account_service = AccountService(db, redis_storage)
         success = account_service.delete_account(current_user.id, account_id)
         
         if not success:

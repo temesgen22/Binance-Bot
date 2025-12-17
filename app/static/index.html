@@ -5,134 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Binance Bot - Log Viewer</title>
     <script src="/static/auth.js"></script>
+    <script src="/static/common.js"></script>
+    <link rel="stylesheet" href="/static/common.css">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
+        /* Page-specific styles - common styles are in common.css */
         .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            opacity: 0.9;
-            font-size: 1.1em;
-        }
-
-        .filters {
-            padding: 25px;
-            background: #f8f9fa;
-            border-bottom: 2px solid #e9ecef;
-        }
-
-        .filters h2 {
-            margin-bottom: 20px;
-            color: #333;
-            font-size: 1.5em;
-        }
-
-        .filter-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .filter-group {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .filter-group label {
-            margin-bottom: 5px;
-            font-weight: 600;
-            color: #555;
-            font-size: 0.9em;
-        }
-
-        .filter-group input,
-        .filter-group select {
-            padding: 10px;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            font-size: 1em;
-            transition: border-color 0.3s;
-        }
-
-        .filter-group input:focus,
-        .filter-group select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .filter-actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 6px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
-
-        .btn-success {
-            background: #28a745;
-            color: white;
-        }
-
-        .btn-success:hover {
-            background: #218838;
+            max-width: 1400px; /* Override common.css for this page */
         }
 
         .stats-bar {
@@ -156,19 +34,7 @@
         }
 
         .loading {
-            text-align: center;
-            padding: 40px;
-            color: #667eea;
-            font-size: 1.2em;
-        }
-
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 15px;
-            margin: 20px;
-            border-radius: 6px;
-            border: 1px solid #f5c6cb;
+            color: #667eea; /* Override common.css color for this page */
         }
 
         .logs-container {
@@ -330,18 +196,18 @@
         <div class="header">
             <h1>🤖 Binance Bot Log Viewer</h1>
             <p>Real-time log monitoring and filtering</p>
-            <div class="nav-links" style="margin-top: 15px;">
-                <a href="/trades" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📊 Trade & PnL Viewer</a>
-                <a href="/strategies" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🏆 Strategy Performance</a>
-                <a href="/market-analyzer" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📈 Market Analyzer</a>
-                <a href="/backtesting" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🔬 Strategy Backtesting</a>
-                <a href="/reports" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📊 Trading Reports</a>
-                <a href="/test-accounts/" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🔐 Test Accounts</a>
-                <a href="/strategy-register" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">🚀 Register Strategy</a>
-                <a href="/docs" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">📖 API Docs</a>
-                <a href="/static/settings.html" style="color: white; text-decoration: none; margin: 0 15px; opacity: 0.9; transition: opacity 0.3s;">⚙️ Settings</a>
-                <span id="user-info" style="margin-left: 20px; color: white;"></span>
-                <a href="#" onclick="logout(); return false;" style="margin-left: 10px; color: white; text-decoration: none;">🚪 Logout</a>
+            <div class="nav-links">
+                <a href="/trades">📊 Trade & PnL Viewer</a>
+                <a href="/strategies">🏆 Strategy Performance</a>
+                <a href="/market-analyzer">📈 Market Analyzer</a>
+                <a href="/backtesting">🔬 Strategy Backtesting</a>
+                <a href="/reports">📊 Trading Reports</a>
+                <a href="/test-accounts/">🔐 Test Accounts</a>
+                <a href="/strategy-register">🚀 Register Strategy</a>
+                <a href="/docs">📖 API Docs</a>
+                <a href="/static/settings.html">⚙️ Settings</a>
+                <span id="user-info"></span>
+                <a href="#" onclick="logout(); return false;" class="logout-link">🚪 Logout</a>
             </div>
         </div>
 
@@ -651,24 +517,8 @@
             document.getElementById('dateFrom').value = formatDateTimeLocal(weekAgo);
         }
 
-        // Load user info
-        async function loadUserInfo() {
-            try {
-                const user = await AuthAPI.getCurrentUser();
-                const userInfo = document.getElementById('user-info');
-                if (userInfo) {
-                    userInfo.textContent = `👤 ${user.username}`;
-                }
-            } catch (e) {
-                console.error('Failed to load user info:', e);
-            }
-        }
-
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', async () => {
-            if (Auth.isAuthenticated()) {
-                await loadUserInfo();
-            }
             setDefaultDates();
             loadSymbols();
             loadLogs();
