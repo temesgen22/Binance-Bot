@@ -130,12 +130,16 @@ class BinanceClient:
             if error_code == -1021:
                 logger.warning(
                     f"Timestamp synchronization error for {symbol} leverage check: {exc}. "
-                    f"Attempting to resync time with Binance server."
+                    f"Your system clock is ahead of Binance server time. Waiting and retrying..."
                 )
-                # Resync time and retry once
+                # Resync time to get current offset
                 self._sync_time_with_binance()
+                
+                # Wait for clock to catch up
+                wait_time = max(1.5, (abs(self._time_offset_ms) / 1000.0) + 0.5)
+                time.sleep(wait_time)
+                
                 try:
-                    time.sleep(0.1)
                     positions = rest.futures_position_information(symbol=symbol)
                     if positions and len(positions) > 0:
                         leverage = int(float(positions[0].get("leverage", "0")))
@@ -965,17 +969,25 @@ class BinanceClient:
             if error_code == -1021:
                 logger.warning(
                     f"Timestamp synchronization error for {symbol}: {exc}. "
-                    f"Attempting to resync time with Binance server."
+                    f"Your system clock is ahead of Binance server time. "
+                    f"Attempting to wait and retry..."
                 )
-                # Resync time and retry once
+                # Resync time to get current offset
                 self._sync_time_with_binance()
+                
+                # If local time is ahead, wait for it to catch up
+                # Wait slightly longer than the offset to ensure we're within tolerance
+                wait_time = max(1.5, (abs(self._time_offset_ms) / 1000.0) + 0.5)
+                logger.info(f"Waiting {wait_time:.1f} seconds for clock synchronization...")
+                time.sleep(wait_time)
+                
                 try:
-                    # Small delay to allow time sync to take effect
-                    time.sleep(0.1)
+                    # Retry after waiting
                     positions = rest.futures_position_information(symbol=symbol)
                     for pos in positions:
                         position_amt = float(pos.get("positionAmt", 0))
                         if abs(position_amt) > 0:
+                            logger.info(f"Successfully retrieved position for {symbol} after time sync wait")
                             return {
                                 "symbol": pos.get("symbol"),
                                 "positionAmt": position_amt,
@@ -986,10 +998,19 @@ class BinanceClient:
                             }
                     return None
                 except Exception as retry_exc:
-                    logger.error(
-                        f"Error getting position for {symbol} after time sync retry: {retry_exc}. "
-                        f"Please check your system clock synchronization."
-                    )
+                    error_code_retry = getattr(retry_exc, 'code', None)
+                    if error_code_retry == -1021:
+                        logger.error(
+                            f"Timestamp error persists for {symbol} after wait. "
+                            f"Your system clock is {self._time_offset_ms}ms ahead of Binance. "
+                            f"Please sync your system clock:\n"
+                            f"  Windows: Settings > Time & Language > Date & Time > 'Set time automatically'\n"
+                            f"  Or run: w32tm /resync (as Administrator)"
+                        )
+                    else:
+                        logger.error(
+                            f"Error getting position for {symbol} after time sync retry: {retry_exc}"
+                        )
                     return None
             else:
                 logger.error(f"Error getting position for {symbol}: {exc}")
