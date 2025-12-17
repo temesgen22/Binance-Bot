@@ -79,6 +79,10 @@ class BinanceClient:
         
         This helps prevent -1021 timestamp errors by calculating the offset
         between local time and Binance server time.
+        
+        Note: This only calculates the offset - it does NOT adjust your system clock.
+        The python-binance library uses your system clock directly, so if your clock
+        is out of sync, you must sync it at the OS level.
         """
         if self._rest is None:
             return
@@ -95,16 +99,33 @@ class BinanceClient:
             self._time_offset_ms = local_timestamp_ms - server_timestamp_ms
             
             if abs(self._time_offset_ms) > 1000:  # More than 1 second difference
+                logger.error(
+                    f"⚠️  CRITICAL: System clock is {abs(self._time_offset_ms)}ms "
+                    f"{'AHEAD' if self._time_offset_ms > 0 else 'BEHIND'} Binance server time!\n"
+                    f"   This will cause API requests to fail with error -1021.\n"
+                    f"   Your system clock MUST be synced for Binance API to work.\n"
+                    f"   Windows: Settings > Time & Language > Date & Time > 'Set time automatically'\n"
+                    f"   Or run as Admin: w32tm /resync"
+                )
+            elif abs(self._time_offset_ms) > 500:  # More than 500ms difference
                 logger.warning(
-                    f"Time synchronization issue detected: local time is "
-                    f"{self._time_offset_ms}ms {'ahead' if self._time_offset_ms > 0 else 'behind'} "
-                    f"Binance server time. Consider syncing your system clock."
+                    f"Time offset detected: {self._time_offset_ms}ms "
+                    f"{'ahead' if self._time_offset_ms > 0 else 'behind'} Binance server time. "
+                    f"Consider syncing your system clock to prevent future errors."
                 )
             else:
                 logger.debug(f"Time synchronized with Binance: offset={self._time_offset_ms}ms")
         except Exception as exc:
             logger.warning(f"Could not sync time with Binance server: {exc}. Continuing anyway.")
             self._time_offset_ms = 0
+    
+    def get_time_offset(self) -> int:
+        """Get the current time offset between local system and Binance server.
+        
+        Returns:
+            Offset in milliseconds (positive = local time ahead, negative = local time behind)
+        """
+        return self._time_offset_ms
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_current_leverage(self, symbol: str) -> int | None:
