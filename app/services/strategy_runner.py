@@ -428,6 +428,9 @@ class StrategyRunner:
             else:
                 raise StrategyNotFoundError(strategy_id)
         
+        # Get the strategy summary (must be done early as it's used in checks below)
+        summary = self._strategies[strategy_id]
+        
         # Clean up any dead/completed tasks before checking limit
         # This prevents dead tasks from counting toward concurrent limit
         self._cleanup_dead_tasks()
@@ -451,8 +454,6 @@ class StrategyRunner:
         # Also check if status says running but no task exists (restore scenario)
         if summary.status == StrategyState.running and strategy_id not in self._tasks:
             logger.info(f"Strategy {strategy_id} has status 'running' but no active task, will start it now")
-
-        summary = self._strategies[strategy_id]
         
         # Get account-specific client, risk manager, and executor
         account_id = getattr(summary, 'account_id', 'default') or 'default'
