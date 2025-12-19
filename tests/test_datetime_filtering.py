@@ -268,7 +268,8 @@ class TestTradesDatetimeFiltering:
         """Test that trades API accepts datetime parameters."""
         from uuid import uuid4
         from app.models.db_models import User
-        from app.api.deps import get_current_user
+        from app.api.deps import get_current_user, get_db_session_dependency
+        from unittest.mock import MagicMock
         
         # Create a mock user for authentication
         mock_user = User(
@@ -279,8 +280,12 @@ class TestTradesDatetimeFiltering:
             is_active=True
         )
         
-        # Override the get_current_user dependency to return mock user
+        # Create a mock database session
+        mock_db_session = MagicMock()
+        
+        # Override dependencies
         client.app.dependency_overrides[get_current_user] = lambda: mock_user
+        client.app.dependency_overrides[get_db_session_dependency] = lambda: mock_db_session
         
         try:
             # Set up app state with mock runner
@@ -300,8 +305,9 @@ class TestTradesDatetimeFiltering:
                 data = response.json()
                 assert isinstance(data, list)
         finally:
-            # Clean up dependency override
+            # Clean up dependency overrides
             client.app.dependency_overrides.pop(get_current_user, None)
+            client.app.dependency_overrides.pop(get_db_session_dependency, None)
     
     def test_trades_api_datetime_filtering_logic(self):
         """Test the datetime filtering logic in trades API."""
@@ -345,23 +351,36 @@ class TestStrategiesDatetimeFiltering:
     
     def test_strategies_api_accepts_datetime_params(self, client, mock_runner):
         """Test that strategies performance API accepts datetime parameters."""
-        # Set up app state with mock runner
-        client.app.state.strategy_runner = mock_runner
+        from app.api.deps import get_db_session_dependency
+        from unittest.mock import MagicMock
         
-        # Test with ISO datetime format
-        response = client.get(
-            "/strategies/performance/?"
-            "start_date=2025-11-28T10:00:00Z&"
-            "end_date=2025-11-28T12:00:00Z"
-        )
+        # Create a mock database session
+        mock_db_session = MagicMock()
         
-        # Should accept the parameters (even if filtering isn't implemented yet)
-        assert response.status_code in [200, 422]  # 422 if datetime parsing fails
+        # Override database dependency
+        client.app.dependency_overrides[get_db_session_dependency] = lambda: mock_db_session
         
-        if response.status_code == 200:
-            data = response.json()
-            # Should return a valid response structure
-            assert isinstance(data, dict)
+        try:
+            # Set up app state with mock runner
+            client.app.state.strategy_runner = mock_runner
+            
+            # Test with ISO datetime format
+            response = client.get(
+                "/strategies/performance/?"
+                "start_date=2025-11-28T10:00:00Z&"
+                "end_date=2025-11-28T12:00:00Z"
+            )
+            
+            # Should accept the parameters (even if filtering isn't implemented yet)
+            assert response.status_code in [200, 422]  # 422 if datetime parsing fails
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Should return a valid response structure
+                assert isinstance(data, dict)
+        finally:
+            # Clean up dependency override
+            client.app.dependency_overrides.pop(get_db_session_dependency, None)
 
 
 class TestDatetimeParsingEdgeCases:

@@ -95,16 +95,36 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
 
 
 def get_engine() -> Engine:
-    """Get database engine. Initializes if not already initialized."""
+    """Get database engine. Initializes if not already initialized.
+    
+    Raises:
+        RuntimeError: If database initialization failed
+    """
     if _engine is None:
-        init_database()
+        success, error = init_database()
+        if not success:
+            raise RuntimeError(
+                f"Database is not available. Initialization failed: {error}"
+            ) from error
+    if _engine is None:
+        raise RuntimeError("Database engine is not initialized")
     return _engine
 
 
 def get_session_factory() -> sessionmaker[Session]:
-    """Get session factory. Initializes database if not already initialized."""
+    """Get session factory. Initializes database if not already initialized.
+    
+    Raises:
+        RuntimeError: If database initialization failed
+    """
     if _SessionLocal is None:
-        init_database()
+        success, error = init_database()
+        if not success:
+            raise RuntimeError(
+                f"Database is not available. Initialization failed: {error}"
+            ) from error
+    if _SessionLocal is None:
+        raise RuntimeError("Database session factory is not initialized")
     return _SessionLocal
 
 
