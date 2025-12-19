@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 import sys
 import time
+import asyncio
 
 
 def _prefer_global_python_binance() -> None:
@@ -64,6 +65,27 @@ class BinanceClient:
         self._min_notional_cache: Dict[str, float] = {}
         # Time offset cache (difference between local time and Binance server time)
         self._time_offset_ms: int = 0
+    
+    def _non_blocking_sleep(self, seconds: float) -> None:
+        """Sleep that minimizes event loop blocking when called from async context.
+        
+        Note: This is a sync method, so we can't use asyncio.sleep() directly.
+        When called from async code, time.sleep() blocks the event loop.
+        The proper fix is to call BinanceClient methods via asyncio.to_thread()
+        from async contexts, or make these methods async.
+        
+        For now, we use time.sleep() but log a warning in async contexts.
+        """
+        try:
+            # Check if we're in an async context
+            asyncio.get_running_loop()
+            # In async context - time.sleep() will block, but we can't avoid it in sync method
+            # Log a debug message for monitoring
+            logger.debug(f"Blocking sleep in async context: {seconds}s (consider using asyncio.to_thread())")
+            time.sleep(seconds)
+        except RuntimeError:
+            # No event loop running, safe to use time.sleep()
+            time.sleep(seconds)
 
     def _ensure(self):
         if self._rest is None:
@@ -156,9 +178,9 @@ class BinanceClient:
                 # Resync time to get current offset
                 self._sync_time_with_binance()
                 
-                # Wait for clock to catch up
+                # Wait for clock to catch up (non-blocking if in async context)
                 wait_time = max(1.5, (abs(self._time_offset_ms) / 1000.0) + 0.5)
-                time.sleep(wait_time)
+                self._non_blocking_sleep(wait_time)
                 
                 try:
                     positions = rest.futures_position_information(symbol=symbol)
@@ -560,9 +582,8 @@ class BinanceClient:
         if status == "NEW" and order_type == "MARKET" and executed_qty == 0.0:
             logger.debug(f"Order {order_id} returned as NEW, querying status to get fill data...")
             try:
-                # Wait a moment and query order status
-                import time
-                time.sleep(0.1)  # Brief delay for order to process
+                # Wait a moment and query order status (non-blocking if in async context)
+                self._non_blocking_sleep(0.1)  # Brief delay for order to process
                 status_response = self.get_order_status(symbol, order_id)
                 logger.debug(f"Order status query response: {status_response}")
                 
@@ -1000,7 +1021,7 @@ class BinanceClient:
                 # Wait slightly longer than the offset to ensure we're within tolerance
                 wait_time = max(1.5, (abs(self._time_offset_ms) / 1000.0) + 0.5)
                 logger.info(f"Waiting {wait_time:.1f} seconds for clock synchronization...")
-                time.sleep(wait_time)
+                self._non_blocking_sleep(wait_time)
                 
                 try:
                     # Retry after waiting

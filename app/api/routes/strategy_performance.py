@@ -85,6 +85,8 @@ def get_strategy_performance(
                 fixed_amount=strategy.fixed_amount,
                 params=strategy.params.model_dump() if hasattr(strategy.params, 'model_dump') else strategy.params,
                 created_at=strategy.created_at,
+                started_at=strategy.started_at,
+                stopped_at=strategy.stopped_at,
                 last_trade_at=stats.last_trade_at,
                 last_signal=strategy.last_signal,
             )
@@ -206,6 +208,8 @@ def get_strategy_performance_detail(
         fixed_amount=strategy.fixed_amount,
         params=strategy.params.model_dump() if hasattr(strategy.params, 'model_dump') else strategy.params,
         created_at=strategy.created_at,
+        started_at=strategy.started_at,
+        stopped_at=strategy.stopped_at,
         last_trade_at=stats.last_trade_at,
         last_signal=strategy.last_signal,
     )

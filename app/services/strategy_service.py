@@ -52,6 +52,8 @@ class StrategyService(BaseCacheService):
             "position_size": float(summary.position_size) if summary.position_size else None,
             "position_side": summary.position_side,
             "unrealized_pnl": float(summary.unrealized_pnl) if summary.unrealized_pnl else None,
+            "started_at": summary.started_at.isoformat() if summary.started_at else None,
+            "stopped_at": summary.stopped_at.isoformat() if summary.stopped_at else None,
             "meta": summary.meta or {},
         }
     
@@ -84,6 +86,8 @@ class StrategyService(BaseCacheService):
             position_size=data.get("position_size"),
             position_side=data.get("position_side"),
             unrealized_pnl=data.get("unrealized_pnl"),
+            started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
+            stopped_at=datetime.fromisoformat(data["stopped_at"]) if data.get("stopped_at") else None,
             meta=data.get("meta", {}),
         )
     
@@ -131,6 +135,8 @@ class StrategyService(BaseCacheService):
             position_size=float(db_strategy.position_size) if db_strategy.position_size else None,
             position_side=db_strategy.position_side,
             unrealized_pnl=float(db_strategy.unrealized_pnl) if db_strategy.unrealized_pnl else None,
+            started_at=db_strategy.started_at,
+            stopped_at=db_strategy.stopped_at,
             meta=db_strategy.meta or {},
         )
     

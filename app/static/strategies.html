@@ -6,6 +6,8 @@
     <title>Binance Bot - Strategy Performance</title>
     <link rel="stylesheet" href="/static/common.css">
     <script src="/static/common.js"></script>
+    <script src="/static/settings.js"></script>
+    <script src="/static/utils.js"></script>
     <style>
         /* Page-specific styles - common styles are in common.css */
         .container {
@@ -628,6 +630,7 @@
 
     <script src="/static/auth.js"></script>
     <script src="/static/settings.js"></script>
+    <script src="/static/utils.js"></script>
     <script>
         // Check authentication IMMEDIATELY - before any other code runs
         (function() {
@@ -889,6 +892,12 @@
             // Timestamps
             html += '<div class="detail-section"><h4>Timestamps</h4>';
             html += `<div class="detail-item"><label>Created:</label><value>${formatDateTime(strategy.created_at)}</value></div>`;
+            if (strategy.started_at) {
+                html += `<div class="detail-item"><label>Started:</label><value>${formatDateTime(strategy.started_at)}</value></div>`;
+            }
+            if (strategy.stopped_at) {
+                html += `<div class="detail-item"><label>Stopped:</label><value>${formatDateTime(strategy.stopped_at)}</value></div>`;
+            }
             if (strategy.last_trade_at) {
                 html += `<div class="detail-item"><label>Last Trade:</label><value>${formatDateTime(strategy.last_trade_at)}</value></div>`;
             }
@@ -934,36 +943,7 @@
             }
         }
 
-        function formatCurrency(value) {
-            const sign = value >= 0 ? '+' : '';
-            return sign + '$' + value.toFixed(2);
-        }
-
-        function formatDateTime(dateString) {
-            // Use UserSettings if available, otherwise fallback to UTC format
-            if (typeof UserSettings !== 'undefined') {
-                return UserSettings.formatDate(dateString);
-            }
-            // Fallback for when settings.js is not loaded
-            if (!dateString) return 'N/A';
-            try {
-                const date = new Date(dateString);
-                if (isNaN(date.getTime())) {
-                    console.warn('Invalid date string:', dateString);
-                    return 'Invalid Date';
-                }
-                const year = date.getUTCFullYear();
-                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-                const day = String(date.getUTCDate()).padStart(2, '0');
-                const hours = String(date.getUTCHours()).padStart(2, '0');
-                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-                const seconds = String(date.getUTCSeconds()).padStart(2, '0');
-                return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
-            } catch (e) {
-                console.warn('Error formatting date:', dateString, e);
-                return 'Invalid Date';
-            }
-        }
+        // formatCurrency and formatDateTime are now in utils.js
 
         async function toggleStrategy(strategyId, isCurrentlyRunning) {
             const button = document.getElementById(`action-btn-${strategyId}`);

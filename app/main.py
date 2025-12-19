@@ -163,9 +163,32 @@ def create_app() -> FastAPI:
         The cleanup code in the finally block will still execute.
         """
         # Startup
+        startup_errors = []
+        restored_strategies_count = 0
+        db_connection_error = None
+        
         try:
             # Initialize database connection pool
-            init_database()
+            db_init_success, db_connection_error = init_database()
+            if not db_init_success:
+                startup_errors.append("Database connection failed - server operating in degraded mode")
+                # Send database connection failure notification
+                if notification_service and db_connection_error:
+                    try:
+                        await notification_service.notify_database_connection_failed(
+                            db_connection_error,
+                            retry_count=3,  # We tried 3 times
+                            max_retries=3
+                        )
+                    except Exception as notify_exc:
+                        logger.warning(f"Failed to send database failure notification: {notify_exc}")
+            else:
+                # Database connected successfully - if we had a previous error, notify restoration
+                if db_connection_error and notification_service:
+                    try:
+                        await notification_service.notify_database_connection_restored()
+                    except Exception as notify_exc:
+                        logger.warning(f"Failed to send database restored notification: {notify_exc}")
             
             app.state.binance_client = default_client  # For backward compatibility
             app.state.binance_client_manager = client_manager
@@ -175,14 +198,34 @@ def create_app() -> FastAPI:
             # Restore running strategies after server restart
             # This ensures strategies that were running before restart are automatically started
             try:
-                await runner.restore_running_strategies()
+                restored_strategies = await runner.restore_running_strategies()
+                if restored_strategies:
+                    restored_strategies_count = len(restored_strategies)
+                    logger.info(f"Restored {restored_strategies_count} running strategies after restart")
             except Exception as exc:
+                error_msg = f"Failed to restore running strategies: {str(exc)[:200]}"
+                startup_errors.append(error_msg)
                 logger.error(f"Failed to restore running strategies on startup: {exc}", exc_info=True)
             
             # Start Telegram command handler if enabled
             if telegram_command_handler:
-                telegram_command_handler.start()
-                logger.info("Telegram command handler started")
+                try:
+                    telegram_command_handler.start()
+                    logger.info("Telegram command handler started")
+                except Exception as exc:
+                    error_msg = f"Failed to start Telegram command handler: {str(exc)[:200]}"
+                    startup_errors.append(error_msg)
+                    logger.error(f"Failed to start Telegram command handler: {exc}", exc_info=True)
+            
+            # Send server restart notification
+            if notification_service:
+                try:
+                    await notification_service.notify_server_restart(
+                        restored_strategies_count=restored_strategies_count,
+                        startup_errors=startup_errors if startup_errors else None,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to send server restart notification: {exc}")
             
             yield
         except asyncio.CancelledError:

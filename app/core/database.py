@@ -4,7 +4,7 @@ Database connection and session management for PostgreSQL.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator, Generator, Optional
 
 from sqlalchemy import create_engine, event, pool
 from sqlalchemy.engine import Engine
@@ -25,37 +25,73 @@ def get_database_url() -> str:
     return settings.database_url
 
 
-def init_database() -> None:
-    """Initialize database connection pool."""
+def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
+    """Initialize database connection pool.
+    
+    Args:
+        max_retries: Maximum number of connection retry attempts
+        
+    Returns:
+        Tuple of (success: bool, error: Optional[Exception])
+        - success: True if initialization succeeded, False otherwise
+        - error: The exception that occurred if initialization failed, None otherwise
+    """
     global _engine, _SessionLocal
     
     if _engine is not None:
         logger.warning("Database already initialized")
-        return
+        return True, None
     
     settings = get_settings()
     database_url = settings.database_url
     
     logger.info(f"Initializing database connection: {database_url.split('@')[-1] if '@' in database_url else '***'}")
     
-    # Create engine with connection pooling
-    _engine = create_engine(
-        database_url,
-        echo=settings.database_echo,
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
-        pool_pre_ping=True,  # Verify connections before using
-        pool_recycle=3600,  # Recycle connections after 1 hour
-    )
+    last_error = None
     
-    # Create session factory
-    _SessionLocal = sessionmaker(
-        autocommit=False,
-        autoflush=False,
-        bind=_engine
-    )
+    # Retry connection attempts
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Create engine with connection pooling
+            _engine = create_engine(
+                database_url,
+                echo=settings.database_echo,
+                pool_size=settings.database_pool_size,
+                max_overflow=settings.database_max_overflow,
+                pool_pre_ping=True,  # Verify connections before using
+                pool_recycle=3600,  # Recycle connections after 1 hour
+            )
+            
+            # Test connection by creating a session
+            test_session = _engine.connect()
+            test_session.close()
+            
+            # Create session factory
+            _SessionLocal = sessionmaker(
+                autocommit=False,
+                autoflush=False,
+                bind=_engine
+            )
+            
+            logger.info("Database connection pool initialized successfully")
+            
+            # Return success (and error if we had retries)
+            return True, last_error if attempt > 1 else None
+            
+        except Exception as e:
+            last_error = e
+            logger.error(f"Database connection attempt {attempt}/{max_retries} failed: {e}")
+            
+            # Wait before retry (exponential backoff)
+            if attempt < max_retries:
+                import time
+                wait_time = min(2 ** attempt, 10)  # Max 10 seconds
+                logger.info(f"Retrying database connection in {wait_time} seconds...")
+                time.sleep(wait_time)
     
-    logger.info("Database connection pool initialized")
+    # All retries failed
+    logger.error(f"Failed to initialize database after {max_retries} attempts")
+    return False, last_error
 
 
 def get_engine() -> Engine:

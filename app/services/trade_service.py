@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -230,4 +230,47 @@ class TradeService:
     ) -> List[OrderResponse]:
         """Get trades for a specific strategy."""
         return self.get_recent_trades(user_id, strategy_id, limit)
+    
+    def get_trades_batch(
+        self,
+        user_id: UUID,
+        strategy_ids: List[UUID],
+        limit_per_strategy: int = 1000
+    ) -> Dict[UUID, List[OrderResponse]]:
+        """Get trades for multiple strategies in a single batch query.
+        
+        This method optimizes the N+1 query problem by fetching trades
+        for all strategies in a single database query.
+        
+        Args:
+            user_id: User ID
+            strategy_ids: List of strategy UUIDs
+            limit_per_strategy: Maximum trades per strategy
+            
+        Returns:
+            Dictionary mapping strategy_id to list of trades
+        """
+        if not strategy_ids:
+            return {}
+        
+        # Batch query from database (single query for all strategies)
+        db_trades = self.db_service.get_user_trades_batch(
+            user_id=user_id,
+            strategy_ids=strategy_ids,
+            limit=limit_per_strategy * len(strategy_ids)  # Total limit for all strategies
+        )
+        
+        # Group trades by strategy_id
+        trades_by_strategy: Dict[UUID, List[OrderResponse]] = {sid: [] for sid in strategy_ids}
+        
+        for db_trade in db_trades:
+            strategy_id = db_trade.strategy_id
+            if strategy_id in trades_by_strategy:
+                # Limit per strategy
+                if len(trades_by_strategy[strategy_id]) < limit_per_strategy:
+                    trades_by_strategy[strategy_id].append(
+                        self._db_trade_to_order_response(db_trade)
+                    )
+        
+        return trades_by_strategy
 

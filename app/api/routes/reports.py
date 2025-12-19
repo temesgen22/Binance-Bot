@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
@@ -12,11 +13,101 @@ from loguru import logger
 from app.api.deps import get_strategy_runner, get_binance_client
 from app.models.report import StrategyReport, TradeReport, TradingReport
 from app.models.order import OrderResponse
+from app.models.strategy import StrategySummary
 from app.services.strategy_runner import StrategyRunner
 from app.core.my_binance_client import BinanceClient
 
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+def _fetch_klines_for_strategy(
+    client: BinanceClient,
+    strategy: StrategySummary,
+    chart_start: datetime,
+    chart_end: datetime
+) -> Tuple[str, Optional[List]]:
+    """Fetch klines for a single strategy (helper for parallelization).
+    
+    Returns:
+        Tuple of (strategy_id, klines_data or None)
+    """
+    try:
+        # Get strategy's kline interval (default to 1m if not available)
+        strategy_interval = '1m'  # Default
+        if hasattr(strategy, 'params') and strategy.params:
+            if isinstance(strategy.params, dict):
+                strategy_interval = strategy.params.get('kline_interval', '1m')
+            elif hasattr(strategy.params, 'kline_interval'):
+                strategy_interval = getattr(strategy.params, 'kline_interval', '1m')
+            elif hasattr(strategy.params, 'get'):
+                strategy_interval = strategy.params.get('kline_interval', '1m')
+        if not isinstance(strategy_interval, str):
+            strategy_interval = '1m'
+        
+        # Calculate time range in milliseconds
+        start_timestamp = int(chart_start.timestamp() * 1000)
+        end_timestamp = int(chart_end.timestamp() * 1000)
+        duration_seconds = (end_timestamp - start_timestamp) / 1000
+        
+        # Map interval to seconds
+        interval_seconds_map = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+            "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400
+        }
+        interval_seconds = interval_seconds_map.get(strategy_interval, 60)
+        estimated_candles = int(duration_seconds / interval_seconds) + 200
+        
+        # Fetch klines using Binance client
+        rest = client._ensure()
+        limit = min(estimated_candles, 1500)
+        
+        try:
+            # Prefer timestamp-based approach (unambiguous UTC)
+            klines = rest.futures_klines(
+                symbol=strategy.symbol,
+                interval=strategy_interval,
+                limit=limit,
+                startTime=start_timestamp,
+                endTime=end_timestamp
+            )
+            if klines:
+                # Filter by time range to ensure accuracy
+                klines_data = [
+                    k for k in klines
+                    if start_timestamp <= int(k[0]) <= end_timestamp
+                ]
+                return (strategy.id, klines_data)
+            return (strategy.id, None)
+        except (TypeError, AttributeError) as timestamp_error:
+            # Fallback: try futures_historical_klines with string format
+            if hasattr(rest, 'futures_historical_klines'):
+                start_str = chart_start.strftime("%d %b %Y %H:%M:%S")
+                end_str = chart_end.strftime("%d %b %Y %H:%M:%S")
+                klines = rest.futures_historical_klines(
+                    symbol=strategy.symbol,
+                    interval=strategy_interval,
+                    start_str=start_str,
+                    end_str=end_str
+                )
+                return (strategy.id, klines if klines else None)
+            else:
+                # Last fallback: fetch recent and filter
+                klines = rest.futures_klines(
+                    symbol=strategy.symbol,
+                    interval=strategy_interval,
+                    limit=limit
+                )
+                if klines:
+                    klines_data = [
+                        k for k in klines
+                        if start_timestamp <= int(k[0]) <= end_timestamp
+                    ]
+                    return (strategy.id, klines_data)
+                return (strategy.id, None)
+    except Exception as e:
+        logger.warning(f"Failed to fetch klines for strategy {strategy.id}: {e}")
+        return (strategy.id, None)
 
 
 def _match_trades_to_completed_positions(
@@ -368,10 +459,49 @@ def get_trading_report(
         total_profit = 0.0
         total_loss = 0.0
         
+        # Batch load trades for all strategies (optimizes N+1 query problem)
+        strategy_ids = [s.id for s in filtered_strategies]
+        trades_by_strategy = runner.get_trades_batch(strategy_ids)
+        
+        # Parallel fetch klines for all strategies (optimizes sequential API calls)
+        klines_by_strategy: Dict[str, Optional[List]] = {}
+        if client and filtered_strategies:
+            # Prepare klines fetching tasks
+            klines_tasks = []
+            for strategy in filtered_strategies:
+                # Determine time range for klines
+                chart_start = start_datetime or strategy.created_at
+                if chart_start and chart_start.tzinfo is None:
+                    chart_start = chart_start.replace(tzinfo=timezone.utc)
+                
+                chart_end = end_datetime or strategy.stopped_at or datetime.now(timezone.utc)
+                if chart_end and chart_end.tzinfo is None:
+                    chart_end = chart_end.replace(tzinfo=timezone.utc)
+                
+                if chart_start and chart_end and chart_start < chart_end:
+                    klines_tasks.append((strategy, chart_start, chart_end))
+            
+            # Fetch klines in parallel using ThreadPoolExecutor
+            if klines_tasks:
+                with ThreadPoolExecutor(max_workers=min(len(klines_tasks), 5)) as executor:
+                    future_to_strategy = {
+                        executor.submit(_fetch_klines_for_strategy, client, strategy, chart_start, chart_end): strategy
+                        for strategy, chart_start, chart_end in klines_tasks
+                    }
+                    
+                    for future in as_completed(future_to_strategy):
+                        try:
+                            strategy_id, klines_data = future.result()
+                            klines_by_strategy[strategy_id] = klines_data
+                        except Exception as e:
+                            strategy = future_to_strategy[future]
+                            logger.warning(f"Error fetching klines for strategy {strategy.id}: {e}")
+                            klines_by_strategy[strategy.id] = None
+        
         for strategy in filtered_strategies:
             try:
-                # Get trades for this strategy
-                trades = runner.get_trades(strategy.id)
+                # Get trades for this strategy (from batch-loaded data)
+                trades = trades_by_strategy.get(strategy.id, [])
                 logger.debug(f"Reports: Strategy {strategy.id} has {len(trades)} trades")
                 
                 # Match trades to form completed positions
@@ -400,14 +530,24 @@ def get_trading_report(
                         filtered_trades.append(trade)
                     completed_trades_list = filtered_trades
                 
-                # Calculate strategy statistics
-                wins = len([t for t in completed_trades_list if t.pnl_usd > 0])
-                losses = len([t for t in completed_trades_list if t.pnl_usd < 0])
-                win_rate = (wins / len(completed_trades_list) * 100) if completed_trades_list else 0.0
+                # Calculate strategy statistics (single pass for efficiency)
+                wins = 0
+                losses = 0
+                total_profit_usd = 0.0
+                total_loss_usd = 0.0
                 
-                total_profit_usd = sum(t.pnl_usd for t in completed_trades_list if t.pnl_usd > 0)
-                total_loss_usd = abs(sum(t.pnl_usd for t in completed_trades_list if t.pnl_usd < 0))
-                net_pnl = sum(t.pnl_usd for t in completed_trades_list)
+                for trade in completed_trades_list:
+                    pnl = trade.pnl_usd
+                    if pnl > 0:
+                        wins += 1
+                        total_profit_usd += pnl
+                    elif pnl < 0:
+                        losses += 1
+                        total_loss_usd += abs(pnl)
+                
+                win_rate = ((wins / len(completed_trades_list)) * 100) if completed_trades_list else 0.0
+                # Calculate net_pnl from already computed profit and loss
+                net_pnl = total_profit_usd - total_loss_usd
                 
                 # Determine stopped_at
                 stopped_at = None
@@ -423,107 +563,8 @@ def get_trading_report(
                 if stopped_at and stopped_at.tzinfo is None:
                     stopped_at = stopped_at.replace(tzinfo=timezone.utc)
                 
-                # Fetch klines for charting (optional, based on available time range)
-                klines_data = None
-                try:
-                    # Skip if client is not available
-                    if not client:
-                        logger.debug(f"Skipping klines fetch for strategy {strategy.id}: client not available")
-                        klines_data = None
-                    else:
-                        # Determine time range for klines
-                        # Ensure all datetimes are timezone-aware (UTC)
-                        chart_start = start_datetime or strategy.created_at
-                        if chart_start and chart_start.tzinfo is None:
-                            chart_start = chart_start.replace(tzinfo=timezone.utc)
-                        
-                        chart_end = end_datetime or stopped_at or datetime.now(timezone.utc)
-                        if chart_end and chart_end.tzinfo is None:
-                            chart_end = chart_end.replace(tzinfo=timezone.utc)
-                        
-                        if chart_start and chart_end and chart_start < chart_end:
-                            # Get strategy's kline interval (default to 1m if not available)
-                            strategy_interval = '1m'  # Default
-                            if hasattr(strategy, 'params') and strategy.params:
-                                if isinstance(strategy.params, dict):
-                                    strategy_interval = strategy.params.get('kline_interval', '1m')
-                                elif hasattr(strategy.params, 'kline_interval'):
-                                    strategy_interval = getattr(strategy.params, 'kline_interval', '1m')
-                                elif hasattr(strategy.params, 'get'):
-                                    strategy_interval = strategy.params.get('kline_interval', '1m')
-                            if not isinstance(strategy_interval, str):
-                                strategy_interval = '1m'
-                            
-                            # Calculate time range in milliseconds
-                            start_timestamp = int(chart_start.timestamp() * 1000)
-                            end_timestamp = int(chart_end.timestamp() * 1000)
-                            duration_seconds = (end_timestamp - start_timestamp) / 1000
-                            
-                            # Map interval to seconds
-                            interval_seconds_map = {
-                                "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-                                "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400
-                            }
-                            interval_seconds = interval_seconds_map.get(strategy_interval, 60)
-                            estimated_candles = int(duration_seconds / interval_seconds) + 200
-                            
-                            # Fetch klines using Binance client
-                            # Use timestamp-based approach to avoid timezone interpretation issues
-                            rest = client._ensure()
-                            try:
-                                # Prefer timestamp-based approach (unambiguous UTC)
-                                limit = min(estimated_candles, 1500)
-                                logger.debug(f"Fetching klines for {strategy.symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
-                                try:
-                                    klines = rest.futures_klines(
-                                        symbol=strategy.symbol,
-                                        interval=strategy_interval,
-                                        limit=limit,
-                                        startTime=start_timestamp,
-                                        endTime=end_timestamp
-                                    )
-                                    if klines:
-                                        # Filter by time range to ensure accuracy
-                                        klines_data = [
-                                            k for k in klines
-                                            if start_timestamp <= int(k[0]) <= end_timestamp
-                                        ]
-                                    else:
-                                        klines_data = None
-                                except (TypeError, AttributeError) as timestamp_error:
-                                    # Fallback: try futures_historical_klines with string format
-                                    logger.warning(f"futures_klines with timestamps failed: {timestamp_error}, trying string format")
-                                    if hasattr(rest, 'futures_historical_klines'):
-                                        start_str = chart_start.strftime("%d %b %Y %H:%M:%S")
-                                        end_str = chart_end.strftime("%d %b %Y %H:%M:%S")
-                                        klines = rest.futures_historical_klines(
-                                            symbol=strategy.symbol,
-                                            interval=strategy_interval,
-                                            start_str=start_str,
-                                            end_str=end_str
-                                        )
-                                        klines_data = klines if klines else None
-                                    else:
-                                        # Last fallback: fetch recent and filter
-                                        klines = rest.futures_klines(
-                                            symbol=strategy.symbol,
-                                            interval=strategy_interval,
-                                            limit=limit
-                                        )
-                                        if klines:
-                                            # Filter by time range
-                                            klines_data = [
-                                                k for k in klines
-                                                if start_timestamp <= int(k[0]) <= end_timestamp
-                                            ]
-                                        else:
-                                            klines_data = None
-                            except Exception as klines_error:
-                                logger.warning(f"Failed to fetch klines for strategy {strategy.id}: {klines_error}")
-                                klines_data = None
-                except Exception as klines_exc:
-                    logger.warning(f"Error fetching klines for strategy {strategy.id}: {klines_exc}")
-                    klines_data = None
+                # Get klines from parallel-fetched data (fetched earlier for all strategies)
+                klines_data = klines_by_strategy.get(strategy.id)
                 
                 # Calculate indicators for charting if klines are available
                 indicators_data = None

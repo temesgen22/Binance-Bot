@@ -4,7 +4,8 @@ Provides high-level database operations with proper error handling.
 """
 from __future__ import annotations
 
-from typing import Optional, List
+from contextlib import contextmanager
+from typing import Optional, List, Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,37 @@ class DatabaseService:
     
     def __init__(self, db: Session):
         self.db = db
+    
+    @contextmanager
+    def _transaction(self, *objects_to_refresh, error_message: str = "Database operation"):
+        """Context manager for database transactions with automatic error handling.
+        
+        Args:
+            *objects_to_refresh: SQLAlchemy objects to refresh after commit
+            error_message: Custom error message prefix for logging
+        
+        Yields:
+            None (context manager)
+        
+        Raises:
+            IntegrityError: If database integrity constraint is violated
+            Exception: If any other database error occurs
+        """
+        try:
+            yield
+            self.db.commit()
+            # Refresh objects after successful commit
+            for obj in objects_to_refresh:
+                if obj is not None:
+                    self.db.refresh(obj)
+        except IntegrityError as e:
+            self.db.rollback()
+            logger.error(f"{error_message} failed (integrity error): {e}")
+            raise
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"{error_message} failed: {e}")
+            raise
     
     # ============================================
     # USER OPERATIONS
@@ -43,15 +75,9 @@ class DatabaseService:
             full_name=full_name
         )
         self.db.add(user)
-        try:
-            self.db.commit()
-            self.db.refresh(user)
+        with self._transaction(user, error_message=f"Failed to create user {username}"):
             logger.info(f"Created user: {username}")
-            return user
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create user {username}: {e}")
-            raise
+        return user
     
     def get_user_by_id(self, user_id: UUID) -> Optional[User]:
         """Get user by ID."""
@@ -75,14 +101,9 @@ class DatabaseService:
             if hasattr(user, key):
                 setattr(user, key, value)
         
-        try:
-            self.db.commit()
-            self.db.refresh(user)
-            return user
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Failed to update user {user_id}: {e}")
-            raise
+        with self._transaction(user, error_message=f"Failed to update user {user_id}"):
+            pass
+        return user
     
     # ============================================
     # ACCOUNT OPERATIONS
@@ -118,15 +139,9 @@ class DatabaseService:
             is_default=is_default
         )
         self.db.add(account)
-        try:
-            self.db.commit()
-            self.db.refresh(account)
+        with self._transaction(account, error_message=f"Failed to create account {account_id}"):
             logger.info(f"Created account {account_id} for user {user_id}")
-            return account
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create account {account_id}: {e}")
-            raise
+        return account
     
     def get_user_accounts(self, user_id: UUID) -> List[Account]:
         """Get all accounts for a user."""
@@ -175,14 +190,9 @@ class DatabaseService:
             if hasattr(account, key):
                 setattr(account, key, value)
         
-        try:
-            self.db.commit()
-            self.db.refresh(account)
-            return account
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Failed to update account {account_id}: {e}")
-            raise
+        with self._transaction(account, error_message=f"Failed to update account {account_id}"):
+            pass
+        return account
     
     def delete_account(self, user_id: UUID, account_id: str) -> bool:
         """Delete (deactivate) an account."""
@@ -190,16 +200,11 @@ class DatabaseService:
         if not account:
             return False
         
-        try:
-            # Soft delete: set is_active to False
-            account.is_active = False
-            self.db.commit()
+        # Soft delete: set is_active to False
+        account.is_active = False
+        with self._transaction(error_message=f"Failed to delete account {account_id}"):
             logger.info(f"Deactivated account {account_id} for user {user_id}")
-            return True
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Failed to delete account {account_id}: {e}")
-            raise
+        return True
     
     # ============================================
     # STRATEGY OPERATIONS
@@ -235,15 +240,9 @@ class DatabaseService:
             status="stopped"
         )
         self.db.add(strategy)
-        try:
-            self.db.commit()
-            self.db.refresh(strategy)
+        with self._transaction(strategy, error_message=f"Failed to create strategy {strategy_id}"):
             logger.info(f"Created strategy {strategy_id} for user {user_id}")
-            return strategy
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create strategy {strategy_id}: {e}")
-            raise
+        return strategy
     
     def get_user_strategies(self, user_id: UUID) -> List[Strategy]:
         """Get all strategies for a user."""
@@ -273,14 +272,9 @@ class DatabaseService:
             if hasattr(strategy, key):
                 setattr(strategy, key, value)
         
-        try:
-            self.db.commit()
-            self.db.refresh(strategy)
-            return strategy
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Failed to update strategy {strategy_id}: {e}")
-            raise
+        with self._transaction(strategy, error_message=f"Failed to update strategy {strategy_id}"):
+            pass
+        return strategy
     
     def delete_strategy(self, user_id: UUID, strategy_id: str) -> bool:
         """Delete a strategy."""
@@ -288,15 +282,10 @@ class DatabaseService:
         if not strategy:
             return False
         
-        try:
-            self.db.delete(strategy)
-            self.db.commit()
+        self.db.delete(strategy)
+        with self._transaction(error_message=f"Failed to delete strategy {strategy_id}"):
             logger.info(f"Deleted strategy {strategy_id} for user {user_id}")
-            return True
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Failed to delete strategy {strategy_id}: {e}")
-            raise
+        return True
     
     # ============================================
     # TRADE OPERATIONS
@@ -306,14 +295,9 @@ class DatabaseService:
         """Create a new trade record."""
         trade = Trade(**trade_data)
         self.db.add(trade)
-        try:
-            self.db.commit()
-            self.db.refresh(trade)
-            return trade
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create trade: {e}")
-            raise
+        with self._transaction(trade, error_message="Failed to create trade"):
+            pass
+        return trade
     
     def get_user_trades(
         self,
@@ -329,6 +313,32 @@ class DatabaseService:
         
         return query.order_by(Trade.timestamp.desc()).limit(limit).all()
     
+    def get_user_trades_batch(
+        self,
+        user_id: UUID,
+        strategy_ids: List[UUID],
+        limit: int = 10000
+    ) -> List[Trade]:
+        """Get trades for multiple strategies in a single query (optimizes N+1 problem).
+        
+        Args:
+            user_id: User ID
+            strategy_ids: List of strategy UUIDs to fetch trades for
+            limit: Maximum total trades to return (across all strategies)
+        
+        Returns:
+            List of Trade objects for all specified strategies
+        """
+        if not strategy_ids:
+            return []
+        
+        query = self.db.query(Trade).filter(
+            Trade.user_id == user_id,
+            Trade.strategy_id.in_(strategy_ids)
+        )
+        
+        return query.order_by(Trade.timestamp.desc()).limit(limit).all()
+    
     # ============================================
     # TRADE PAIR OPERATIONS
     # ============================================
@@ -337,14 +347,9 @@ class DatabaseService:
         """Create a new trade pair."""
         pair = TradePair(**pair_data)
         self.db.add(pair)
-        try:
-            self.db.commit()
-            self.db.refresh(pair)
-            return pair
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create trade pair: {e}")
-            raise
+        with self._transaction(pair, error_message="Failed to create trade pair"):
+            pass
+        return pair
     
     def get_open_trade_pairs(self, user_id: UUID, strategy_id: Optional[UUID] = None) -> List[TradePair]:
         """Get open trade pairs for a user."""
@@ -366,14 +371,9 @@ class DatabaseService:
         """Create a new backtest."""
         backtest = Backtest(**backtest_data)
         self.db.add(backtest)
-        try:
-            self.db.commit()
-            self.db.refresh(backtest)
-            return backtest
-        except IntegrityError as e:
-            self.db.rollback()
-            logger.error(f"Failed to create backtest: {e}")
-            raise
+        with self._transaction(backtest, error_message="Failed to create backtest"):
+            pass
+        return backtest
     
     def get_user_backtests(self, user_id: UUID) -> List[Backtest]:
         """Get all backtests for a user."""

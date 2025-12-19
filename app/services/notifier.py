@@ -28,6 +28,9 @@ class NotificationType(str, Enum):
     PNL_THRESHOLD = "PNL_THRESHOLD"
     ORDER_EXECUTED = "ORDER_EXECUTED"
     CRITICAL_ERROR = "CRITICAL_ERROR"
+    SERVER_RESTART = "SERVER_RESTART"
+    DATABASE_CONNECTION_FAILED = "DATABASE_CONNECTION_FAILED"
+    DATABASE_CONNECTION_RESTORED = "DATABASE_CONNECTION_RESTORED"
 
 
 class TelegramNotifier:
@@ -345,6 +348,113 @@ class TelegramNotifier:
             message += f"\n⏰ {timestamp}"
         
         return await self.send_message(message, disable_notification=False)
+    
+    async def notify_server_restart(
+        self,
+        restored_strategies_count: int = 0,
+        startup_errors: Optional[list[str]] = None,
+    ) -> bool:
+        """Send notification when server restarts.
+        
+        Args:
+            restored_strategies_count: Number of strategies restored after restart
+            startup_errors: Optional list of startup errors
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        message = f"🔄 <b>Server Restarted</b>\n\n"
+        
+        # Add restored strategies info
+        if restored_strategies_count > 0:
+            message += f"✅ Restored {restored_strategies_count} running strateg{'y' if restored_strategies_count == 1 else 'ies'}\n\n"
+        else:
+            message += f"ℹ️ No running strategies to restore\n\n"
+        
+        # Add startup errors if any
+        if startup_errors:
+            message += f"⚠️ <b>Startup Warnings:</b>\n"
+            for error in startup_errors[:5]:  # Limit to 5 errors
+                message += f"• {error[:100]}\n"  # Truncate long errors
+            if len(startup_errors) > 5:
+                message += f"• ... and {len(startup_errors) - 5} more\n"
+            message += "\n"
+        
+        # Add timestamp
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        message += f"⏰ {timestamp}"
+        
+        return await self.send_message(message, disable_notification=False)
+    
+    async def notify_database_connection_failed(
+        self,
+        error: Exception,
+        retry_count: Optional[int] = None,
+        max_retries: Optional[int] = None,
+    ) -> bool:
+        """Send notification when database connection fails.
+        
+        Args:
+            error: The database connection error
+            retry_count: Current retry attempt number
+            max_retries: Maximum number of retries
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        message = f"🚨 <b>Database Connection Failed</b>\n\n"
+        
+        # Add error details
+        error_msg = str(error)[:300]  # Truncate long errors
+        message += f"Error: <code>{error_msg}</code>\n\n"
+        
+        # Add retry info if available
+        if retry_count is not None and max_retries is not None:
+            message += f"Retry: {retry_count}/{max_retries}\n"
+            if retry_count >= max_retries:
+                message += f"⚠️ <b>Maximum retries reached!</b>\n"
+        elif retry_count is not None:
+            message += f"Retry attempt: {retry_count}\n"
+        
+        message += "\n⚠️ <b>Server may be operating in degraded mode</b>\n"
+        message += "Some features may be unavailable until connection is restored.\n"
+        
+        # Add timestamp
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        message += f"\n⏰ {timestamp}"
+        
+        return await self.send_message(message, disable_notification=False)
+    
+    async def notify_database_connection_restored(
+        self,
+        downtime_seconds: Optional[float] = None,
+    ) -> bool:
+        """Send notification when database connection is restored.
+        
+        Args:
+            downtime_seconds: Optional downtime duration in seconds
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        message = f"✅ <b>Database Connection Restored</b>\n\n"
+        
+        if downtime_seconds is not None:
+            if downtime_seconds < 60:
+                downtime_str = f"{downtime_seconds:.1f} seconds"
+            elif downtime_seconds < 3600:
+                downtime_str = f"{downtime_seconds / 60:.1f} minutes"
+            else:
+                downtime_str = f"{downtime_seconds / 3600:.1f} hours"
+            message += f"Downtime: {downtime_str}\n\n"
+        
+        message += "✅ All database features are now available.\n"
+        
+        # Add timestamp
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        message += f"\n⏰ {timestamp}"
+        
+        return await self.send_message(message, disable_notification=False)
 
 
 class NotificationService:
@@ -459,4 +569,31 @@ class NotificationService:
                         self.loss_threshold,
                     )
                 notified["loss"] = pnl
+    
+    async def notify_server_restart(
+        self,
+        restored_strategies_count: int = 0,
+        startup_errors: Optional[list[str]] = None,
+    ) -> None:
+        """Notify that the server has restarted."""
+        if self.telegram:
+            await self.telegram.notify_server_restart(restored_strategies_count, startup_errors)
+    
+    async def notify_database_connection_failed(
+        self,
+        error: Exception,
+        retry_count: Optional[int] = None,
+        max_retries: Optional[int] = None,
+    ) -> None:
+        """Notify that database connection has failed."""
+        if self.telegram:
+            await self.telegram.notify_database_connection_failed(error, retry_count, max_retries)
+    
+    async def notify_database_connection_restored(
+        self,
+        downtime_seconds: Optional[float] = None,
+    ) -> None:
+        """Notify that database connection has been restored."""
+        if self.telegram:
+            await self.telegram.notify_database_connection_restored(downtime_seconds)
 

@@ -6,6 +6,8 @@
     <title>Binance Bot - Trade & PnL Viewer</title>
     <link rel="stylesheet" href="/static/common.css">
     <script src="/static/common.js"></script>
+    <script src="/static/settings.js"></script>
+    <script src="/static/utils.js"></script>
     <style>
         /* Page-specific styles - common styles are in common.css */
         .container {
@@ -648,8 +650,8 @@
                 html += `<td class="${symbol.total_realized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(symbol.total_realized_pnl)}</td>`;
                 html += `<td class="${symbol.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(symbol.total_unrealized_pnl)}</td>`;
                 html += `<td>${symbol.completed_trades}</td>`;
-                html += `<td>${symbol.win_rate.toFixed(2)}%</td>`;
-                html += `<td><span class="badge success">${symbol.winning_trades}W</span> / <span class="badge danger">${symbol.losing_trades}L</span></td>`;
+                html += `<td>${(symbol.win_rate || 0).toFixed(2)}%</td>`;
+                html += `<td><span class="badge success">${symbol.winning_trades || 0}W</span> / <span class="badge danger">${symbol.losing_trades || 0}L</span></td>`;
                 html += `<td>${symbol.open_positions.length}</td>`;
                 html += '</tr>';
             });
@@ -676,17 +678,24 @@
             let html = '<div class="positions-grid">';
             allPositions.forEach(pos => {
                 const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
+                // Safe null checks for position data
+                const pnl = pos.unrealized_pnl || 0;
+                const positionSize = pos.position_size || 0;
+                const entryPrice = pos.entry_price || 0;
+                const currentPrice = pos.current_price || 0;
+                const leverage = pos.leverage || 1;
+                
                 html += `<div class="position-card ${sideClass}">`;
                 html += `<div class="position-header">`;
                 html += `<div class="position-symbol">${pos.symbol}</div>`;
-                html += `<div class="position-pnl ${pos.unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pos.unrealized_pnl)}</div>`;
+                html += `<div class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</div>`;
                 html += `</div>`;
                 html += `<div class="position-details">`;
-                html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side}</span></span></div>`;
-                html += `<div class="position-detail-item"><span>Size:</span><span>${pos.position_size.toFixed(4)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${pos.entry_price.toFixed(4)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${pos.current_price.toFixed(4)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Leverage:</span><span>${pos.leverage}x</span></div>`;
+                html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side || 'N/A'}</span></span></div>`;
+                html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${entryPrice.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${currentPrice.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.strategy_name) {
                     html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
                 }
@@ -907,10 +916,7 @@
             }
         }
 
-        function formatCurrency(value) {
-            const sign = value >= 0 ? '+' : '';
-            return sign + '$' + value.toFixed(2);
-        }
+        // formatCurrency is now in utils.js
 
         // Load user info
         // loadUserInfo is now in common.js

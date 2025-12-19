@@ -107,6 +107,8 @@ class StrategySummary(BaseModel):
     position_size: Optional[float] = None  # Current position quantity (0 if no position)
     position_side: Optional[Literal["LONG", "SHORT"]] = None  # Track current position direction
     unrealized_pnl: Optional[float] = None  # Current unrealized profit/loss
+    started_at: Optional[datetime] = None  # When strategy was last started
+    stopped_at: Optional[datetime] = None  # When strategy was last stopped
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 

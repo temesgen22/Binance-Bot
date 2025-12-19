@@ -49,6 +49,8 @@ class StrategyPerformance(BaseModel):
     
     # Timestamps
     created_at: datetime
+    started_at: Optional[datetime] = Field(default=None, description="When strategy was last started")
+    stopped_at: Optional[datetime] = Field(default=None, description="When strategy was last stopped")
     last_trade_at: Optional[datetime] = None
     last_signal: Optional[Literal["BUY", "SELL", "HOLD"]] = None
     

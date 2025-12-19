@@ -7,6 +7,8 @@
     <script src="/static/auth.js"></script>
     <link rel="stylesheet" href="/static/common.css">
     <script src="/static/common.js"></script>
+    <script src="/static/settings.js"></script>
+    <script src="/static/utils.js"></script>
     <style>
         /* Page-specific styles - common styles are in common.css */
         .container {
@@ -958,15 +960,7 @@
             }
         }
         
-        function formatCurrency(value) {
-            if (value === null || value === undefined) return 'N/A';
-            return new Intl.NumberFormat('en-US', {
-                style: 'currency',
-                currency: 'USD',
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(value);
-        }
+        // formatCurrency is now in utils.js
     </script>
 </body>
 </html>

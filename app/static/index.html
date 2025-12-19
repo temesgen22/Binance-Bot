@@ -6,6 +6,7 @@
     <title>Binance Bot - Log Viewer</title>
     <script src="/static/auth.js"></script>
     <script src="/static/common.js"></script>
+    <script src="/static/utils.js"></script>
     <link rel="stylesheet" href="/static/common.css">
     <style>
         /* Page-specific styles - common styles are in common.css */
@@ -516,23 +517,13 @@
         // Set default date to today
         function setDefaultDates() {
             const now = new Date();
-            // Format for datetime-local input (YYYY-MM-DDTHH:mm:ss)
-            const formatDateTimeLocal = (date) => {
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-                const hours = String(date.getHours()).padStart(2, '0');
-                const minutes = String(date.getMinutes()).padStart(2, '0');
-                const seconds = String(date.getSeconds()).padStart(2, '0');
-                return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-            };
-            
-            document.getElementById('dateTo').value = formatDateTimeLocal(now);
+            // Use formatDateTimeLocal from utils.js (with seconds for log viewer)
+            document.getElementById('dateTo').value = formatDateTimeLocal(now, true);
             
             // Set dateFrom to 7 days ago
             const weekAgo = new Date();
             weekAgo.setDate(weekAgo.getDate() - 7);
-            document.getElementById('dateFrom').value = formatDateTimeLocal(weekAgo);
+            document.getElementById('dateFrom').value = formatDateTimeLocal(weekAgo, true);
         }
 
         // Initialize on page load

@@ -8,6 +8,7 @@
     <script src="/static/chart-utils.js"></script>
     <script src="/static/auth.js"></script>
     <script src="/static/settings.js"></script>
+    <script src="/static/utils.js"></script>
     <link rel="stylesheet" href="/static/common.css">
     <script src="/static/common.js"></script>
     <style>
@@ -590,15 +591,9 @@
             }
         }
 
-        function formatCurrency(value) {
-            const sign = value >= 0 ? '+' : '';
-            return sign + '$' + value.toFixed(2);
-        }
+        // formatCurrency is now in utils.js
 
-        function formatPercent(value) {
-            const sign = value >= 0 ? '+' : '';
-            return sign + value.toFixed(2) + '%';
-        }
+        // formatPercent is now in utils.js
 
         function formatDate(dateString) {
             // Use UserSettings if available, otherwise fallback to UTC format
