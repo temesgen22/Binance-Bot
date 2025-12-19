@@ -1299,7 +1299,7 @@ class StrategyRunner:
                 f"Running strategies (to be restored): {running_count}"
             )
         except Exception as exc:
-            logger.error(f"Failed to load strategies from database: {exc}", exc_info=True)
+            logger.error(f"Failed to load strategies from database: {exc!s}", exc_info=True)
     
     def _load_from_redis(self) -> None:
         """Load all strategies and trades from Redis on startup."""

@@ -189,6 +189,30 @@ def create_app() -> FastAPI:
                         await notification_service.notify_database_connection_restored()
                     except Exception as notify_exc:
                         logger.warning(f"Failed to send database restored notification: {notify_exc}")
+                
+                # Check if tables exist, if not, try to create them
+                try:
+                    from app.core.database import get_engine, create_tables
+                    from sqlalchemy import inspect
+                    engine = get_engine()
+                    inspector = inspect(engine)
+                    existing_tables = inspector.get_table_names()
+                    
+                    # Check if accounts table exists (key table)
+                    if 'accounts' not in existing_tables:
+                        logger.warning("Database tables not found. Attempting to create tables...")
+                        try:
+                            # Create tables using SQLAlchemy (works as fallback if migrations haven't been run)
+                            create_tables()
+                            logger.info("✅ Database tables created successfully")
+                        except Exception as table_exc:
+                            logger.error(f"Failed to create database tables: {table_exc!s}")
+                            startup_errors.append(
+                                "Database tables not found and could not be created automatically. "
+                                "Please run migrations manually: docker exec binance-bot-api alembic upgrade head"
+                            )
+                except Exception as check_exc:
+                    logger.warning(f"Could not verify database tables: {check_exc!s}")
             
             app.state.binance_client = default_client  # For backward compatibility
             app.state.binance_client_manager = client_manager
