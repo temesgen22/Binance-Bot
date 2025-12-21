@@ -64,7 +64,6 @@ pipeline {
             if (isUnix()) {
               sh """#!/bin/bash
                 set -e
-                SSH_OPTS="-i '$SSH_KEY' -p ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
                 REPO_URL="${scm.userRemoteConfigs[0].url}"
                 
                 # Copy redis.conf if it exists
@@ -73,7 +72,7 @@ pipeline {
                   scp -i '$SSH_KEY' -P ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null redis.conf \\$SSH_USER@${env.DEPLOY_SSH_HOST}:${env.DEPLOY_PATH}/redis.conf || echo "⚠️  Failed to copy redis.conf"
                 fi
 
-                ssh \\$SSH_OPTS \\$SSH_USER@${env.DEPLOY_SSH_HOST} "set -e
+                ssh -i '$SSH_KEY' -p ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\$SSH_USER@${env.DEPLOY_SSH_HOST} "set -e
                   mkdir -p ${env.DEPLOY_PATH}
                   if [ ! -d ${env.DEPLOY_PATH}/.git ]; then
                     echo '📦 First deploy: cloning repo...'
