@@ -1,33 +1,17 @@
-version: '3.8'
+version: "3.8"
 
 services:
   jenkins:
-    image: jenkins/jenkins:lts
+    image: jenkins/jenkins:lts-jdk17
     container_name: jenkins
-    user: root  # Required for Docker access
+    restart: unless-stopped
+
     ports:
       - "8080:8080"
       - "50000:50000"
+
     volumes:
       - jenkins_home:/var/jenkins_home
-      # Mount Docker socket from host
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - DOCKER_HOST=unix:///var/run/docker.sock
-    command: >
-      bash -c "
-        # Install Docker CLI and Python venv support
-        apt-get update && 
-        apt-get install -y docker.io python3-venv && 
-        # Fix permissions for Jenkins user
-        groupadd -f docker && 
-        usermod -aG docker jenkins && 
-        chmod 666 /var/run/docker.sock 2>/dev/null || true &&
-        # Start Jenkins as jenkins user
-        su jenkins -c '/usr/local/bin/jenkins.sh'
-      "
-    restart: unless-stopped
 
 volumes:
   jenkins_home:
-
