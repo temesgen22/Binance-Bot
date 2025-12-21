@@ -64,16 +64,16 @@ pipeline {
             if (isUnix()) {
               sh """#!/bin/bash
                 set -e
-                SSH_OPTS="-i $SSH_KEY -p ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                SSH_OPTS="-i '$SSH_KEY' -p ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
                 REPO_URL="${scm.userRemoteConfigs[0].url}"
                 
                 # Copy redis.conf if it exists
                 if [ -f "redis.conf" ]; then
                   echo "📝 Copying redis.conf to deployment..."
-                  scp \$SSH_OPTS redis.conf \$SSH_USER@${env.DEPLOY_SSH_HOST}:${env.DEPLOY_PATH}/redis.conf || echo "⚠️  Failed to copy redis.conf"
+                  scp -i '$SSH_KEY' -P ${env.DEPLOY_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null redis.conf \\$SSH_USER@${env.DEPLOY_SSH_HOST}:${env.DEPLOY_PATH}/redis.conf || echo "⚠️  Failed to copy redis.conf"
                 fi
 
-                ssh \$SSH_OPTS \$SSH_USER@${env.DEPLOY_SSH_HOST} "set -e
+                ssh \\$SSH_OPTS \\$SSH_USER@${env.DEPLOY_SSH_HOST} "set -e
                   mkdir -p ${env.DEPLOY_PATH}
                   if [ ! -d ${env.DEPLOY_PATH}/.git ]; then
                     echo '📦 First deploy: cloning repo...'
@@ -108,22 +108,22 @@ pipeline {
                   RETRY_COUNT=0
                   HEALTH_CHECK_PASSED=false
                   
-                  while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
+                  while [ \\\$RETRY_COUNT -lt \\\$MAX_RETRIES ]; do
                     if docker exec binance-bot-api curl -f http://localhost:8000/health > /dev/null 2>&1; then
                       echo '✅ Health check passed!'
                       HEALTH_CHECK_PASSED=true
                       break
                     else
-                      RETRY_COUNT=\$((RETRY_COUNT + 1))
-                      if [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; then
-                        echo "⚠️  Health check failed (attempt \$RETRY_COUNT/\$MAX_RETRIES), retrying in 5 seconds..."
+                      RETRY_COUNT=\\\$(expr \\\$RETRY_COUNT + 1)
+                      if [ \\\$RETRY_COUNT -lt \\\$MAX_RETRIES ]; then
+                        echo \"⚠️  Health check failed (attempt \\\$RETRY_COUNT/\\\$MAX_RETRIES), retrying in 5 seconds...\"
                         sleep 5
                       fi
                     fi
                   done
                   
-                  if [ "\$HEALTH_CHECK_PASSED" != "true" ]; then
-                    echo '❌ Health check failed after \$MAX_RETRIES attempts!'
+                  if [ \"\\\$HEALTH_CHECK_PASSED\" != \"true\" ]; then
+                    echo '❌ Health check failed after \\\$MAX_RETRIES attempts!'
                     echo '📋 Container status:'
                     docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'
                     echo '📋 API container logs (last 50 lines):'
