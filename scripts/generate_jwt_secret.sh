@@ -52,3 +52,4 @@ echo "✅ JWT secret key has been set in $ENV_FILE"
 echo "   Restart the application for changes to take effect."
 
 
+

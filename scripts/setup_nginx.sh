@@ -94,3 +94,4 @@ echo "   - Port 8000 is now only accessible internally (localhost)"
 echo "   - External access is only through Nginx on port 80"
 echo "   - Consider setting up a firewall rule to block direct access to port 8000"
 
+
