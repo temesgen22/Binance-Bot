@@ -8,7 +8,7 @@ pipeline {
     DEPLOY_SSH_PORT = '22'
     DEPLOY_PATH = '/home/jenkins-deploy/binance-bot'
     DEPLOY_BRANCH = 'main'
-    DEPLOY_COMPOSE_FILE = 'docker-compose.yml'
+    DEPLOY_COMPOSE_FILE = 'docker-compose.prod.yml'
   }
 
   options { timestamps() }
@@ -186,20 +186,35 @@ pipeline {
                   fi
                 fi
 
-                echo "✅ Health check..."
+                echo "✅ Health check (internal)..."
                 for i in 1 2 3 4 5; do
                   if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null; then
-                    echo "✅ Health OK"
-                    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-                    exit 0
+                    echo "✅ Internal health check OK"
+                    break
                   fi
                   echo "⚠️ Health failed ($i/5), retrying..."
                   sleep 5
                 done
 
-                echo "❌ Health check failed"
-                docker logs --tail 80 binance-bot-api || true
-                exit 1
+                # Verify internal health one more time
+                if ! docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+                  echo "❌ Internal health check failed"
+                  docker logs --tail 80 binance-bot-api || true
+                  exit 1
+                fi
+
+                # Optional: Check Nginx reverse proxy (if Nginx is configured)
+                if command -v nginx >/dev/null 2>&1 && [ -f /etc/nginx/sites-enabled/binance-bot ]; then
+                  echo "✅ Health check (Nginx proxy)..."
+                  if curl -fsS http://localhost/health >/dev/null 2>&1; then
+                    echo "✅ Nginx proxy health check OK"
+                  else
+                    echo "⚠️  Nginx proxy health check failed (Nginx may need configuration)"
+                  fi
+                fi
+
+                docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+                exit 0
 REMOTE
               '''
             } else {
