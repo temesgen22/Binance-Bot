@@ -119,6 +119,27 @@ class Settings(BaseSettings):
     @classmethod
     def validate_jwt_secret_key(cls, v: str) -> str:
         """Validate JWT secret key strength."""
+        # Skip strict validation in test environments
+        import os
+        import sys
+        
+        is_test_env = (
+            "pytest" in sys.modules or
+            "PYTEST_CURRENT_TEST" in os.environ or
+            os.getenv("ENVIRONMENT", "").lower() == "test" or
+            os.getenv("TESTING", "").lower() in ("true", "1", "yes")
+        )
+        
+        if is_test_env:
+            # In test environments, allow default value but warn
+            if v == "your-secret-key-change-this-in-production":
+                logger.warning(
+                    "JWT_SECRET_KEY is using default value in test environment. "
+                    "This is acceptable for testing but must be changed in production."
+                )
+            return v
+        
+        # Production validation - strict checks
         # Check for default/weak values
         weak_values = [
             "your-secret-key-change-this-in-production",
