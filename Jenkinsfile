@@ -120,9 +120,24 @@ pipeline {
                   "PATH_ON_SERVER='$PATH_ON_SERVER' BRANCH='$BRANCH' REPO_URL='$REPO_URL' COMPOSE_FILE='$COMPOSE_FILE' bash -s" <<'REMOTE'
                 set -euo pipefail
 
-                cd "$PATH_ON_SERVER"
+                # Backup .env file if it exists (before any destructive operations)
+                ENV_BACKUP="/tmp/binance-bot-env-backup-$(date +%s)"
+                if [ -f "$PATH_ON_SERVER/.env" ]; then
+                  echo "💾 Backing up existing .env file..."
+                  cp "$PATH_ON_SERVER/.env" "$ENV_BACKUP"
+                fi
 
-                if [ ! -d .git ]; then
+                # Check if directory exists and is a git repo
+                if [ -d "$PATH_ON_SERVER/.git" ]; then
+                  echo "📁 Existing git repository found"
+                  cd "$PATH_ON_SERVER"
+                elif [ -d "$PATH_ON_SERVER" ]; then
+                  echo "⚠️ Directory exists but is not a git repo, removing..."
+                  rm -rf "$PATH_ON_SERVER"
+                  echo "📦 Cloning repo..."
+                  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$PATH_ON_SERVER"
+                  cd "$PATH_ON_SERVER"
+                else
                   echo "📦 First deploy: cloning repo..."
                   git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$PATH_ON_SERVER"
                   cd "$PATH_ON_SERVER"
@@ -131,6 +146,14 @@ pipeline {
                 echo "📥 Updating code..."
                 git fetch origin "$BRANCH"
                 git reset --hard "origin/$BRANCH"
+
+                # Restore .env file if it was backed up
+                if [ -f "$ENV_BACKUP" ]; then
+                  echo "💾 Restoring .env file from backup..."
+                  cp "$ENV_BACKUP" "$PATH_ON_SERVER/.env"
+                  rm -f "$ENV_BACKUP"
+                  echo "✅ .env file restored"
+                fi
 
                 if [ ! -f .env ]; then
                   echo "❌ .env missing at $PATH_ON_SERVER/.env"
