@@ -72,74 +72,94 @@ pipeline {
                 COMPOSE_FILE="$DEPLOY_COMPOSE_FILE"
                 REPO_URL="$(git config --get remote.origin.url)"
 
-                SSH_OPTS="-i $SSH_KEY -p $PORT \\
-                  -o IdentitiesOnly=yes -o BatchMode=yes \\
-                  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                if [ ! -f "$SSH_KEY" ]; then
+                  echo "❌ SSH key file not found: $SSH_KEY"
+                  exit 1
+                fi
 
-                SCP_OPTS="-i $SSH_KEY -P $PORT \\
-                  -o IdentitiesOnly=yes -o BatchMode=yes \\
-                  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                chmod 600 "$SSH_KEY" || true
+
+                SSH_OPTS=( -i "$SSH_KEY" -p "$PORT"
+                  -o IdentitiesOnly=yes
+                  -o PreferredAuthentications=publickey
+                  -o PubkeyAuthentication=yes
+                  -o BatchMode=yes
+                  -o StrictHostKeyChecking=no
+                  -o UserKnownHostsFile=/dev/null
+                  -o ConnectTimeout=10
+                )
+
+                SCP_OPTS=( -i "$SSH_KEY" -P "$PORT"
+                  -o IdentitiesOnly=yes
+                  -o PreferredAuthentications=publickey
+                  -o PubkeyAuthentication=yes
+                  -o BatchMode=yes
+                  -o StrictHostKeyChecking=no
+                  -o UserKnownHostsFile=/dev/null
+                  -o ConnectTimeout=10
+                )
 
                 echo "🚀 Deploying to $SSH_USER@$HOST:$PORT"
 
-                # Ensure deploy dir exists FIRST
-                ssh $SSH_OPTS "$SSH_USER@$HOST" "mkdir -p '$PATH_ON_SERVER'"
+                echo "🔍 Testing SSH..."
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$HOST" "whoami"
+
+                # Ensure deploy dir exists first
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$HOST" "mkdir -p '$PATH_ON_SERVER'"
 
                 # Copy redis.conf if exists
                 if [ -f "redis.conf" ]; then
-                  echo "📝 Copying redis.conf to deployment..."
-                  scp $SCP_OPTS redis.conf "$SSH_USER@$HOST:$PATH_ON_SERVER/redis.conf"
-                else
-                  echo "⚠️ redis.conf not found in repo"
+                  echo "📝 Copying redis.conf..."
+                  scp "${SCP_OPTS[@]}" redis.conf "$SSH_USER@$HOST:$PATH_ON_SERVER/redis.conf"
                 fi
 
-                # Run remote deployment safely (no quoting hell)
-                ssh $SSH_OPTS "$SSH_USER@$HOST" 'bash -s' <<REMOTE
-                  set -euo pipefail
+                # OPTIONAL: copy .env from Jenkins (recommended via Jenkins Secret File)
+                # scp "${SCP_OPTS[@]}" "$ENV_FILE" "$SSH_USER@$HOST:$PATH_ON_SERVER/.env"
+
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$HOST" \
+                  "PATH_ON_SERVER='$PATH_ON_SERVER' BRANCH='$BRANCH' REPO_URL='$REPO_URL' COMPOSE_FILE='$COMPOSE_FILE' bash -s" <<'REMOTE'
+                set -euo pipefail
+
+                cd "$PATH_ON_SERVER"
+
+                if [ ! -d .git ]; then
+                  echo "📦 First deploy: cloning repo..."
+                  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$PATH_ON_SERVER"
                   cd "$PATH_ON_SERVER"
+                fi
 
-                  if [ ! -d .git ]; then
-                    echo "📦 First deploy: cloning repo..."
-                    git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$PATH_ON_SERVER"
-                    cd "$PATH_ON_SERVER"
+                echo "📥 Updating code..."
+                git fetch origin "$BRANCH"
+                git reset --hard "origin/$BRANCH"
+
+                if [ ! -f .env ]; then
+                  echo "❌ .env missing at $PATH_ON_SERVER/.env"
+                  exit 1
+                fi
+
+                echo "🐳 Deploying containers..."
+                docker compose -f "$COMPOSE_FILE" up -d --build
+
+                echo "⏳ Waiting..."
+                sleep 10
+
+                echo "🔄 Running migrations..."
+                docker exec binance-bot-api alembic upgrade head
+
+                echo "✅ Health check..."
+                for i in 1 2 3 4 5; do
+                  if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null; then
+                    echo "✅ Health OK"
+                    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+                    exit 0
                   fi
+                  echo "⚠️ Health failed ($i/5), retrying..."
+                  sleep 5
+                done
 
-                  echo "📥 Updating code..."
-                  git fetch origin "$BRANCH"
-                  git reset --hard "origin/$BRANCH"
-
-                  # Ensure .env exists (you will scp it from your PC)
-                  if [ ! -f .env ]; then
-                    echo "❌ .env missing at $PATH_ON_SERVER/.env"
-                    exit 1
-                  fi
-
-                  echo "🐳 Deploying containers..."
-                  docker compose -f "$COMPOSE_FILE" up -d --build
-
-                  echo "⏳ Waiting for containers..."
-                  sleep 10
-
-                  echo "🔄 Running database migrations..."
-                  docker exec binance-bot-api alembic upgrade head
-
-                  echo "✅ Verifying deployment..."
-                  MAX_RETRIES=5
-                  for i in $(seq 1 $MAX_RETRIES); do
-                    if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null; then
-                      echo "✅ Health check passed!"
-                      break
-                    fi
-                    echo "⚠️ Health check failed ($i/$MAX_RETRIES), retrying..."
-                    sleep 5
-                    if [ "$i" -eq "$MAX_RETRIES" ]; then
-                      echo "❌ Health check failed after retries"
-                      docker logs --tail 50 binance-bot-api || true
-                      exit 1
-                    fi
-                  done
-
-                  docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+                echo "❌ Health check failed"
+                docker logs --tail 80 binance-bot-api || true
+                exit 1
 REMOTE
               '''
             } else {
