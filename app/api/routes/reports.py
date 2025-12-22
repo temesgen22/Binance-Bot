@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Tuple
+from uuid import UUID
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_binance_client
+from app.api.deps import get_strategy_runner, get_binance_client, get_current_user, get_database_service
 from app.models.report import StrategyReport, TradeReport, TradingReport
 from app.models.order import OrderResponse
 from app.models.strategy import StrategySummary
+from app.models.db_models import User
 from app.services.strategy_runner import StrategyRunner
+from app.services.trade_service import TradeService
+from app.services.database_service import DatabaseService
 from app.core.my_binance_client import BinanceClient
+from app.core.redis_storage import RedisStorage
+from app.core.config import get_settings
 
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -385,8 +391,10 @@ def get_trading_report(
     start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO format)"),
     end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO format)"),
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    current_user: Optional[User] = Depends(get_current_user),
     runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
     client: Optional[BinanceClient] = Depends(get_binance_client),
+    db_service: Optional[DatabaseService] = Depends(get_database_service),
 ) -> TradingReport:
     """Generate comprehensive trading report with strategy summaries and trade details.
     
@@ -461,7 +469,63 @@ def get_trading_report(
         
         # Batch load trades for all strategies (optimizes N+1 query problem)
         strategy_ids = [s.id for s in filtered_strategies]
-        trades_by_strategy = runner.get_trades_batch(strategy_ids)
+        
+        # Try to fetch from database first (more reliable for historical data)
+        trades_by_strategy: Dict[str, List[OrderResponse]] = {}
+        try:
+            if current_user and db_service:
+                # Create TradeService for database access
+                settings = get_settings()
+                redis_storage = None
+                if settings.redis_enabled:
+                    redis_storage = RedisStorage(
+                        redis_url=settings.redis_url,
+                        enabled=settings.redis_enabled
+                    )
+                # Get the underlying SQLAlchemy session from DatabaseService
+                from sqlalchemy.orm import Session
+                db_session: Session = db_service.db
+                trade_service = TradeService(db_session, redis_storage)
+                
+                # Get strategy UUIDs from database
+                from app.services.strategy_service import StrategyService
+                strategy_service = StrategyService(db_session, redis_storage)
+                strategy_uuid_map: Dict[str, str] = {}  # Map strategy_id (string) to UUID
+                
+                for strategy_id in strategy_ids:
+                    db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy_id)
+                    if db_strategy:
+                        strategy_uuid_map[strategy_id] = str(db_strategy.id)
+                
+                if strategy_uuid_map:
+                    # Batch fetch trades from database
+                    uuid_list = [UUID(uuid_str) for uuid_str in strategy_uuid_map.values()]
+                    trades_by_uuid = trade_service.get_trades_batch(
+                        user_id=current_user.id,
+                        strategy_ids=uuid_list,
+                        limit_per_strategy=10000
+                    )
+                    
+                    # Convert UUID keys back to string strategy_id keys
+                    for strategy_id, uuid_str in strategy_uuid_map.items():
+                        strategy_uuid = UUID(uuid_str)
+                        if strategy_uuid in trades_by_uuid:
+                            trades_by_strategy[strategy_id] = trades_by_uuid[strategy_uuid]
+                        else:
+                            trades_by_strategy[strategy_id] = []
+                    
+                    logger.info(f"Reports: Fetched {sum(len(t) for t in trades_by_strategy.values())} trades from database for {len(trades_by_strategy)} strategies")
+                else:
+                    logger.warning("Reports: No strategies found in database, falling back to StrategyRunner")
+                    trades_by_strategy = runner.get_trades_batch(strategy_ids)
+            else:
+                # No user authenticated or db_service not available - use StrategyRunner
+                logger.debug("Reports: No user authenticated or db_service unavailable, using StrategyRunner")
+                trades_by_strategy = runner.get_trades_batch(strategy_ids)
+        except Exception as db_exc:
+            logger.warning(f"Reports: Failed to fetch trades from database: {db_exc}, falling back to StrategyRunner")
+            # Fallback to StrategyRunner method (Redis/in-memory)
+            trades_by_strategy = runner.get_trades_batch(strategy_ids)
         
         # Parallel fetch klines for all strategies (optimizes sequential API calls)
         klines_by_strategy: Dict[str, Optional[List]] = {}

@@ -438,6 +438,12 @@
                         <option value="SELL">SELL</option>
                     </select>
                 </div>
+                <div class="filter-group">
+                    <label for="strategyFilter">Strategy</label>
+                    <select id="strategyFilter">
+                        <option value="">All Strategies</option>
+                    </select>
+                </div>
             </div>
             <div class="filter-actions">
                 <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
@@ -532,6 +538,26 @@
         let autoRefreshInterval = null;
         let allSymbols = [];
         let availableAccounts = {};
+        let allStrategies = [];
+
+        async function loadStrategies() {
+            try {
+                const response = await authFetch('/strategies/list');
+                if (!response.ok) throw new Error('Failed to load strategies');
+                allStrategies = await response.json();
+                
+                const select = document.getElementById('strategyFilter');
+                select.innerHTML = '<option value="">All Strategies</option>';
+                allStrategies.forEach(strategy => {
+                    const option = document.createElement('option');
+                    option.value = strategy.id;
+                    option.textContent = `${strategy.name} (${strategy.symbol})`;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading strategies:', error);
+            }
+        }
 
         async function loadAccounts() {
             try {
@@ -710,6 +736,7 @@
             const accountId = document.getElementById('accountFilter').value;
             const symbol = document.getElementById('symbolFilter').value;
             const side = document.getElementById('sideFilter').value;
+            const strategyId = document.getElementById('strategyFilter').value;
             const startDate = document.getElementById('startDateFilter').value;
             const endDate = document.getElementById('endDateFilter').value;
             
@@ -717,6 +744,7 @@
             if (accountId) params.append('account_id', accountId);
             if (symbol) params.append('symbol', symbol);
             if (side) params.append('side', side);
+            if (strategyId) params.append('strategy_id', strategyId);
             if (startDate) {
                 // Convert datetime-local to ISO format for API
                 const isoStart = new Date(startDate).toISOString();
@@ -789,77 +817,134 @@
                 return;
             }
 
-            let html = '<table class="trades-table"><thead><tr>';
-            html += '<th>Date/Time</th><th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
-            html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Commission</th>';
-            html += '<th>Leverage</th><th>Strategy</th>';
-            html += '</tr></thead><tbody>';
-
+            // Group trades by strategy if there are multiple strategies
+            const tradesByStrategy = {};
             trades.forEach(trade => {
-                html += '<tr>';
-                
-                // Date/Time - format timestamp if available
-                if (trade.timestamp) {
-                    // Use UserSettings if available, otherwise fallback to UTC format
-                    const formatDate = (dateString) => {
-                        if (typeof UserSettings !== 'undefined') {
-                            return UserSettings.formatDate(dateString);
-                        }
-                        // Fallback for when settings.js is not loaded
-                        if (!dateString) return 'N/A';
-                        try {
-                            const date = new Date(dateString);
-                            if (isNaN(date.getTime())) {
-                                console.warn('Invalid date string:', dateString);
-                                return 'Invalid Date';
-                            }
-                            const year = date.getUTCFullYear();
-                            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-                            const day = String(date.getUTCDate()).padStart(2, '0');
-                            const hours = String(date.getUTCHours()).padStart(2, '0');
-                            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-                            const seconds = String(date.getUTCSeconds()).padStart(2, '0');
-                            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
-                        } catch (e) {
-                            console.warn('Error formatting date:', dateString, e);
-                            return 'Invalid Date';
-                        }
-                    };
-                    html += `<td>${formatDate(trade.timestamp)}</td>`;
-                } else {
-                    html += '<td>N/A</td>';
+                const strategyKey = trade.strategy_name || trade.strategy_id || 'Unknown';
+                if (!tradesByStrategy[strategyKey]) {
+                    tradesByStrategy[strategyKey] = [];
                 }
-                
-                html += `<td><strong>${trade.symbol}</strong></td>`;
-                html += `<td>${trade.order_id}</td>`;
-                html += `<td><span class="badge ${trade.side === 'BUY' ? 'success' : 'danger'}">${trade.side}</span></td>`;
-                html += `<td><span class="badge info">${trade.status}</span></td>`;
-                html += `<td>$${trade.price.toFixed(4)}</td>`;
-                html += `<td>$${(trade.avg_price || trade.price).toFixed(4)}</td>`;
-                html += `<td>${trade.executed_qty.toFixed(4)}</td>`;
-                
-                // Commission
-                if (trade.commission !== null && trade.commission !== undefined) {
-                    const commissionAsset = trade.commission_asset || 'USDT';
-                    html += `<td>${trade.commission.toFixed(4)} ${commissionAsset}</td>`;
-                } else {
-                    html += '<td>-</td>';
-                }
-                
-                // Leverage
-                if (trade.leverage !== null && trade.leverage !== undefined) {
-                    html += `<td>${trade.leverage}x</td>`;
-                } else {
-                    html += '<td>-</td>';
-                }
-                
-                html += `<td>${trade.strategy_name || 'N/A'}</td>`;
-                html += '</tr>';
+                tradesByStrategy[strategyKey].push(trade);
             });
 
-            html += '</tbody></table>';
+            // Sort trades within each strategy by timestamp (newest first)
+            Object.keys(tradesByStrategy).forEach(strategyKey => {
+                tradesByStrategy[strategyKey].sort((a, b) => {
+                    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return timeB - timeA;
+                });
+            });
+
+            let html = '';
+            const strategyKeys = Object.keys(tradesByStrategy).sort();
+
+            // If multiple strategies, show grouped by strategy
+            if (strategyKeys.length > 1) {
+                strategyKeys.forEach(strategyKey => {
+                    const strategyTrades = tradesByStrategy[strategyKey];
+                    html += `<div style="margin-bottom: 30px;">`;
+                    html += `<h3 style="margin-bottom: 15px; color: #667eea; font-size: 1.2em; border-bottom: 2px solid #667eea; padding-bottom: 8px;">`;
+                    html += `📊 ${strategyKey} <span style="font-size: 0.8em; color: #666; font-weight: normal;">(${strategyTrades.length} trade${strategyTrades.length !== 1 ? 's' : ''})</span>`;
+                    html += `</h3>`;
+                    html += '<table class="trades-table"><thead><tr>';
+                    html += '<th>Date/Time</th><th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
+                    html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Commission</th>';
+                    html += '<th>Leverage</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    strategyTrades.forEach(trade => {
+                        html += renderTradeRow(trade);
+                    });
+                    
+                    html += '</tbody></table></div>';
+                });
+            } else {
+                // Single strategy or no strategy grouping - show flat table
+                html += '<table class="trades-table"><thead><tr>';
+                html += '<th>Date/Time</th><th>Symbol</th><th>Order ID</th><th>Side</th><th>Status</th>';
+                html += '<th>Price</th><th>Avg Price</th><th>Quantity</th><th>Commission</th>';
+                html += '<th>Leverage</th><th>Strategy</th>';
+                html += '</tr></thead><tbody>';
+
+                trades.forEach(trade => {
+                    html += renderTradeRow(trade, true); // true = include strategy column
+                });
+                
+                html += '</tbody></table>';
+            }
+
             content.innerHTML = '<div class="trades-table-wrapper">' + html + '</div>';
         }
+
+        function renderTradeRow(trade, includeStrategyColumn = false) {
+            let html = '<tr>';
+            
+            // Date/Time - format timestamp if available
+            if (trade.timestamp) {
+                // Use UserSettings if available, otherwise fallback to UTC format
+                const formatDate = (dateString) => {
+                    if (typeof UserSettings !== 'undefined') {
+                        return UserSettings.formatDate(dateString);
+                    }
+                    // Fallback for when settings.js is not loaded
+                    if (!dateString) return 'N/A';
+                    try {
+                        const date = new Date(dateString);
+                        if (isNaN(date.getTime())) {
+                            console.warn('Invalid date string:', dateString);
+                            return 'Invalid Date';
+                        }
+                        const year = date.getUTCFullYear();
+                        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                        const day = String(date.getUTCDate()).padStart(2, '0');
+                        const hours = String(date.getUTCHours()).padStart(2, '0');
+                        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                        const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
+                    } catch (e) {
+                        console.warn('Error formatting date:', dateString, e);
+                        return 'Invalid Date';
+                    }
+                };
+                html += `<td>${formatDate(trade.timestamp)}</td>`;
+            } else {
+                html += '<td>N/A</td>';
+            }
+            
+            html += `<td><strong>${trade.symbol}</strong></td>`;
+            html += `<td>${trade.order_id}</td>`;
+            html += `<td><span class="badge ${trade.side === 'BUY' ? 'success' : 'danger'}">${trade.side}</span></td>`;
+            html += `<td><span class="badge info">${trade.status}</span></td>`;
+            html += `<td>$${trade.price.toFixed(4)}</td>`;
+            html += `<td>$${(trade.avg_price || trade.price).toFixed(4)}</td>`;
+            html += `<td>${trade.executed_qty.toFixed(4)}</td>`;
+            
+            // Commission
+            if (trade.commission !== null && trade.commission !== undefined) {
+                const commissionAsset = trade.commission_asset || 'USDT';
+                html += `<td>${trade.commission.toFixed(4)} ${commissionAsset}</td>`;
+            } else {
+                html += '<td>-</td>';
+            }
+            
+            // Leverage
+            if (trade.leverage !== null && trade.leverage !== undefined) {
+                html += `<td>${trade.leverage}x</td>`;
+            } else {
+                html += '<td>-</td>';
+            }
+            
+            // Strategy column (only if includeStrategyColumn is true)
+            if (includeStrategyColumn) {
+                const strategyDisplay = trade.strategy_name || trade.strategy_id || 'N/A';
+                html += `<td><strong>${strategyDisplay}</strong></td>`;
+            }
+            
+            html += '</tr>';
+            return html;
+        }
+
 
         function switchTab(tabName) {
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
@@ -896,6 +981,7 @@
             document.getElementById('startDateFilter').value = '';
             document.getElementById('endDateFilter').value = '';
             document.getElementById('sideFilter').value = '';
+            document.getElementById('strategyFilter').value = '';
             applyFilters();
         }
 
@@ -928,6 +1014,7 @@
             // loadUserInfo is called automatically by common.js
             loadAccounts();
             loadSymbols();
+            loadStrategies();
             loadData();
         });
     </script>

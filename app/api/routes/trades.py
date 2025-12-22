@@ -9,7 +9,7 @@ from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager, get_current_user
+from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager, get_current_user, get_database_service
 from app.core.binance_client_manager import BinanceClientManager
 from app.models.trade import (
     TradeWithTimestamp,
@@ -21,8 +21,12 @@ from app.models.trade import (
 from app.models.order import OrderResponse
 from app.models.db_models import User
 from app.services.strategy_runner import StrategyRunner
+from app.services.trade_service import TradeService
+from app.services.database_service import DatabaseService
 from app.core.my_binance_client import BinanceClient
 from app.core.exceptions import StrategyNotFoundError
+from app.core.redis_storage import RedisStorage
+from app.core.config import get_settings
 
 
 router = APIRouter(prefix="/trades", tags=["trades"])
@@ -73,8 +77,13 @@ def list_all_trades(
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
     current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
+    db_service: DatabaseService = Depends(get_database_service),
 ) -> List[TradeWithTimestamp]:
-    """Get all trades across all strategies with optional filtering."""
+    """Get all trades across all strategies with optional filtering.
+    
+    This endpoint prioritizes fetching from the database for accurate historical data.
+    Falls back to StrategyRunner (Redis/in-memory) if database query fails.
+    """
     try:
         # Parse datetime strings
         start_datetime: Optional[datetime] = None
@@ -102,58 +111,174 @@ def list_all_trades(
         
         all_trades = []
         
-        # Get all strategies
-        strategies = runner.list_strategies()
-        
-        # Collect trades from all strategies
-        for strategy in strategies:
-            # Apply strategy_id filter
-            if strategy_id and strategy.id != strategy_id:
-                continue
+        # Try to fetch from database first (more reliable for historical data)
+        try:
+            # Create TradeService for database access
+            settings = get_settings()
+            redis_storage = None
+            if settings.redis_enabled:
+                redis_storage = RedisStorage(
+                    redis_url=settings.redis_url,
+                    enabled=settings.redis_enabled
+                )
+            # Get the underlying SQLAlchemy session from DatabaseService
+            from sqlalchemy.orm import Session
+            db_session: Session = db_service.db
+            trade_service = TradeService(db_session, redis_storage)
             
-            # Apply account_id filter
-            if account_id and strategy.account_id != account_id:
-                continue
+            # Get all strategies for this user
+            strategies = runner.list_strategies()
             
-            # Apply symbol filter
-            if symbol and strategy.symbol.upper() != symbol.upper():
-                continue
-            
-            # Get trades for this strategy
-            try:
-                strategy_trades = runner.get_trades(strategy.id)
-                for trade in strategy_trades:
-                    trade_with_ts = _convert_order_to_trade_with_timestamp(
-                        trade,
-                        strategy_id=strategy.id,
-                        strategy_name=strategy.name,
-                    )
+            # If strategy_id filter is provided, get trades for that specific strategy
+            if strategy_id:
+                # Find the strategy
+                target_strategy = None
+                for s in strategies:
+                    if s.id == strategy_id:
+                        target_strategy = s
+                        break
+                
+                if target_strategy:
+                    # Get strategy UUID from database
+                    from app.services.strategy_service import StrategyService
+                    strategy_service = StrategyService(db_session, redis_storage)
+                    db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy_id)
                     
-                    # Apply side filter
-                    if side and trade_with_ts.side.upper() != side.upper():
+                    if db_strategy:
+                        # Fetch trades from database for this strategy
+                        db_trades = trade_service.get_strategy_trades(
+                            user_id=current_user.id,
+                            strategy_id=db_strategy.id,
+                            limit=10000  # Large limit to get all trades
+                        )
+                        
+                        for trade in db_trades:
+                            trade_with_ts = _convert_order_to_trade_with_timestamp(
+                                trade,
+                                strategy_id=target_strategy.id,
+                                strategy_name=target_strategy.name,
+                            )
+                            
+                            # Apply filters
+                            if symbol and trade_with_ts.symbol.upper() != symbol.upper():
+                                continue
+                            if side and trade_with_ts.side.upper() != side.upper():
+                                continue
+                            if account_id and target_strategy.account_id != account_id:
+                                continue
+                            if start_datetime or end_datetime:
+                                trade_timestamp = trade_with_ts.timestamp
+                                if trade_timestamp.tzinfo is None:
+                                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                                if start_datetime and trade_timestamp < start_datetime:
+                                    continue
+                                if end_datetime and trade_timestamp > end_datetime:
+                                    continue
+                            
+                            all_trades.append(trade_with_ts)
+            else:
+                # Get trades for all strategies (batch query for efficiency)
+                strategy_uuids = []
+                strategy_map = {}  # Map UUID to StrategySummary
+                
+                for strategy in strategies:
+                    # Apply account_id filter
+                    if account_id and strategy.account_id != account_id:
+                        continue
+                    # Apply symbol filter
+                    if symbol and strategy.symbol.upper() != symbol.upper():
                         continue
                     
-                    # Apply date filters with proper timezone handling
-                    if start_datetime or end_datetime:
-                        trade_timestamp = trade_with_ts.timestamp
-                        # Ensure trade timestamp is timezone-aware
-                        if trade_timestamp.tzinfo is None:
-                            trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
-                        
-                        if start_datetime:
-                            if trade_timestamp < start_datetime:
-                                continue
-                        
-                        if end_datetime:
-                            if trade_timestamp > end_datetime:
-                                continue
+                    # Get strategy UUID from database
+                    from app.services.strategy_service import StrategyService
+                    strategy_service = StrategyService(db_session, redis_storage)
+                    db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy.id)
                     
-                    all_trades.append(trade_with_ts)
-            except Exception as exc:
-                logger.warning(f"Error getting trades for strategy {strategy.id}: {exc}")
-                continue
+                    if db_strategy:
+                        strategy_uuids.append(db_strategy.id)
+                        strategy_map[db_strategy.id] = strategy
+                
+                if strategy_uuids:
+                    # Batch fetch trades from database
+                    trades_by_strategy = trade_service.get_trades_batch(
+                        user_id=current_user.id,
+                        strategy_ids=strategy_uuids,
+                        limit_per_strategy=10000
+                    )
+                    
+                    # Convert to TradeWithTimestamp and apply filters
+                    for strategy_uuid, trades in trades_by_strategy.items():
+                        strategy = strategy_map.get(strategy_uuid)
+                        if not strategy:
+                            continue
+                        
+                        for trade in trades:
+                            trade_with_ts = _convert_order_to_trade_with_timestamp(
+                                trade,
+                                strategy_id=strategy.id,
+                                strategy_name=strategy.name,
+                            )
+                            
+                            # Apply filters
+                            if side and trade_with_ts.side.upper() != side.upper():
+                                continue
+                            if start_datetime or end_datetime:
+                                trade_timestamp = trade_with_ts.timestamp
+                                if trade_timestamp.tzinfo is None:
+                                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                                if start_datetime and trade_timestamp < start_datetime:
+                                    continue
+                                if end_datetime and trade_timestamp > end_datetime:
+                                    continue
+                            
+                            all_trades.append(trade_with_ts)
+            
+            logger.info(f"Retrieved {len(all_trades)} trades from database with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
+            
+        except Exception as db_exc:
+            logger.warning(f"Failed to fetch trades from database: {db_exc}, falling back to StrategyRunner")
+            # Fallback to StrategyRunner method (Redis/in-memory)
+            strategies = runner.list_strategies()
+            
+            for strategy in strategies:
+                # Apply filters
+                if strategy_id and strategy.id != strategy_id:
+                    continue
+                if account_id and strategy.account_id != account_id:
+                    continue
+                if symbol and strategy.symbol.upper() != symbol.upper():
+                    continue
+                
+                try:
+                    strategy_trades = runner.get_trades(strategy.id)
+                    for trade in strategy_trades:
+                        trade_with_ts = _convert_order_to_trade_with_timestamp(
+                            trade,
+                            strategy_id=strategy.id,
+                            strategy_name=strategy.name,
+                        )
+                        
+                        if side and trade_with_ts.side.upper() != side.upper():
+                            continue
+                        
+                        if start_datetime or end_datetime:
+                            trade_timestamp = trade_with_ts.timestamp
+                            if trade_timestamp.tzinfo is None:
+                                trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                            if start_datetime and trade_timestamp < start_datetime:
+                                continue
+                            if end_datetime and trade_timestamp > end_datetime:
+                                continue
+                        
+                        all_trades.append(trade_with_ts)
+                except Exception as exc:
+                    logger.warning(f"Error getting trades for strategy {strategy.id}: {exc}")
+                    continue
         
-        logger.info(f"Retrieved {len(all_trades)} trades with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
+        # Sort by timestamp (newest first)
+        all_trades.sort(key=lambda t: t.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        
+        logger.info(f"Returning {len(all_trades)} trades with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
         return all_trades
     
     except Exception as exc:
