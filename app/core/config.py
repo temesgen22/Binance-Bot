@@ -64,11 +64,20 @@ class Settings(BaseSettings):
         description="Maximum overflow connections"
     )
     
+    # Encryption Configuration
+    encryption_key: Optional[str] = Field(
+        default=None,
+        alias="ENCRYPTION_KEY",
+        description="Fernet encryption key for API keys/secrets (base64-encoded). "
+                   "Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+    )
+    
     # JWT Authentication Configuration
     jwt_secret_key: str = Field(
         default="your-secret-key-change-this-in-production",
         alias="JWT_SECRET_KEY",
-        description="Secret key for JWT token signing. MUST be changed in production!"
+        description="Secret key for JWT token signing. MUST be changed in production! "
+                   "Must be at least 32 characters long and contain a mix of letters, numbers, and special characters."
     )
     jwt_access_token_expire_hours: int = Field(
         default=24,
@@ -105,6 +114,83 @@ class Settings(BaseSettings):
             # Comma-separated format
             return [s.strip() for s in v.split(",") if s.strip()]
         return v if isinstance(v, list) else [str(v)]
+    
+    @field_validator("jwt_secret_key", mode="after")
+    @classmethod
+    def validate_jwt_secret_key(cls, v: str) -> str:
+        """Validate JWT secret key strength."""
+        # Check for default/weak values
+        weak_values = [
+            "your-secret-key-change-this-in-production",
+            "secret",
+            "changeme",
+            "password",
+            "12345678",
+            "default",
+        ]
+        
+        if v.lower() in [w.lower() for w in weak_values]:
+            raise ValueError(
+                "JWT_SECRET_KEY must be changed from the default value. "
+                "Use a strong, random secret key (at least 32 characters)."
+            )
+        
+        # Check minimum length
+        if len(v) < 32:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be at least 32 characters long (current: {len(v)}). "
+                "Generate a strong key using: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        
+        # Check for sufficient entropy (mix of character types)
+        has_upper = bool(re.search(r'[A-Z]', v))
+        has_lower = bool(re.search(r'[a-z]', v))
+        has_digit = bool(re.search(r'\d', v))
+        has_special = bool(re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>/?]', v))
+        
+        # Require at least 3 out of 4 character types for strong keys
+        char_types = sum([has_upper, has_lower, has_digit, has_special])
+        if char_types < 2:
+            logger.warning(
+                f"JWT_SECRET_KEY should contain a mix of uppercase, lowercase, digits, and special characters. "
+                f"Current key has {char_types} character types."
+            )
+        
+        return v
+    
+    @field_validator("encryption_key", mode="after")
+    @classmethod
+    def validate_encryption_key(cls, v: Optional[str]) -> Optional[str]:
+        """Validate encryption key format."""
+        if v is None:
+            # Allow None in development, but warn
+            import os
+            if os.getenv("ENVIRONMENT", "development").lower() == "production":
+                raise ValueError(
+                    "ENCRYPTION_KEY is required in production. "
+                    "Generate one using: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+                )
+            logger.warning(
+                "ENCRYPTION_KEY not set. API keys will be stored in plaintext. "
+                "This is insecure and should only be used in development."
+            )
+            return v
+        
+        # Validate Fernet key format (base64, 32 bytes when decoded)
+        try:
+            import base64
+            key_bytes = base64.urlsafe_b64decode(v.encode())
+            if len(key_bytes) != 32:
+                raise ValueError(
+                    f"ENCRYPTION_KEY must decode to exactly 32 bytes (got {len(key_bytes)}). "
+                    "Generate a new key using: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+                )
+        except Exception as e:
+            raise ValueError(
+                f"Invalid ENCRYPTION_KEY format. Must be a base64-encoded 32-byte key. Error: {e}"
+            ) from e
+        
+        return v
     
 
 

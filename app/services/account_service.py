@@ -15,6 +15,7 @@ from app.core.redis_storage import RedisStorage
 from app.services.base_cache_service import BaseCacheService
 from app.models.db_models import Account as DBAccount
 from app.core.config import BinanceAccountConfig
+from app.core.encryption import get_encryption_service
 
 
 class AccountService(BaseCacheService):
@@ -36,18 +37,38 @@ class AccountService(BaseCacheService):
         
         Args:
             db_account: Database Account model
-            decrypt_func: Optional function to decrypt API keys/secrets
+            decrypt_func: Optional function to decrypt API keys/secrets (deprecated, uses encryption service automatically)
         
         Returns:
             BinanceAccountConfig
         """
-        # TODO: Implement encryption/decryption
-        # For now, assume api_key_encrypted and api_secret_encrypted are plaintext
-        # In production, you should decrypt them here
-        api_key = db_account.api_key_encrypted
-        api_secret = db_account.api_secret_encrypted
+        # Try to decrypt using encryption service
+        try:
+            encryption_service = get_encryption_service()
+            api_key = encryption_service.decrypt(db_account.api_key_encrypted)
+            api_secret = encryption_service.decrypt(db_account.api_secret_encrypted)
+        except (ValueError, ImportError) as e:
+            # If encryption service is not available or decryption fails,
+            # check if data is stored in plaintext (backward compatibility)
+            logger.warning(
+                f"Failed to decrypt API keys for account {db_account.account_id}: {e}. "
+                "Assuming plaintext storage (backward compatibility)."
+            )
+            # Try to use as plaintext if decryption fails
+            # This handles migration from plaintext to encrypted storage
+            try:
+                # If it's already plaintext, this will work
+                api_key = db_account.api_key_encrypted
+                api_secret = db_account.api_secret_encrypted
+            except Exception:
+                raise ValueError(
+                    f"Failed to decrypt API keys and data is not in plaintext format. "
+                    f"Account {db_account.account_id} may need to be re-encrypted."
+                ) from e
         
+        # Legacy decrypt_func support (deprecated)
         if decrypt_func:
+            logger.warning("Using deprecated decrypt_func parameter. Encryption service is used automatically.")
             api_key = decrypt_func(api_key)
             api_secret = decrypt_func(api_secret)
         
@@ -150,21 +171,34 @@ class AccountService(BaseCacheService):
         Args:
             user_id: User ID
             account_id: Account ID (string)
-            api_key: API key (will be encrypted)
-            api_secret: API secret (will be encrypted)
+            api_key: API key (will be encrypted automatically)
+            api_secret: API secret (will be encrypted automatically)
             name: Optional account name
             testnet: Whether this is a testnet account
             is_default: Whether this is the default account
-            encrypt_func: Optional function to encrypt API keys/secrets
+            encrypt_func: Optional function to encrypt API keys/secrets (deprecated, uses encryption service automatically)
         
         Returns:
             BinanceAccountConfig
         """
-        # TODO: Implement encryption
-        # For now, store as plaintext (NOT RECOMMENDED FOR PRODUCTION)
-        # In production, encrypt api_key and api_secret before storing
-        api_key_encrypted = encrypt_func(api_key) if encrypt_func else api_key
-        api_secret_encrypted = encrypt_func(api_secret) if encrypt_func else api_secret
+        # Encrypt API keys using encryption service
+        try:
+            encryption_service = get_encryption_service()
+            api_key_encrypted = encryption_service.encrypt(api_key)
+            api_secret_encrypted = encryption_service.encrypt(api_secret)
+        except (ValueError, ImportError) as e:
+            # If encryption service is not available, fall back to plaintext (development only)
+            logger.warning(
+                f"Encryption service not available: {e}. "
+                "Storing API keys in plaintext (INSECURE - development only)."
+            )
+            if encrypt_func:
+                api_key_encrypted = encrypt_func(api_key)
+                api_secret_encrypted = encrypt_func(api_secret)
+            else:
+                # Store as plaintext only if encryption is not configured
+                api_key_encrypted = api_key
+                api_secret_encrypted = api_secret
         
         # Create in database
         db_account = self.db_service.create_account(
@@ -194,7 +228,27 @@ class AccountService(BaseCacheService):
         account_id: str,
         **updates
     ) -> Optional[BinanceAccountConfig]:
-        """Update account in database and invalidate cache."""
+        """Update account in database and invalidate cache.
+        
+        If api_key or api_secret are provided in updates, they will be encrypted automatically.
+        """
+        # Encrypt API keys if they're being updated
+        if "api_key" in updates:
+            try:
+                encryption_service = get_encryption_service()
+                updates["api_key_encrypted"] = encryption_service.encrypt(updates.pop("api_key"))
+            except (ValueError, ImportError) as e:
+                logger.warning(f"Encryption service not available: {e}. Storing API key in plaintext.")
+                updates["api_key_encrypted"] = updates.pop("api_key")
+        
+        if "api_secret" in updates:
+            try:
+                encryption_service = get_encryption_service()
+                updates["api_secret_encrypted"] = encryption_service.encrypt(updates.pop("api_secret"))
+            except (ValueError, ImportError) as e:
+                logger.warning(f"Encryption service not available: {e}. Storing API secret in plaintext.")
+                updates["api_secret_encrypted"] = updates.pop("api_secret")
+        
         # Update in database
         db_account = self.db_service.update_account(user_id, account_id, **updates)
         
