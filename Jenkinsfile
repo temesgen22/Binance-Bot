@@ -166,9 +166,10 @@ pipeline {
                 echo "⏳ Waiting..."
                 sleep 10
 
-                echo "🔄 Running migrations..."
-                # Run migrations and capture output
-                MIGRATION_OUTPUT=$(docker exec binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
+        echo "🔄 Running migrations..."
+        # Run migrations and capture output
+        # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
+        MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
                 echo "$MIGRATION_OUTPUT"
                 
                 if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
@@ -232,7 +233,7 @@ REMOTE
                    echo '⏳ Waiting for containers to start...';
                    sleep 10;
                    echo '🔄 Running database migrations...';
-                   docker exec binance-bot-api alembic upgrade head 2>/dev/null || echo '⚠️  Migrations failed';
+                   docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>/dev/null || echo '⚠️  Migrations failed';
                    echo '✅ Verifying deployment...';
                    sleep 5;
                    MAX_RETRIES=5;

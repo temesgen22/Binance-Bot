@@ -119,10 +119,12 @@ class Settings(BaseSettings):
     @classmethod
     def validate_jwt_secret_key(cls, v: str) -> str:
         """Validate JWT secret key strength."""
-        # Skip strict validation in test environments
+        # Skip strict validation in test environments and during Alembic migrations
         import os
         import sys
+        import inspect
         
+        # Check if we're in a test environment
         is_test_env = (
             "pytest" in sys.modules or
             "PYTEST_CURRENT_TEST" in os.environ or
@@ -130,12 +132,38 @@ class Settings(BaseSettings):
             os.getenv("TESTING", "").lower() in ("true", "1", "yes")
         )
         
-        if is_test_env:
-            # In test environments, allow default value but warn
+        # Check if we're running Alembic migrations
+        # Check multiple ways: sys.argv, call stack, or environment variable
+        is_alembic = False
+        try:
+            # Check if alembic is in command line arguments (most reliable)
+            if len(sys.argv) > 0 and any("alembic" in arg.lower() for arg in sys.argv):
+                is_alembic = True
+            # Check call stack for alembic modules/files
+            elif any(
+                "alembic" in str(getattr(frame, 'filename', '')).lower() or
+                "alembic" in str(getattr(frame, 'file', '')).lower()
+                for frame in inspect.stack()
+            ):
+                is_alembic = True
+            # Check if alembic module is loaded
+            elif "alembic" in sys.modules:
+                is_alembic = True
+            # Check environment variable (can be set by deployment scripts)
+            elif os.getenv("ALEMBIC_MIGRATION", "").lower() in ("true", "1", "yes"):
+                is_alembic = True
+        except Exception:
+            # If inspection fails, continue with normal validation
+            pass
+        
+        # Allow default value in test environments or during migrations
+        if is_test_env or is_alembic:
+            # In test/migration environments, allow default value but warn
             if v == "your-secret-key-change-this-in-production":
+                env_type = "test" if is_test_env else "migration"
                 logger.warning(
-                    "JWT_SECRET_KEY is using default value in test environment. "
-                    "This is acceptable for testing but must be changed in production."
+                    f"JWT_SECRET_KEY is using default value in {env_type} environment. "
+                    "This is acceptable for testing/migrations but must be changed in production."
                 )
             return v
         
