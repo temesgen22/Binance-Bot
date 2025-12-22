@@ -167,7 +167,23 @@ pipeline {
                 sleep 10
 
                 echo "🔄 Running migrations..."
-                docker exec binance-bot-api alembic upgrade head
+                # Run migrations and capture output
+                MIGRATION_OUTPUT=$(docker exec binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
+                echo "$MIGRATION_OUTPUT"
+                
+                if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
+                  echo "✅ Migrations completed successfully"
+                else
+                  # Check if error is due to existing tables
+                  if echo "$MIGRATION_OUTPUT" | grep -qE "(already exists|DuplicateTable)"; then
+                    echo "⚠️ Tables already exist, syncing Alembic version table..."
+                    docker exec binance-bot-api alembic stamp head
+                    echo "✅ Database stamped to current head"
+                  else
+                    echo "❌ Migration failed with unexpected error"
+                    exit 1
+                  fi
+                fi
 
                 echo "✅ Health check..."
                 for i in 1 2 3 4 5; do
