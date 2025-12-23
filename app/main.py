@@ -181,7 +181,14 @@ def create_app() -> FastAPI:
         by Starlette/Uvicorn's lifespan handler. This is expected behavior and harmless.
         The cleanup code in the finally block will still execute.
         """
-        logger.info("🚀 Starting FastAPI application lifespan...")
+        try:
+            logger.info("🚀 Starting FastAPI application lifespan...")
+        except Exception as log_exc:
+            # Even if logging fails, try to print to stderr as last resort
+            import sys
+            print("ERROR: Failed to log lifespan start", file=sys.stderr)
+            print(f"Exception: {log_exc}", file=sys.stderr)
+        
         # Startup
         startup_errors = []
         restored_strategies_count = 0
@@ -192,7 +199,13 @@ def create_app() -> FastAPI:
             # Initialize database connection pool with timeout protection
             try:
                 # Run init_database in executor to prevent blocking the event loop
-                loop = asyncio.get_event_loop()
+                # Use get_running_loop() which is safer in async context
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # Fallback to get_event_loop() if get_running_loop() fails
+                    loop = asyncio.get_event_loop()
+                
                 db_init_success, db_connection_error = await asyncio.wait_for(
                     loop.run_in_executor(None, init_database),
                     timeout=30.0  # 30 second timeout for database initialization
@@ -303,12 +316,21 @@ def create_app() -> FastAPI:
             
             logger.info("✅ FastAPI application startup completed successfully")
             logger.info("🌐 Server is ready to accept requests on port 8000")
-            yield
+        except Exception as startup_exc:
+            # Log the error but don't prevent server from starting
+            logger.error(f"❌ Error during startup, but continuing: {startup_exc}", exc_info=True)
+            startup_errors.append(f"Startup error: {str(startup_exc)[:200]}")
+            logger.warning("⚠️ Server starting in degraded mode due to startup errors")
+        
+        # Always yield to allow server to start, even if there were errors
+        yield
+        
+        # Shutdown
+        try:
             logger.info("🛑 FastAPI application shutdown initiated...")
-        except asyncio.CancelledError:
-            # Handle cancellation during yield (when shutdown is triggered)
-            logger.info("Lifespan cancelled, performing cleanup...")
-            # Fall through to finally block
+        except (Exception, asyncio.CancelledError):
+            # Ignore logging errors during shutdown
+            pass
         finally:
             # Shutdown - handle gracefully even if cancelled
             # Note: CancelledError may be raised during shutdown, which is expected behavior
@@ -384,7 +406,13 @@ def create_app() -> FastAPI:
                 # Log any unexpected errors but don't re-raise
                 logger.error(f"Unexpected error during shutdown: {e}", exc_info=True)
 
-    app = FastAPI(title="Binance Trading Bot", version="0.1.0", lifespan=lifespan)
+    logger.info("🔨 Creating FastAPI application instance...")
+    try:
+        app = FastAPI(title="Binance Trading Bot", version="0.1.0", lifespan=lifespan)
+        logger.info("✅ FastAPI application instance created successfully")
+    except Exception as app_exc:
+        logger.error(f"❌ Failed to create FastAPI application: {app_exc}", exc_info=True)
+        raise
 
     # Register exception handlers (order matters - most specific first)
     app.add_exception_handler(BinanceRateLimitError, binance_rate_limit_handler)
@@ -635,6 +663,7 @@ def create_app() -> FastAPI:
             "static_dir_contents": list(abs_static_dir.iterdir()) if abs_static_dir.exists() else [],
         }
     
+    logger.info("✅ FastAPI application setup completed, returning app instance")
     return app
 
 
