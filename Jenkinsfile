@@ -179,7 +179,7 @@ pipeline {
                   fi
                 fi
 
-                echo "🔄 Running migrations..."
+        echo "🔄 Running migrations..."
         # Run migrations and capture output
         # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
         MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
@@ -261,6 +261,7 @@ pipeline {
 REMOTE
               '''
             } else {
+              def composeFile = env.DEPLOY_COMPOSE_FILE
               powershell """
                 \$ErrorActionPreference='Stop'
                 \$REPO_URL='${scm.userRemoteConfigs[0].url}'
@@ -287,7 +288,7 @@ REMOTE
                      cp .env.example .env;
                    fi;
                    echo '🐳 Deploying containers...';
-                   docker compose -f ${env.DEPLOY_COMPOSE_FILE} up -d --build;
+                   docker compose -f ${composeFile} up -d --build;
                    echo '⏳ Waiting for containers to start...';
                    sleep 10;
                    echo '🔄 Running database migrations...';
