@@ -261,10 +261,10 @@ pipeline {
 REMOTE
               '''
             } else {
-              def composeFile = env.DEPLOY_COMPOSE_FILE
               powershell """
                 \$ErrorActionPreference='Stop'
                 \$REPO_URL='${scm.userRemoteConfigs[0].url}'
+                \$COMPOSE_FILE='${env.DEPLOY_COMPOSE_FILE}'
                 \$SSH_OPTS = @(
                   '-i', '${'$'}env:SSH_KEY',
                   '-p', '${env.DEPLOY_SSH_PORT}',
@@ -288,7 +288,7 @@ REMOTE
                      cp .env.example .env;
                    fi;
                    echo '🐳 Deploying containers...';
-                   docker compose -f ${composeFile} up -d --build;
+                   docker compose -f $COMPOSE_FILE up -d --build;
                    echo '⏳ Waiting for containers to start...';
                    sleep 10;
                    echo '🔄 Running database migrations...';
