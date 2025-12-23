@@ -206,9 +206,11 @@ def create_app() -> FastAPI:
                     # Fallback to get_event_loop() if get_running_loop() fails
                     loop = asyncio.get_event_loop()
                 
+                # Increase timeout to allow for DB startup (postgres has 380s start_period)
+                # Use 120 seconds to match API health check start_period
                 db_init_success, db_connection_error = await asyncio.wait_for(
-                    loop.run_in_executor(None, init_database),
-                    timeout=30.0  # 30 second timeout for database initialization
+                    loop.run_in_executor(None, lambda: init_database(max_retries=10)),
+                    timeout=120.0  # 120 second timeout for database initialization
                 )
                 logger.info(f"✅ Database initialization completed: success={db_init_success}")
             except asyncio.TimeoutError:
@@ -226,8 +228,8 @@ def create_app() -> FastAPI:
                     try:
                         await notification_service.notify_database_connection_failed(
                             db_connection_error,
-                            retry_count=3,  # We tried 3 times
-                            max_retries=3
+                            retry_count=10,  # We tried 10 times
+                            max_retries=10
                         )
                     except Exception as notify_exc:
                         logger.warning(f"Failed to send database failure notification: {notify_exc}")

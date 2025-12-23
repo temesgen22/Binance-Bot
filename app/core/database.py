@@ -81,7 +81,7 @@ def _reset_engine() -> None:
     _last_connection_state = None
 
 
-def init_database(max_retries: int = 3, force_reconnect: bool = False) -> tuple[bool, Optional[Exception]]:
+def init_database(max_retries: int = 10, force_reconnect: bool = False) -> tuple[bool, Optional[Exception]]:
     """Initialize database connection pool.
     
     Args:
@@ -184,11 +184,14 @@ def init_database(max_retries: int = 3, force_reconnect: bool = False) -> tuple[
                     except Exception as notify_exc:
                         logger.warning(f"Failed to send database connection failure notification: {notify_exc}")
                 
-                # Wait before retry (exponential backoff)
+                # Wait before retry (exponential backoff with longer waits for later attempts)
                 if attempt < max_retries:
                     import time
-                    wait_time = min(2 ** attempt, 10)  # Max 10 seconds
-                    logger.info(f"Retrying database connection in {wait_time} seconds...")
+                    # Longer waits for later attempts: 2s, 4s, 8s, 10s, 10s, ...
+                    wait_time = min(2 ** min(attempt, 3), 10)  # Max 10 seconds, but allow longer for early attempts
+                    if attempt >= 5:
+                        wait_time = 15  # After 5 attempts, wait 15 seconds between retries
+                    logger.info(f"Retrying database connection in {wait_time} seconds... (attempt {attempt}/{max_retries})")
                     time.sleep(wait_time)
         
         # All retries failed

@@ -16,31 +16,85 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health(client: BinanceClient = Depends(get_binance_client)) -> dict[str, str | float]:
+def health(
+    db: Session = Depends(get_db_session_dependency),
+    client: BinanceClient = Depends(get_binance_client)
+) -> dict[str, str | float]:
     """Health check endpoint.
     
+    Checks database, Redis (if enabled), and Binance API connections.
+    This is used by Docker health checks, so it must verify critical services.
+    
     Returns:
-        Status and BTC price if Binance connection is working
+        Status and BTC price if all critical services are working
         
     Raises:
-        BinanceAPIError: If Binance API is unreachable or returns error
+        HTTPException: If database, Redis, or Binance API is unreachable
     """
+    from fastapi import HTTPException, status
+    
+    # Check database connection first (critical for API functionality)
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "ok"
+    except Exception as db_exc:
+        logger.error(f"Database health check failed: {db_exc}")
+        db.close()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database connection failed: {str(db_exc)[:200]}"
+        ) from db_exc
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    
+    # Check Redis connection (if enabled)
+    redis_status = "disabled"
+    settings = get_settings()
+    if settings.redis_enabled:
+        try:
+            redis_storage = RedisStorage(
+                redis_url=settings.redis_url,
+                enabled=settings.redis_enabled
+            )
+            if redis_storage.enabled and redis_storage._client:
+                redis_storage._client.ping()
+                redis_status = "ok"
+            else:
+                logger.warning("Redis is enabled but connection failed")
+                redis_status = "failed"
+        except Exception as redis_exc:
+            logger.error(f"Redis health check failed: {redis_exc}")
+            redis_status = "failed"
+            # Don't fail health check if Redis fails, but log it
+            # Redis is optional, database is critical
+    
+    # Check Binance API connection
     try:
         price = client.get_price("BTCUSDT")
-        return {"status": "ok", "btc_price": price}
+        return {
+            "status": "ok",
+            "database": db_status,
+            "redis": redis_status,
+            "btc_price": price
+        }
     except Exception as exc:
         from app.core.exceptions import BinanceAPIError, BinanceNetworkError
         
-        logger.error(f"Health check failed: {exc}")
+        logger.error(f"Binance health check failed: {exc}")
+        # Database is OK, but Binance failed - return degraded status
+        # Don't fail completely since database is more critical
         if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
-            raise BinanceNetworkError(
-                f"Unable to connect to Binance API: {exc}",
-                details={"endpoint": "health_check"}
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Binance API unreachable: {exc}"
             ) from exc
         else:
-            raise BinanceAPIError(
-                f"Binance API error during health check: {exc}",
-                details={"endpoint": "health_check"}
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Binance API error: {exc}"
             ) from exc
 
 
