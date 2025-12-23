@@ -167,7 +167,8 @@ pipeline {
                 sleep 10
 
                 echo "🔍 Verifying database exists..."
-                if docker exec binance-bot-postgres psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw binance_bot; then
+                DB_EXISTS=$(docker exec binance-bot-postgres psql -U postgres -lqt 2>/dev/null | grep -w binance_bot || echo "")
+                if [ -n "$DB_EXISTS" ]; then
                   echo "✅ Database exists"
                 else
                   echo "⚠️  Database not found, creating it..."
