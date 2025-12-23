@@ -119,7 +119,8 @@ def init_database(max_retries: int = 3, force_reconnect: bool = False) -> tuple[
         # Retry connection attempts
         for attempt in range(1, max_retries + 1):
             try:
-                # Create engine with connection pooling
+                # Create engine with connection pooling and timeout
+                # Add connect_timeout to prevent hanging on connection attempts
                 _engine = create_engine(
                     database_url,
                     echo=settings.database_echo,
@@ -127,11 +128,16 @@ def init_database(max_retries: int = 3, force_reconnect: bool = False) -> tuple[
                     max_overflow=settings.database_max_overflow,
                     pool_pre_ping=True,  # Verify connections before using
                     pool_recycle=3600,  # Recycle connections after 1 hour
+                    connect_args={
+                        "connect_timeout": 10,  # 10 second timeout for initial connection
+                    },
                 )
                 
-                # Test connection by creating a session
+                # Test connection by creating a session (with timeout protection)
+                logger.debug("Testing database connection...")
                 test_session = _engine.connect()
                 test_session.close()
+                logger.debug("Database connection test successful")
                 
                 # Create session factory
                 _SessionLocal = sessionmaker(

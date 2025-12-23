@@ -181,14 +181,31 @@ def create_app() -> FastAPI:
         by Starlette/Uvicorn's lifespan handler. This is expected behavior and harmless.
         The cleanup code in the finally block will still execute.
         """
+        logger.info("🚀 Starting FastAPI application lifespan...")
         # Startup
         startup_errors = []
         restored_strategies_count = 0
         db_connection_error = None
         
         try:
-            # Initialize database connection pool
-            db_init_success, db_connection_error = init_database()
+            logger.info("📊 Initializing database connection pool...")
+            # Initialize database connection pool with timeout protection
+            try:
+                # Run init_database in executor to prevent blocking the event loop
+                loop = asyncio.get_event_loop()
+                db_init_success, db_connection_error = await asyncio.wait_for(
+                    loop.run_in_executor(None, init_database),
+                    timeout=30.0  # 30 second timeout for database initialization
+                )
+                logger.info(f"✅ Database initialization completed: success={db_init_success}")
+            except asyncio.TimeoutError:
+                logger.error("❌ Database initialization timed out after 30 seconds")
+                db_init_success = False
+                db_connection_error = TimeoutError("Database initialization timed out after 30 seconds")
+            except Exception as db_exc:
+                logger.error(f"❌ Database initialization failed with exception: {db_exc}", exc_info=True)
+                db_init_success = False
+                db_connection_error = db_exc
             if not db_init_success:
                 startup_errors.append("Database connection failed - server operating in degraded mode")
                 # Send database connection failure notification
@@ -210,12 +227,14 @@ def create_app() -> FastAPI:
                         logger.warning(f"Failed to send database restored notification: {notify_exc}")
                 
                 # Check if tables exist, if not, try to create them
+                logger.info("🔍 Verifying database tables...")
                 try:
                     from app.core.database import get_engine, create_tables
                     from sqlalchemy import inspect
                     engine = get_engine()
                     inspector = inspect(engine)
                     existing_tables = inspector.get_table_names()
+                    logger.info(f"✅ Database tables check completed. Found {len(existing_tables)} tables")
                     
                     # Check if accounts table exists (key table)
                     if 'accounts' not in existing_tables:
@@ -233,13 +252,16 @@ def create_app() -> FastAPI:
                 except Exception as check_exc:
                     logger.warning(f"Could not verify database tables: {check_exc!s}")
             
+            logger.info("📦 Setting up application state...")
             app.state.binance_client = default_client  # For backward compatibility
             app.state.binance_client_manager = client_manager
             app.state.strategy_runner = runner
             app.state.background_tasks: list[asyncio.Task] = []
+            logger.info("✅ Application state configured")
             
             # Restore running strategies after server restart
             # This ensures strategies that were running before restart are automatically started
+            logger.info("🔄 Restoring running strategies...")
             try:
                 restored_strategies = await runner.restore_running_strategies()
                 if restored_strategies:
@@ -273,12 +295,16 @@ def create_app() -> FastAPI:
             # Start service monitor
             if service_monitor:
                 try:
+                    logger.info("🔍 Starting service monitor...")
                     service_monitor.start()
-                    logger.info("Service monitor started")
+                    logger.info("✅ Service monitor started")
                 except Exception as exc:
                     logger.warning(f"Failed to start service monitor: {exc}")
             
+            logger.info("✅ FastAPI application startup completed successfully")
+            logger.info("🌐 Server is ready to accept requests on port 8000")
             yield
+            logger.info("🛑 FastAPI application shutdown initiated...")
         except asyncio.CancelledError:
             # Handle cancellation during yield (when shutdown is triggered)
             logger.info("Lifespan cancelled, performing cleanup...")
