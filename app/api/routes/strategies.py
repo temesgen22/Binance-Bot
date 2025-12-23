@@ -28,7 +28,7 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
 @router.get("/list", response_model=list[StrategySummary])
-def list_strategies(
+async def list_strategies(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session_dependency),
     runner: StrategyRunner = Depends(get_strategy_runner)
@@ -37,6 +37,14 @@ def list_strategies(
     
     Note: Changed from GET / to GET /list to avoid conflict with GUI route at /strategies
     """
+    # Restore running strategies if needed (lazy restoration)
+    if hasattr(runner, '_needs_restore') and runner._needs_restore:
+        try:
+            await runner.restore_running_strategies()
+            runner._needs_restore = False
+        except Exception as exc:
+            logger.warning(f"Failed to restore running strategies for user {current_user.id}: {exc}")
+    
     # If runner has StrategyService, it will automatically filter by user_id
     # Otherwise, return all strategies (backward compatibility)
     return runner.list_strategies()
@@ -69,6 +77,14 @@ async def register_strategy(
         InvalidLeverageError: If leverage is invalid or not provided
         ValidationError: If request data is invalid
     """
+    # Restore running strategies if needed (lazy restoration)
+    if hasattr(runner, '_needs_restore') and runner._needs_restore:
+        try:
+            await runner.restore_running_strategies()
+            runner._needs_restore = False
+        except Exception as exc:
+            logger.warning(f"Failed to restore running strategies for user {current_user.id}: {exc}")
+    
     try:
         # Get account UUID from account_id
         account_id = payload.account_id.lower() if payload.account_id else "default"

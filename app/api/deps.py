@@ -174,23 +174,19 @@ def get_strategy_runner(
             if strategy_id not in enhanced_runner._strategies:
                 enhanced_runner._strategies[strategy_id] = summary
         
-        # Restore running strategies for this user (only if not already restored)
-        # Use a flag in app state to track which users have been restored
+        # Mark that strategies need to be restored for this user (lazy restoration)
+        # Restoration will happen when strategies are actually accessed (e.g., in list_strategies)
+        # This avoids the "no running event loop" error when called from sync dependency
         app_state = request.app.state
         if not hasattr(app_state, '_strategy_restore_flags'):
             app_state._strategy_restore_flags = set()
         
         restore_key = f"user_{current_user.id}"
         if restore_key not in app_state._strategy_restore_flags:
-            # First time this user's strategies are accessed - restore running ones
-            import asyncio
-            try:
-                # Schedule restoration in background (non-blocking)
-                asyncio.create_task(enhanced_runner.restore_running_strategies())
-                app_state._strategy_restore_flags.add(restore_key)
-            except Exception as exc:
-                from loguru import logger
-                logger.error(f"Failed to schedule strategy restoration for user {current_user.id}: {exc}")
+            # Mark that restoration is needed - will be done lazily when strategies are accessed
+            app_state._strategy_restore_flags.add(restore_key)
+            # Store a flag on the runner itself to trigger restoration on first access
+            enhanced_runner._needs_restore = True
         
         return enhanced_runner
     

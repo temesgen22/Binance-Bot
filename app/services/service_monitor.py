@@ -284,6 +284,8 @@ class ServiceMonitor:
     async def check_database_connection(self) -> bool:
         """Check if database connection is working.
         
+        Uses automatic connection recovery - will attempt to reconnect if connection is lost.
+        
         Returns:
             True if database is connected, False otherwise
         """
@@ -291,12 +293,14 @@ class ServiceMonitor:
             from app.core.database import get_engine
             from sqlalchemy import text
             
-            engine = get_engine()
+            # get_engine() now has automatic recovery built in
+            engine = get_engine(retry_on_failure=True)
             with engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Database connection check failed: {e}")
             return False
     
     async def monitor_loop(self) -> None:

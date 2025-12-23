@@ -66,7 +66,7 @@ def detailed_health(
         "services": {}
     }
     
-    # Check Database
+    # Check Database (automatic recovery is handled by get_db_session_dependency)
     db_status = {"status": "unknown", "response_time_ms": None, "error": None}
     try:
         start_time = time.time()
@@ -78,15 +78,21 @@ def detailed_health(
             "response_time_ms": round(response_time, 2),
             "database_url": get_settings().database_url.split("@")[-1] if "@" in get_settings().database_url else "***"
         }
-    except Exception as exc:
+    except (RuntimeError, Exception) as exc:
+        # Database connection error - automatic recovery should have been attempted
+        # by get_db_session_dependency, but if it still fails, report as unhealthy
         db_status = {
             "status": "unhealthy",
-            "error": str(exc),
+            "error": str(exc)[:200],  # Truncate long error messages
             "error_type": type(exc).__name__
         }
         health_status["status"] = "degraded"
+        logger.warning(f"Database health check failed: {exc}")
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass  # Ignore errors during cleanup
     
     health_status["services"]["database"] = db_status
     
