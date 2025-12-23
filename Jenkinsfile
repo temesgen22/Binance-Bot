@@ -179,7 +179,7 @@ pipeline {
                   fi
                 fi
 
-        echo "🔄 Running migrations..."
+                echo "🔄 Running migrations..."
         # Run migrations and capture output
         # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
         MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
@@ -199,20 +199,50 @@ pipeline {
                   fi
                 fi
 
+                # Wait for FastAPI service to fully initialize (lifespan startup can take time)
+                echo "⏳ Waiting for FastAPI service to initialize (30 seconds)..."
+                sleep 30
+
+                # Check if container is running
+                echo "🔍 Checking container status..."
+                if ! docker ps --format '{{.Names}}' | grep -q '^binance-bot-api$'; then
+                  echo "❌ API container is not running!"
+                  echo "📋 Container status:"
+                  docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+                  echo "📋 API container logs (last 100 lines):"
+                  docker logs --tail 100 binance-bot-api || true
+                  exit 1
+                fi
+
+                # Check if container is healthy (if healthcheck is configured)
+                CONTAINER_STATUS=$(docker inspect --format='{{.State.Status}}' binance-bot-api 2>/dev/null || echo "unknown")
+                if [ "$CONTAINER_STATUS" != "running" ]; then
+                  echo "⚠️  Container status: $CONTAINER_STATUS"
+                  echo "📋 API container logs (last 100 lines):"
+                  docker logs --tail 100 binance-bot-api || true
+                fi
+
                 echo "✅ Health check (internal)..."
-                for i in 1 2 3 4 5; do
-                  if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null; then
+                HEALTH_CHECK_PASSED=false
+                for i in 1 2 3 4 5 6; do
+                  if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
                     echo "✅ Internal health check OK"
+                    HEALTH_CHECK_PASSED=true
                     break
                   fi
-                  echo "⚠️ Health failed ($i/5), retrying..."
+                  echo "⚠️ Health failed ($i/6), retrying in 5 seconds..."
                   sleep 5
                 done
 
                 # Verify internal health one more time
-                if ! docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
-                  echo "❌ Internal health check failed"
-                  docker logs --tail 80 binance-bot-api || true
+                if [ "$HEALTH_CHECK_PASSED" != "true" ]; then
+                  echo "❌ Internal health check failed after all retries"
+                  echo "📋 Container status:"
+                  docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+                  echo "📋 API container logs (last 100 lines):"
+                  docker logs --tail 100 binance-bot-api || true
+                  echo "📋 Checking if port 8000 is listening inside container:"
+                  docker exec binance-bot-api sh -c "netstat -tlnp 2>/dev/null | grep 8000 || ss -tlnp 2>/dev/null | grep 8000 || echo 'Port 8000 not found in netstat/ss output'" || true
                   exit 1
                 fi
 
@@ -262,13 +292,29 @@ REMOTE
                    sleep 10;
                    echo '🔄 Running database migrations...';
                    docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>/dev/null || echo '⚠️  Migrations failed';
-                   echo '✅ Verifying deployment...';
-                   sleep 5;
-                   MAX_RETRIES=5;
+                   echo '⏳ Waiting for FastAPI service to initialize (30 seconds)...';
+                   sleep 30;
+                   echo '🔍 Checking container status...';
+                   if ! docker ps --format '{{.Names}}' | grep -q '^binance-bot-api$'; then
+                     echo '❌ API container is not running!';
+                     echo '📋 Container status:';
+                     docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}';
+                     echo '📋 API container logs (last 100 lines):';
+                     docker logs --tail 100 binance-bot-api || true;
+                     exit 1;
+                   fi;
+                   CONTAINER_STATUS=\$(docker inspect --format='{{.State.Status}}' binance-bot-api 2>/dev/null || echo 'unknown');
+                   if [ \"\$CONTAINER_STATUS\" != \"running\" ]; then
+                     echo \"⚠️  Container status: \$CONTAINER_STATUS\";
+                     echo '📋 API container logs (last 100 lines):';
+                     docker logs --tail 100 binance-bot-api || true;
+                   fi;
+                   echo '✅ Verifying deployment with health check...';
+                   MAX_RETRIES=6;
                    RETRY_COUNT=0;
                    HEALTH_CHECK_PASSED=false;
                    while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
-                     if docker exec binance-bot-api curl -f http://localhost:8000/health > /dev/null 2>&1; then
+                     if docker exec binance-bot-api curl -fsS http://localhost:8000/health > /dev/null 2>&1; then
                        echo '✅ Health check passed!';
                        HEALTH_CHECK_PASSED=true;
                        break;
@@ -284,8 +330,10 @@ REMOTE
                      echo '❌ Health check failed after \$MAX_RETRIES attempts!';
                      echo '📋 Container status:';
                      docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}';
-                     echo '📋 API container logs (last 50 lines):';
-                     docker logs --tail 50 binance-bot-api || true;
+                     echo '📋 API container logs (last 100 lines):';
+                     docker logs --tail 100 binance-bot-api || true;
+                     echo '📋 Checking if port 8000 is listening inside container:';
+                     docker exec binance-bot-api sh -c 'netstat -tlnp 2>/dev/null | grep 8000 || ss -tlnp 2>/dev/null | grep 8000 || echo \"Port 8000 not found in netstat/ss output\"' || true;
                      echo '❌ Deployment verification failed - pipeline will fail';
                      exit 1;
                    fi
