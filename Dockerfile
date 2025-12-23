@@ -30,8 +30,8 @@ USER app
 EXPOSE 8000
 
 # Health check configuration (matches docker-compose.prod.yml)
-# interval: 10s, timeout: 5s, start-period: 120s, retries: 12
-HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=12 \
-  CMD curl -fsS http://localhost:8000/health || exit 1
+# interval: 10s, timeout: 10s (increased for Redis checks), start-period: 120s, retries: 12
+HEALTHCHECK --interval=10s --timeout=10s --start-period=120s --retries=12 \
+  CMD curl -fsS --max-time 8 http://localhost:8000/health || exit 1
 
 CMD ["uvicorn", "app.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--factory"]

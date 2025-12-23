@@ -50,23 +50,53 @@ def health(
         except Exception:
             pass
     
-    # Check Redis connection (if enabled)
+    # Check Redis connection (if enabled) - with quick timeout to avoid blocking health check
     redis_status = "disabled"
     settings = get_settings()
     if settings.redis_enabled:
         try:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-            if redis_storage.enabled and redis_storage._client:
-                redis_storage._client.ping()
-                redis_status = "ok"
-            else:
-                logger.warning("Redis is enabled but connection failed")
+            import socket
+            # Quick socket connection test with timeout (1 second max)
+            # Parse Redis URL to get host and port
+            redis_url = settings.redis_url
+            if "://" in redis_url:
+                redis_url = redis_url.split("://")[1]
+            parts = redis_url.split(":")
+            redis_host = parts[0] if parts else "localhost"
+            redis_port = int(parts[1].split("/")[0]) if len(parts) > 1 else 6379
+            
+            # Quick socket connection test (non-blocking, 1 second timeout)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)  # 1 second timeout
+            try:
+                result = sock.connect_ex((redis_host, redis_port))
+                sock.close()
+                if result == 0:
+                    # Socket is reachable, try quick Redis ping with timeout
+                    try:
+                        import redis
+                        # Create Redis client with short timeout
+                        redis_client = redis.from_url(
+                            settings.redis_url,
+                            socket_timeout=1.0,
+                            socket_connect_timeout=1.0,
+                            decode_responses=True
+                        )
+                        redis_client.ping()
+                        redis_status = "ok"
+                        redis_client.close()
+                    except Exception:
+                        redis_status = "failed"
+                else:
+                    redis_status = "failed"
+            except (socket.timeout, OSError, Exception):
                 redis_status = "failed"
+                try:
+                    sock.close()
+                except Exception:
+                    pass
         except Exception as redis_exc:
-            logger.error(f"Redis health check failed: {redis_exc}")
+            logger.debug(f"Redis health check failed: {redis_exc}")
             redis_status = "failed"
             # Don't fail health check if Redis fails, but log it
             # Redis is optional, database is critical

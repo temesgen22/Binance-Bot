@@ -224,7 +224,7 @@ pipeline {
 
                 echo "✅ Waiting for Docker health check to pass..."
                 # Wait for Docker's built-in health check (from Dockerfile)
-                # Health check: interval=10s, timeout=5s, start-period=120s, retries=12
+                # Health check: interval=10s, timeout=10s, start-period=120s, retries=12
                 # Maximum wait time: start-period (120s) + (retries * interval) = 120 + (12 * 10) = 240s
                 MAX_WAIT_TIME=240
                 ELAPSED=0
