@@ -200,8 +200,8 @@ pipeline {
                 fi
 
                 # Wait for FastAPI service to fully initialize (lifespan startup can take time)
-                echo "⏳ Waiting for FastAPI service to initialize (30 seconds)..."
-                sleep 30
+                echo "⏳ Waiting for FastAPI service to initialize (180 seconds)..."
+                sleep 180
 
                 # Check if container is running
                 echo "🔍 Checking container status..."
