@@ -136,13 +136,17 @@ echo ''
 echo '⏳ Waiting for PostgreSQL to be ready...'
 sleep 5
 
-# Verify database exists (PostgreSQL container creates it automatically on first run)
+# Verify database exists and create if it doesn't
 echo '🔍 Verifying database exists...'
 if docker exec binance-bot-postgres psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw binance_bot; then
-    echo '✅ Database exists (or will be created automatically by PostgreSQL container)'
+    echo '✅ Database exists'
 else
-    echo '⚠️  Database not found, but PostgreSQL container will create it automatically'
-    echo '   The database will be created when the container starts (if using POSTGRES_DB env var)'
+    echo '⚠️  Database not found, creating it...'
+    if docker exec binance-bot-postgres psql -U postgres -c "CREATE DATABASE binance_bot;" 2>/dev/null; then
+        echo '✅ Database created successfully'
+    else
+        echo '❌ Failed to create database. Attempting to continue anyway...'
+    fi
 fi
 
 # Run database migrations

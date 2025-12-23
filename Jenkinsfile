@@ -166,6 +166,18 @@ pipeline {
                 echo "⏳ Waiting..."
                 sleep 10
 
+                echo "🔍 Verifying database exists..."
+                if docker exec binance-bot-postgres psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw binance_bot; then
+                  echo "✅ Database exists"
+                else
+                  echo "⚠️  Database not found, creating it..."
+                  if docker exec binance-bot-postgres psql -U postgres -c "CREATE DATABASE binance_bot;" 2>/dev/null; then
+                    echo "✅ Database created successfully"
+                  else
+                    echo "❌ Failed to create database. Attempting to continue anyway..."
+                  fi
+                fi
+
         echo "🔄 Running migrations..."
         # Run migrations and capture output
         # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
