@@ -49,7 +49,7 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
         - success: True if initialization succeeded, False otherwise
         - error: The exception that occurred if initialization failed, None otherwise
     """
-    global _engine, _SessionLocal
+    global _engine, _SessionLocal, _last_connection_state
     
     if _engine is not None:
         logger.warning("Database already initialized")
@@ -89,7 +89,6 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
             logger.info("Database connection pool initialized successfully")
             
             # Update connection state
-            global _last_connection_state
             _last_connection_state = True
             
             # Return success (and error if we had retries)
@@ -136,7 +135,6 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
     logger.error(f"Failed to initialize database after {max_retries} attempts")
     
     # Update connection state
-    global _last_connection_state
     _last_connection_state = False
     
     return False, last_error
