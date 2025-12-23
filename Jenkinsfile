@@ -296,7 +296,7 @@ REMOTE
                    echo '⏳ Waiting for FastAPI service to initialize (30 seconds)...';
                    sleep 30;
                    echo '🔍 Checking container status...';
-                   if ! docker ps --format '{{.Names}}' | grep -q '^binance-bot-api$'; then
+                   if ! docker ps --format '{{.Names}}' | grep -q '^binance-bot-api\$'; then
                      echo '❌ API container is not running!';
                      echo '📋 Container status:';
                      docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}';
