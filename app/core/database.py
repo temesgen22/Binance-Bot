@@ -17,6 +17,19 @@ from app.models.db_models import Base
 # Global engine and session factory
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+# Global notification callback for connection failures
+_notification_callback = None
+_last_connection_state = None  # Track connection state to detect changes
+
+
+def set_notification_callback(callback):
+    """Set a callback function to be called on database connection failures.
+    
+    Args:
+        callback: Async function that takes (error, retry_count, max_retries) as arguments
+    """
+    global _notification_callback
+    _notification_callback = callback
 
 
 def get_database_url() -> str:
@@ -75,12 +88,42 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
             
             logger.info("Database connection pool initialized successfully")
             
+            # Update connection state
+            global _last_connection_state
+            _last_connection_state = True
+            
             # Return success (and error if we had retries)
             return True, last_error if attempt > 1 else None
             
         except Exception as e:
             last_error = e
             logger.error(f"Database connection attempt {attempt}/{max_retries} failed: {e}")
+            
+            # Send notification on connection failure (only on last attempt to avoid spam)
+            if attempt == max_retries and _notification_callback:
+                try:
+                    import asyncio
+                    # Try to run the async callback
+                    loop = None
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        pass
+                    
+                    if loop and loop.is_running():
+                        # If loop is running, schedule the callback
+                        asyncio.create_task(_notification_callback(e, attempt, max_retries))
+                    elif loop:
+                        # If loop exists but not running, run it
+                        loop.run_until_complete(_notification_callback(e, attempt, max_retries))
+                    else:
+                        # Create new event loop if needed
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(_notification_callback(e, attempt, max_retries))
+                        loop.close()
+                except Exception as notify_exc:
+                    logger.warning(f"Failed to send database connection failure notification: {notify_exc}")
             
             # Wait before retry (exponential backoff)
             if attempt < max_retries:
@@ -91,6 +134,11 @@ def init_database(max_retries: int = 3) -> tuple[bool, Optional[Exception]]:
     
     # All retries failed
     logger.error(f"Failed to initialize database after {max_retries} attempts")
+    
+    # Update connection state
+    global _last_connection_state
+    _last_connection_state = False
+    
     return False, last_error
 
 

@@ -63,6 +63,7 @@ from app.services.order_executor import OrderExecutor
 from app.services.strategy_runner import StrategyRunner
 from app.services.notifier import TelegramNotifier, NotificationService
 from app.services.telegram_commands import TelegramCommandHandler
+from app.services.service_monitor import ServiceMonitor
 
 
 def create_app() -> FastAPI:
@@ -153,6 +154,24 @@ def create_app() -> FastAPI:
             strategy_runner=runner,
             enabled=settings.telegram_enabled,
         )
+    
+    # Initialize service monitor for database, FastAPI, and Docker services
+    service_monitor = None
+    if notification_service:
+        service_monitor = ServiceMonitor(
+            notification_service=notification_service,
+            check_interval=60,  # Check every 60 seconds
+        )
+        
+        # Set up database connection failure notification callback
+        async def db_failure_callback(error, retry_count, max_retries):
+            """Callback for database connection failures."""
+            await service_monitor.notify_database_connection_failed(
+                error, retry_count, max_retries
+            )
+        
+        from app.core.database import set_notification_callback
+        set_notification_callback(db_failure_callback)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -251,6 +270,14 @@ def create_app() -> FastAPI:
                 except Exception as exc:
                     logger.warning(f"Failed to send server restart notification: {exc}")
             
+            # Start service monitor
+            if service_monitor:
+                try:
+                    service_monitor.start()
+                    logger.info("Service monitor started")
+                except Exception as exc:
+                    logger.warning(f"Failed to start service monitor: {exc}")
+            
             yield
         except asyncio.CancelledError:
             # Handle cancellation during yield (when shutdown is triggered)
@@ -310,6 +337,13 @@ def create_app() -> FastAPI:
                                 logger.warning(f"Error waiting for background tasks to cancel: {e}")
                 except (asyncio.CancelledError, Exception) as e:
                     logger.debug(f"Error cancelling background tasks: {type(e).__name__}")
+                
+                # Stop service monitor
+                try:
+                    if service_monitor:
+                        service_monitor.stop()
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.debug(f"Error stopping service monitor: {type(e).__name__}")
                 
                 # Close database connections (critical - must complete)
                 try:

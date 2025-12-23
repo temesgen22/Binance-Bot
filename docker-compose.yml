@@ -12,6 +12,10 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c log_line_prefix='%m [%p] user=%u db=%d app=%a client=%h '
+      -c log_statement=ddl
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
