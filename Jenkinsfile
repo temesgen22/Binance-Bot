@@ -222,23 +222,40 @@ pipeline {
                   docker logs --tail 100 binance-bot-api || true
                 fi
 
-                echo "✅ Health check (internal)..."
+                echo "✅ Waiting for Docker health check to pass..."
+                # Wait for Docker's built-in health check (from Dockerfile)
+                # Health check: interval=10s, timeout=5s, start-period=120s, retries=12
+                # Maximum wait time: start-period (120s) + (retries * interval) = 120 + (12 * 10) = 240s
+                MAX_WAIT_TIME=240
+                ELAPSED=0
                 HEALTH_CHECK_PASSED=false
-                for i in 1 2 3 4 5 6; do
-                  if docker exec binance-bot-api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
-                    echo "✅ Internal health check OK"
+                
+                while [ $ELAPSED -lt $MAX_WAIT_TIME ]; do
+                  HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' binance-bot-api 2>/dev/null || echo "unknown")
+                  
+                  if [ "$HEALTH_STATUS" = "healthy" ]; then
+                    echo "✅ Docker health check passed (status: $HEALTH_STATUS)"
                     HEALTH_CHECK_PASSED=true
                     break
+                  elif [ "$HEALTH_STATUS" = "unhealthy" ]; then
+                    echo "❌ Docker health check reports unhealthy"
+                    break
+                  else
+                    # Status is "starting" or "unknown" - still waiting
+                    echo "⏳ Health check status: $HEALTH_STATUS (waiting...)"
+                    sleep 10
+                    ELAPSED=$((ELAPSED + 10))
                   fi
-                  echo "⚠️ Health failed ($i/6), retrying in 5 seconds..."
-                  sleep 5
                 done
 
-                # Verify internal health one more time
+                # Verify health check passed
                 if [ "$HEALTH_CHECK_PASSED" != "true" ]; then
-                  echo "❌ Internal health check failed after all retries"
+                  FINAL_STATUS=$(docker inspect --format='{{.State.Health.Status}}' binance-bot-api 2>/dev/null || echo "unknown")
+                  echo "❌ Docker health check failed after waiting (final status: $FINAL_STATUS)"
                   echo "📋 Container status:"
                   docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+                  echo "📋 Health check details:"
+                  docker inspect --format='{{json .State.Health}}' binance-bot-api 2>/dev/null | python3 -m json.tool 2>/dev/null || docker inspect binance-bot-api | grep -A 20 '"Health"' || true
                   echo "📋 API container logs (last 100 lines):"
                   docker logs --tail 100 binance-bot-api || true
                   echo "📋 Checking if port 8000 is listening inside container:"
@@ -310,27 +327,32 @@ REMOTE
                      echo '📋 API container logs (last 100 lines):';
                      docker logs --tail 100 binance-bot-api || true;
                    fi;
-                   echo '✅ Verifying deployment with health check...';
-                   MAX_RETRIES=6;
-                   RETRY_COUNT=0;
+                   echo '✅ Waiting for Docker health check to pass...';
+                   MAX_WAIT_TIME=240;
+                   ELAPSED=0;
                    HEALTH_CHECK_PASSED=false;
-                   while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
-                     if docker exec binance-bot-api curl -fsS http://localhost:8000/health > /dev/null 2>&1; then
-                       echo '✅ Health check passed!';
+                   while [ \$ELAPSED -lt \$MAX_WAIT_TIME ]; do
+                     HEALTH_STATUS=\$(docker inspect --format='{{.State.Health.Status}}' binance-bot-api 2>/dev/null || echo 'unknown');
+                     if [ \"\$HEALTH_STATUS\" = 'healthy' ]; then
+                       echo '✅ Docker health check passed (status: '\$HEALTH_STATUS')';
                        HEALTH_CHECK_PASSED=true;
                        break;
+                     elif [ \"\$HEALTH_STATUS\" = 'unhealthy' ]; then
+                       echo '❌ Docker health check reports unhealthy';
+                       break;
                      else
-                       RETRY_COUNT=\$((RETRY_COUNT + 1));
-                       if [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; then
-                         echo \"⚠️  Health check failed (attempt \$RETRY_COUNT/\$MAX_RETRIES), retrying in 5 seconds...\";
-                         sleep 5;
-                       fi;
+                       echo '⏳ Health check status: '\$HEALTH_STATUS' (waiting...)';
+                       sleep 10;
+                       ELAPSED=\$((ELAPSED + 10));
                      fi;
                    done;
-                   if [ \"\$HEALTH_CHECK_PASSED\" != \"true\" ]; then
-                     echo '❌ Health check failed after \$MAX_RETRIES attempts!';
+                   if [ \"\$HEALTH_CHECK_PASSED\" != 'true' ]; then
+                     FINAL_STATUS=\$(docker inspect --format='{{.State.Health.Status}}' binance-bot-api 2>/dev/null || echo 'unknown');
+                     echo '❌ Docker health check failed after waiting (final status: '\$FINAL_STATUS')';
                      echo '📋 Container status:';
                      docker ps -a --filter name=binance-bot-api --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}';
+                     echo '📋 Health check details:';
+                     docker inspect --format='{{json .State.Health}}' binance-bot-api 2>/dev/null | python3 -m json.tool 2>/dev/null || docker inspect binance-bot-api | grep -A 20 '"Health"' || true;
                      echo '📋 API container logs (last 100 lines):';
                      docker logs --tail 100 binance-bot-api || true;
                      echo '📋 Checking if port 8000 is listening inside container:';
