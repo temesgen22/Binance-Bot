@@ -184,7 +184,11 @@ async def _fetch_historical_klines(
     start_time: datetime,
     end_time: datetime
 ) -> list[list]:
-    """Fetch historical klines with multiple fallback strategies.
+    """Fetch historical klines with pagination support for large time ranges.
+    
+    Binance API limits: Maximum 1000 candles per request.
+    This function implements pagination to fetch all data for large time ranges
+    (e.g., 30 days of 1-minute klines = ~43,200 candles).
     
     Args:
         client: BinanceClient instance
@@ -194,7 +198,7 @@ async def _fetch_historical_klines(
         end_time: End time (timezone-aware datetime)
         
     Returns:
-        List of klines in Binance format
+        List of klines in Binance format, sorted by timestamp
         
     Raises:
         HTTPException: If klines cannot be fetched or insufficient data
@@ -212,44 +216,99 @@ async def _fetch_historical_klines(
     duration_seconds = (end_timestamp - start_timestamp) / 1000
     estimated_candles = int(duration_seconds / interval_seconds) + 200  # Add buffer
     
-    # Fetch historical klines
+    # Binance API limit: 1000 candles per request
+    MAX_KLINES_PER_REQUEST = 1000
+    
+    # Fetch historical klines with pagination
     all_klines = []
     try:
         # Use python-binance client directly for historical data
         rest = client._ensure()
         
-        # Use futures_historical_klines for historical data (proper method)
-        # This method is specifically designed for fetching historical klines with start/end times
-        try:
-            # Prefer timestamp-based approach to avoid timezone interpretation issues
-            # Use futures_klines with startTime/endTime (timestamps in milliseconds) for unambiguous UTC
-            try:
-                limit = min(estimated_candles, 1500)
-                logger.info(f"Fetching historical klines for {symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
-                klines = rest.futures_klines(
-                    symbol=symbol,
-                    interval=interval,
-                    limit=limit,
-                    startTime=start_timestamp,
-                    endTime=end_timestamp
+        # Check if we need pagination
+        needs_pagination = estimated_candles > MAX_KLINES_PER_REQUEST
+        
+        if needs_pagination:
+            logger.info(
+                f"Large time range detected: ~{estimated_candles} candles needed. "
+                f"Using pagination to fetch data in chunks of {MAX_KLINES_PER_REQUEST}."
+            )
+            
+            # Pagination: Fetch data in chunks
+            current_start = start_timestamp
+            chunk_count = 0
+            max_chunks = (estimated_candles // MAX_KLINES_PER_REQUEST) + 10  # Safety limit
+            
+            while current_start < end_timestamp and chunk_count < max_chunks:
+                chunk_count += 1
+                
+                # Calculate end time for this chunk (current_start + MAX_KLINES_PER_REQUEST candles)
+                chunk_end_timestamp = min(
+                    current_start + (MAX_KLINES_PER_REQUEST * interval_seconds * 1000),
+                    end_timestamp
                 )
-                if klines:
-                    # Filter by time range to ensure accuracy (in case limit cuts off)
-                    all_klines = [
-                        k for k in klines
+                
+                try:
+                    logger.debug(
+                        f"Fetching chunk {chunk_count}: {current_start} to {chunk_end_timestamp} "
+                        f"(~{MAX_KLINES_PER_REQUEST} candles)"
+                    )
+                    
+                    # Fetch chunk
+                    chunk_klines = rest.futures_klines(
+                        symbol=symbol,
+                        interval=interval,
+                        limit=MAX_KLINES_PER_REQUEST,
+                        startTime=current_start,
+                        endTime=chunk_end_timestamp
+                    )
+                    
+                    if not chunk_klines:
+                        logger.warning(f"No data returned for chunk {chunk_count}, stopping pagination")
+                        break
+                    
+                    # Filter to ensure we're within time range
+                    filtered_chunk = [
+                        k for k in chunk_klines
                         if start_timestamp <= int(k[0]) <= end_timestamp
                     ]
-                    logger.info(f"Fetched {len(all_klines)} klines within time range using futures_klines with timestamps")
-                else:
-                    all_klines = []
-            except (TypeError, AttributeError) as timestamp_error:
-                logger.warning(f"futures_klines with startTime/endTime failed: {timestamp_error}, trying string format")
-                # Fallback: try futures_historical_klines with string format
+                    
+                    if not filtered_chunk:
+                        logger.warning(f"Chunk {chunk_count} had no data in time range, stopping pagination")
+                        break
+                    
+                    all_klines.extend(filtered_chunk)
+                    logger.debug(f"Chunk {chunk_count}: Added {len(filtered_chunk)} klines (total: {len(all_klines)})")
+                    
+                    # Move to next chunk: start from the last candle's timestamp + 1 interval
+                    last_candle_time = int(chunk_klines[-1][0])
+                    current_start = last_candle_time + (interval_seconds * 1000)
+                    
+                    # If we got fewer candles than requested, we've reached the end
+                    if len(chunk_klines) < MAX_KLINES_PER_REQUEST:
+                        logger.debug(f"Received {len(chunk_klines)} candles (less than {MAX_KLINES_PER_REQUEST}), reached end of data")
+                        break
+                        
+                except Exception as chunk_error:
+                    logger.error(f"Error fetching chunk {chunk_count}: {chunk_error}")
+                    # Continue with next chunk if possible
+                    if chunk_count >= 3:  # Stop after 3 consecutive errors
+                        raise
+                    current_start += (MAX_KLINES_PER_REQUEST * interval_seconds * 1000)
+                    continue
+            
+            logger.info(f"Pagination complete: Fetched {len(all_klines)} klines in {chunk_count} chunks")
+            
+        else:
+            # Single request is sufficient
+            logger.info(f"Fetching historical klines for {symbol} using timestamps: {start_timestamp} to {end_timestamp} (UTC)")
+            
+            try:
+                # Try futures_historical_klines first (handles date ranges automatically)
                 if hasattr(rest, 'futures_historical_klines'):
-                    # Use string format as fallback (may have timezone interpretation issues)
                     start_str = start_time.strftime("%d %b %Y %H:%M:%S")
                     end_str = end_time.strftime("%d %b %Y %H:%M:%S")
-                    logger.info(f"Fallback: Using futures_historical_klines with string format: {start_str} to {end_str}")
+                    logger.debug(f"Using futures_historical_klines with string format: {start_str} to {end_str}")
                     try:
                         klines = rest.futures_historical_klines(
                             symbol=symbol,
@@ -274,44 +333,32 @@ async def _fetch_historical_klines(
                                     f"Differences: {time_diff_start/1000/60:.1f} min start, {time_diff_end/1000/60:.1f} min end"
                                 )
                     except Exception as str_format_error:
-                        logger.error(f"futures_historical_klines with string format also failed: {str_format_error}")
-                        all_klines = []
-                else:
-                    # Last fallback: fetch recent and filter
-                    limit = min(estimated_candles, 1500)
-                    logger.warning(f"Using last fallback: futures_klines with limit={limit}, then filtering")
-                    try:
-                        klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
-                        # Filter by time range
+                        logger.warning(f"futures_historical_klines failed: {str_format_error}, trying timestamp method")
+                        # Fall through to timestamp method
+                
+                # Fallback: Use futures_klines with timestamps
+                if not all_klines:
+                    limit = min(estimated_candles, MAX_KLINES_PER_REQUEST)
+                    klines = rest.futures_klines(
+                        symbol=symbol,
+                        interval=interval,
+                        limit=limit,
+                        startTime=start_timestamp,
+                        endTime=end_timestamp
+                    )
+                    if klines:
                         all_klines = [
-                            k for k in (klines or [])
+                            k for k in klines
                             if start_timestamp <= int(k[0]) <= end_timestamp
                         ]
-                        logger.info(f"Fetched {len(all_klines)} klines after filtering")
-                    except Exception as fallback_error:
-                        logger.error(f"All methods failed to fetch klines: {fallback_error}")
+                        logger.info(f"Fetched {len(all_klines)} klines within time range using futures_klines with timestamps")
+                    else:
                         all_klines = []
+                        
             except Exception as e:
-                logger.error(f"Error in timestamp-based klines fetch: {e}")
-                all_klines = []
-        except Exception as fetch_error:
-            logger.error(f"Error fetching historical klines: {fetch_error}")
-            # Try fallback method
-            try:
-                limit = min(estimated_candles, 1500)
-                logger.info(f"Trying fallback method with limit={limit}")
-                klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
-                all_klines = [
-                    k for k in (klines or [])
-                    if start_timestamp <= int(k[0]) <= end_timestamp
-                ]
-                logger.info(f"Fallback fetched {len(all_klines)} klines after filtering")
-            except Exception as fallback_error:
-                logger.error(f"Fallback method also failed: {fallback_error}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to fetch historical data: {fetch_error}. Fallback also failed: {fallback_error}"
-                )
+                logger.error(f"Error in single-request klines fetch: {e}")
+                raise
+    
     except Exception as e:
         logger.error(f"Error fetching historical klines: {e}")
         raise HTTPException(
@@ -319,12 +366,28 @@ async def _fetch_historical_klines(
             detail=f"Failed to fetch historical data: {e}"
         )
     
-    logger.info(f"Fetched {len(all_klines)} total klines from Binance")
+    # Remove duplicates and sort by timestamp
+    if all_klines:
+        # Remove duplicates based on timestamp
+        seen_timestamps = set()
+        unique_klines = []
+        for k in all_klines:
+            timestamp = int(k[0])
+            if timestamp not in seen_timestamps:
+                seen_timestamps.add(timestamp)
+                unique_klines.append(k)
+        
+        # Sort by timestamp
+        unique_klines.sort(key=lambda k: int(k[0]))
+        all_klines = unique_klines
+    
+    logger.info(f"Fetched {len(all_klines)} total unique klines from Binance (requested ~{estimated_candles})")
     
     if len(all_klines) < 50:
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient historical data: only {len(all_klines)} candles available. Need at least 50."
+            detail=f"Insufficient historical data: only {len(all_klines)} candles available. Need at least 50. "
+                   f"Requested time range: {start_time} to {end_time} ({estimated_candles} estimated candles)."
         )
     
     # Filter klines to requested time range
