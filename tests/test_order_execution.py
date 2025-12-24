@@ -121,13 +121,16 @@ class TestOrderExecutor:
         assert result is not None
         assert result.symbol == "BTCUSDT"
         assert result.side == "BUY"
-        mock_binance_client.place_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="BUY",
-            quantity=0.001,
-            order_type="MARKET",
-            reduce_only=False,
-        )
+        # Verify place_order was called with client_order_id (for idempotency)
+        mock_binance_client.place_order.assert_called_once()
+        call_args = mock_binance_client.place_order.call_args
+        assert call_args.kwargs["symbol"] == "BTCUSDT"
+        assert call_args.kwargs["side"] == "BUY"
+        assert call_args.kwargs["quantity"] == 0.001
+        assert call_args.kwargs["order_type"] == "MARKET"
+        assert call_args.kwargs["reduce_only"] is False
+        assert "client_order_id" in call_args.kwargs
+        assert call_args.kwargs["client_order_id"].startswith("IDEMP_")
     
     def test_sell_signal_creates_order(self, order_executor, mock_binance_client, mock_order_response):
         """Test that SELL signals create orders."""
@@ -146,13 +149,16 @@ class TestOrderExecutor:
         
         assert result is not None
         assert result.side == "SELL"
-        mock_binance_client.place_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            order_type="MARKET",
-            reduce_only=False,
-        )
+        # Verify place_order was called with client_order_id (for idempotency)
+        mock_binance_client.place_order.assert_called_once()
+        call_args = mock_binance_client.place_order.call_args
+        assert call_args.kwargs["symbol"] == "BTCUSDT"
+        assert call_args.kwargs["side"] == "SELL"
+        assert call_args.kwargs["quantity"] == 0.001
+        assert call_args.kwargs["order_type"] == "MARKET"
+        assert call_args.kwargs["reduce_only"] is False
+        assert "client_order_id" in call_args.kwargs
+        assert call_args.kwargs["client_order_id"].startswith("IDEMP_")
     
     def test_close_signal_uses_reduce_only(self, order_executor, mock_binance_client, mock_order_response):
         """Test that CLOSE signals use reduce_only=True."""
@@ -172,13 +178,16 @@ class TestOrderExecutor:
         
         assert result is not None
         # CLOSE maps to SELL (to close position), but reduce_only=True
-        mock_binance_client.place_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",  # CLOSE maps to SELL (closing long)
-            quantity=0.001,
-            order_type="MARKET",
-            reduce_only=True,  # CLOSE uses reduce_only
-        )
+        # Verify place_order was called with client_order_id (for idempotency)
+        mock_binance_client.place_order.assert_called_once()
+        call_args = mock_binance_client.place_order.call_args
+        assert call_args.kwargs["symbol"] == "BTCUSDT"
+        assert call_args.kwargs["side"] == "SELL"  # CLOSE maps to SELL (closing long)
+        assert call_args.kwargs["quantity"] == 0.001
+        assert call_args.kwargs["order_type"] == "MARKET"
+        assert call_args.kwargs["reduce_only"] is True  # CLOSE uses reduce_only
+        assert "client_order_id" in call_args.kwargs
+        assert call_args.kwargs["client_order_id"].startswith("IDEMP_")
 
 
 class TestStrategyRunnerOrderExecution:
@@ -338,13 +347,16 @@ class TestStrategyRunnerOrderExecution:
             mock_binance_client.place_order.return_value = mock_order_response
             await runner._execute(signal, strategy_summary)
 
-        mock_binance_client.place_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.5,
-            order_type="MARKET",
-            reduce_only=True,
-        )
+        # Verify place_order was called with client_order_id (for idempotency)
+        mock_binance_client.place_order.assert_called_once()
+        call_args = mock_binance_client.place_order.call_args
+        assert call_args.kwargs["symbol"] == "BTCUSDT"
+        assert call_args.kwargs["side"] == "SELL"
+        assert call_args.kwargs["quantity"] == 0.5
+        assert call_args.kwargs["order_type"] == "MARKET"
+        assert call_args.kwargs["reduce_only"] is True
+        assert "client_order_id" in call_args.kwargs
+        assert call_args.kwargs["client_order_id"].startswith("IDEMP_")
         assert strategy_summary.position_size == 0
         assert strategy_summary.position_side is None
         assert strategy_summary.entry_price is None
@@ -871,11 +883,23 @@ class TestTradeTrackingAndPersistence:
             order_id=999999,
             status="NEW",
             side="BUY",
-            price=0.0,
-            avg_price=None,
+            price=40000.0,  # Set price to avoid formatting issues
+            avg_price=40000.0,  # Set avg_price to avoid formatting issues
             executed_qty=0.0,
         )
         mock_binance_client.place_order.return_value = invalid_order
+        # Mock get_order_status to return the same invalid order (still NEW after verification)
+        mock_binance_client.get_order_status.return_value = {
+            "orderId": 999999,
+            "status": "NEW",
+            "side": "BUY",
+            "symbol": "BTCUSDT",
+            "executedQty": "0",
+            "price": "40000.0",
+            "avgPrice": "40000.0",
+        }
+        # Mock _parse_order_response to return the invalid order
+        mock_binance_client._parse_order_response = MagicMock(return_value=invalid_order)
         
         with patch.object(
             risk_manager,

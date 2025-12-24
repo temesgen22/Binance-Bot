@@ -99,6 +99,9 @@ class TradeService:
     ) -> DBTrade:
         """Save a trade to database and cache in Redis.
         
+        Uses transaction management: database save is atomic. If database succeeds
+        but Redis fails, database is kept (database is source of truth, Redis is cache).
+        
         Args:
             user_id: User ID
             strategy_id: Strategy UUID (not strategy_id string)
@@ -106,14 +109,20 @@ class TradeService:
         
         Returns:
             DBTrade model instance
+        
+        Raises:
+            Exception: If database save fails (transaction will rollback)
         """
         # Convert OrderResponse to trade dict
         trade_data = self._order_response_to_trade_dict(order, strategy_id, user_id)
         
-        # Save to database
+        # Save to database within transaction (DatabaseService.create_trade handles this)
+        # If this fails, exception is raised and transaction is rolled back
         db_trade = self.db_service.create_trade(trade_data)
         
         # Cache in Redis (sorted set by timestamp for recent trades)
+        # Note: Redis is cache, so if it fails, we don't rollback database
+        # Database is source of truth, Redis is just for performance
         if self.redis and self.redis.enabled:
             try:
                 key = self._redis_key(user_id, str(strategy_id))
@@ -132,7 +141,11 @@ class TradeService:
                     # Keep only last 1000 trades (remove oldest)
                     self.redis._client.zremrangebyrank(key, 0, -1001)
             except Exception as e:
-                logger.warning(f"Redis cache write error for trade {order.order_id}: {e}")
+                logger.warning(
+                    f"Database save succeeded for trade {order.order_id}, "
+                    f"but Redis cache write failed: {e}. "
+                    f"Database is source of truth, continuing."
+                )
         
         return db_trade
     

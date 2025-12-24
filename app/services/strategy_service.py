@@ -197,6 +197,8 @@ class StrategyService(BaseCacheService):
     ) -> StrategySummary:
         """Create a new strategy in database and cache."""
         # Create in database
+        # Create strategy in database within transaction (DatabaseService handles this)
+        # If this fails, exception is raised and transaction is rolled back
         db_strategy = self.db_service.create_strategy(
             user_id=user_id,
             strategy_id=strategy_id,
@@ -214,10 +216,19 @@ class StrategyService(BaseCacheService):
         # Convert to summary
         summary = self._db_strategy_to_summary(db_strategy)
         
-        # Cache in Redis
-        key = self._redis_key(user_id, strategy_id)
-        data = self._strategy_summary_to_dict(summary)
-        self._save_to_cache(key, data)
+        # Cache in Redis (after successful database save)
+        # Note: Redis is cache, so if it fails, we don't rollback database
+        # Database is source of truth, Redis is just for performance
+        try:
+            key = self._redis_key(user_id, strategy_id)
+            data = self._strategy_summary_to_dict(summary)
+            self._save_to_cache(key, data)
+        except Exception as e:
+            logger.warning(
+                f"Database save succeeded for strategy {strategy_id}, "
+                f"but Redis cache write failed: {e}. "
+                f"Database is source of truth, continuing."
+            )
         
         return summary
     
@@ -227,8 +238,26 @@ class StrategyService(BaseCacheService):
         strategy_id: str,
         **updates
     ) -> Optional[StrategySummary]:
-        """Update strategy in database and invalidate cache."""
-        # Update in database
+        """Update strategy in database and invalidate cache.
+        
+        CRITICAL: Database is single source of truth. Updates flow:
+        1. Update database (atomic transaction)
+        2. Invalidate Redis cache (will refresh on next read)
+        3. Return updated summary
+        
+        Uses transaction management: database update is atomic. If database succeeds
+        but cache invalidation fails, database is kept (database is source of truth).
+        
+        Args:
+            user_id: User ID
+            strategy_id: Strategy ID string
+            **updates: Strategy fields to update (e.g., status, position_size, entry_price)
+            
+        Returns:
+            Updated StrategySummary, or None if strategy not found
+        """
+        # Update in database within transaction (DatabaseService handles this)
+        # If this fails, exception is raised and transaction is rolled back
         db_strategy = self.db_service.update_strategy(user_id, strategy_id, **updates)
         
         if not db_strategy:
@@ -238,8 +267,26 @@ class StrategyService(BaseCacheService):
         summary = self._db_strategy_to_summary(db_strategy)
         
         # Invalidate cache (will be refreshed on next read)
-        key = self._redis_key(user_id, strategy_id)
-        self._invalidate_cache(key)
+        # Note: Redis is cache, so if it fails, we don't rollback database
+        # Database is source of truth - cache will be refreshed on next read
+        try:
+            key = self._redis_key(user_id, strategy_id)
+            self._invalidate_cache(key)
+            # Also invalidate runtime state cache if position-related fields changed
+            position_fields = {"position_size", "position_side", "entry_price", "unrealized_pnl", "current_price"}
+            if any(field in updates for field in position_fields):
+                state_key = self._redis_state_key(user_id, strategy_id)
+                if self.redis and self.redis.enabled and self.redis._client:
+                    try:
+                        self.redis._client.delete(state_key)
+                    except Exception:
+                        pass  # Ignore state cache invalidation errors
+        except Exception as e:
+            logger.warning(
+                f"Database update succeeded for strategy {strategy_id}, "
+                f"but Redis cache invalidation failed: {e}. "
+                f"Database is source of truth, continuing."
+            )
         
         return summary
     

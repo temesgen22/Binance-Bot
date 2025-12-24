@@ -111,8 +111,10 @@ def create_app() -> FastAPI:
         client_manager._clients["default"] = default_client
     
     # Create default risk manager and executor for backward compatibility
+    # Note: OrderExecutor doesn't have trade_service/user_id in main.py (single-user mode)
+    # This is fine - idempotency will work with in-memory cache only
     risk = RiskManager(client=default_client)
-    executor = OrderExecutor(client=default_client)
+    executor = OrderExecutor(client=default_client, trade_service=None, user_id=None)
     
     # Initialize Redis storage if enabled
     redis_storage = None

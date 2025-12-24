@@ -455,6 +455,7 @@ class BinanceClient:
         order_type: Literal["MARKET", "LIMIT"] = "MARKET",
         reduce_only: bool = False,
         price: Optional[float] = None,
+        client_order_id: Optional[str] = None,
     ) -> OrderResponse:
         # Round quantity to correct precision for the symbol
         rounded_quantity = self.round_quantity(symbol, quantity)
@@ -468,6 +469,9 @@ class BinanceClient:
             "quantity": rounded_quantity,
             "reduceOnly": reduce_only,  # python-binance expects boolean
         }
+        # Add client_order_id for idempotency (Binance will reject duplicates within 24 hours)
+        if client_order_id:
+            params["newClientOrderId"] = client_order_id
         if order_type == "LIMIT":
             if price is None:
                 raise OrderExecutionError(
@@ -772,6 +776,172 @@ class BinanceClient:
         )
         
         return order_response
+
+    def _parse_order_response(self, response: Dict[str, Any], symbol: str) -> OrderResponse:
+        """Parse Binance order response into OrderResponse model.
+        
+        This is a helper method for converting Binance API responses to OrderResponse.
+        Used for order verification and idempotency checks.
+        
+        Args:
+            response: Binance API response dictionary
+            symbol: Trading symbol
+            
+        Returns:
+            OrderResponse model instance
+        """
+        # Parse response fields (similar to place_order method)
+        price_str = response.get("price", "0") or response.get("price", "0") or "0"
+        avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
+        executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
+        status = response.get("status", "UNKNOWN")
+        order_id = response.get("orderId")
+        
+        # Convert to float
+        try:
+            price = float(price_str) if price_str and str(price_str).strip() and str(price_str) != "0" else 0.0
+        except (ValueError, TypeError):
+            price = 0.0
+        
+        try:
+            if avg_price_str and str(avg_price_str).strip() and str(avg_price_str).strip() != "0":
+                avg_price = float(avg_price_str)
+            else:
+                avg_price = None
+        except (ValueError, TypeError):
+            avg_price = None
+        
+        try:
+            executed_qty = float(executed_qty_str) if executed_qty_str and str(executed_qty_str).strip() else 0.0
+        except (ValueError, TypeError):
+            executed_qty = 0.0
+        
+        # Parse timestamps
+        timestamp = None
+        update_time = None
+        try:
+            if response.get("time"):
+                timestamp_ms = int(response.get("time", 0))
+                if timestamp_ms > 0:
+                    from datetime import datetime, timezone
+                    timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+        
+        try:
+            if response.get("updateTime"):
+                update_time_ms = int(response.get("updateTime", 0))
+                if update_time_ms > 0:
+                    from datetime import datetime, timezone
+                    update_time = datetime.fromtimestamp(update_time_ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+        
+        # Parse commission
+        commission = None
+        commission_asset = None
+        try:
+            commission_str = response.get("commission") or response.get("commissionFee")
+            if commission_str:
+                commission = float(commission_str)
+            commission_asset = response.get("commissionAsset")
+        except (ValueError, TypeError):
+            pass
+        
+        # Position side
+        position_side = None
+        pos_side = response.get("positionSide")
+        if pos_side and pos_side in ["LONG", "SHORT"]:
+            position_side = pos_side
+        
+        # Leverage
+        leverage = None
+        try:
+            leverage = self.get_current_leverage(symbol)
+        except Exception:
+            pass
+        
+        # Additional fields
+        order_type_from_response = response.get("type")
+        time_in_force = response.get("timeInForce")
+        client_order_id = response.get("clientOrderId") or response.get("newClientOrderId")
+        working_type = response.get("workingType")
+        
+        # Stop price
+        stop_price = None
+        try:
+            stop_price_str = response.get("stopPrice") or response.get("activatePrice")
+            if stop_price_str:
+                stop_price = float(stop_price_str)
+        except (ValueError, TypeError):
+            pass
+        
+        # Notional value
+        notional_value = None
+        cummulative_quote_qty = None
+        try:
+            if avg_price and executed_qty > 0:
+                notional_value = avg_price * executed_qty
+            cumm_quote_str = response.get("cummulativeQuoteQty") or response.get("cummQuoteQty")
+            if cumm_quote_str:
+                cummulative_quote_qty = float(cumm_quote_str)
+            elif notional_value:
+                cummulative_quote_qty = notional_value
+        except (ValueError, TypeError):
+            pass
+        
+        # Initial margin and margin type
+        initial_margin = None
+        margin_type = None
+        try:
+            rest_client = self._ensure()
+            positions = rest_client.futures_position_information(symbol=symbol)
+            if positions and len(positions) > 0:
+                for pos in positions:
+                    position_amt = float(pos.get("positionAmt", 0))
+                    if abs(position_amt) > 0 or pos.get("marginType"):
+                        initial_margin_str = pos.get("initialMargin")
+                        if initial_margin_str:
+                            initial_margin = float(initial_margin_str)
+                        pos_margin_type = pos.get("marginType")
+                        if pos_margin_type in ["ISOLATED", "CROSSED"]:
+                            margin_type = pos_margin_type
+                        if initial_margin is not None or margin_type:
+                            break
+                if not margin_type and positions:
+                    pos_margin_type = positions[0].get("marginType")
+                    if pos_margin_type in ["ISOLATED", "CROSSED"]:
+                        margin_type = pos_margin_type
+        except Exception:
+            pass
+        
+        realized_pnl = None
+        
+        return OrderResponse(
+            symbol=symbol,
+            order_id=order_id,
+            status=status,
+            side=response["side"],
+            price=price,
+            avg_price=avg_price,
+            executed_qty=executed_qty,
+            timestamp=timestamp,
+            commission=commission,
+            commission_asset=commission_asset,
+            leverage=leverage,
+            position_side=position_side,
+            update_time=update_time,
+            time_in_force=time_in_force,
+            order_type=order_type_from_response,
+            notional_value=notional_value,
+            cummulative_quote_qty=cummulative_quote_qty,
+            initial_margin=initial_margin,
+            margin_type=margin_type,
+            client_order_id=client_order_id,
+            working_type=working_type,
+            realized_pnl=realized_pnl,
+            stop_price=stop_price,
+        )
 
     def cancel_open_orders(self, symbol: str) -> list[dict[str, Any]]:
         rest = self._ensure()
