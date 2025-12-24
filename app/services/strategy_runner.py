@@ -153,9 +153,10 @@ class StrategyRunner:
             self._load_from_redis()
     
     def _get_account_client(self, account_id: str) -> BinanceClient:
-        """Get client for an account, preferring directly provided client for default account.
+        """Get client for an account, loading from database if needed.
         
         This ensures mock clients in tests are always used instead of real clients.
+        Also loads accounts from database on-demand if not already in client_manager.
         """
         account_id = account_id or "default"
         
@@ -164,8 +165,55 @@ class StrategyRunner:
         if account_id == "default" and self._has_direct_client and self.client:
             return self.client
         
-        # Otherwise, get from manager or fall back to directly provided client
-        return self.client_manager.get_client(account_id) or self.client
+        # Check if client already exists in manager
+        client = self.client_manager.get_client(account_id)
+        if client:
+            return client
+        
+        # Client not found - try to load from database if we have strategy_service and user_id
+        if self.strategy_service and self.user_id:
+            try:
+                from app.services.account_service import AccountService
+                from app.core.redis_storage import RedisStorage
+                from app.core.config import get_settings
+                
+                # Get database session from strategy_service
+                db = self.strategy_service.db_service.db
+                
+                # Create AccountService to load account
+                settings = get_settings()
+                redis_storage = None
+                if settings.redis_enabled:
+                    redis_storage = RedisStorage(
+                        redis_url=settings.redis_url,
+                        enabled=settings.redis_enabled
+                    )
+                
+                account_service = AccountService(db, redis_storage)
+                account_config = account_service.get_account(self.user_id, account_id)
+                
+                if account_config:
+                    # Add client to manager
+                    self.client_manager.add_client(account_id, account_config)
+                    logger.info(f"Loaded account '{account_id}' from database and added to client manager")
+                    return self.client_manager.get_client(account_id)
+                else:
+                    logger.warning(f"Account '{account_id}' not found in database for user {self.user_id}")
+            except Exception as e:
+                logger.error(f"Failed to load account '{account_id}' from database: {e}")
+        
+        # Fall back to default client if account not found or loading failed
+        fallback_client = self.client
+        if not fallback_client:
+            raise RuntimeError(
+                f"No client available for account '{account_id}' and no default client available. "
+                f"Please ensure the account is configured in the database."
+            )
+        logger.warning(
+            f"Account '{account_id}' not found in client manager, using default client. "
+            f"This may cause API key errors if the default client has invalid keys."
+        )
+        return fallback_client
     
     def _update_strategy_in_db(self, strategy_id: str, save_to_redis: bool = False, **updates) -> bool:
         """Helper method to update strategy in database if service is available.
@@ -1285,6 +1333,45 @@ class StrategyRunner:
         try:
             strategies = self.strategy_service.list_strategies(self.user_id)
             logger.info(f"Loading {len(strategies)} strategies from database for user {self.user_id}")
+            
+            # Collect unique account_ids from strategies
+            account_ids = set()
+            for summary in strategies:
+                account_id = summary.account_id or "default"
+                account_ids.add(account_id)
+            
+            # Preload all accounts referenced by strategies
+            if account_ids:
+                try:
+                    from app.services.account_service import AccountService
+                    from app.core.redis_storage import RedisStorage
+                    from app.core.config import get_settings
+                    
+                    settings = get_settings()
+                    redis_storage = None
+                    if settings.redis_enabled:
+                        redis_storage = RedisStorage(
+                            redis_url=settings.redis_url,
+                            enabled=settings.redis_enabled
+                        )
+                    
+                    db = self.strategy_service.db_service.db
+                    account_service = AccountService(db, redis_storage)
+                    
+                    loaded_accounts = 0
+                    for account_id in account_ids:
+                        if not self.client_manager.account_exists(account_id):
+                            account_config = account_service.get_account(self.user_id, account_id)
+                            if account_config:
+                                self.client_manager.add_client(account_id, account_config)
+                                loaded_accounts += 1
+                            else:
+                                logger.warning(f"Account '{account_id}' referenced by strategies not found in database")
+                    
+                    if loaded_accounts > 0:
+                        logger.info(f"Preloaded {loaded_accounts} account(s) into client manager")
+                except Exception as account_exc:
+                    logger.warning(f"Failed to preload accounts: {account_exc}. Accounts will be loaded on-demand.")
             
             for summary in strategies:
                 self._strategies[summary.id] = summary
