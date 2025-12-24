@@ -17,7 +17,7 @@ def mock_db_session_generator():
     mock_db_session = MagicMock(spec=Session)
     # Mock the execute method to return a mock result
     mock_result = MagicMock()
-    mock_result.fetchone.return_value = None
+    mock_result.fetchone.return_value = (1,)  # Return a tuple for SELECT 1
     mock_db_session.execute.return_value = mock_result
     try:
         yield mock_db_session
@@ -39,6 +39,7 @@ def client():
     with patch('app.api.routes.health.get_settings') as mock_settings:
         mock_settings_instance = MagicMock()
         mock_settings_instance.redis_enabled = False
+        mock_settings_instance.redis_url = "redis://localhost:6379/0"
         mock_settings.return_value = mock_settings_instance
         
         try:

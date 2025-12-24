@@ -246,8 +246,16 @@ class ServiceMonitor:
             container_name: Name of the Docker container
             
         Returns:
-            True if container is running, False otherwise
+            True if container is running, False otherwise (or if Docker is not available)
         """
+        # Check if docker command is available first
+        import shutil
+        if not shutil.which("docker"):
+            # Docker command not available - this is expected when running inside a container
+            # without Docker socket mounted or Docker CLI installed
+            logger.debug(f"Docker command not available, skipping container check for {container_name}")
+            return False
+        
         try:
             result = subprocess.run(
                 ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],

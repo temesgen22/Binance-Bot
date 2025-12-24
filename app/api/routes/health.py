@@ -185,6 +185,87 @@ def health(
     Raises:
         HTTPException: If database, Redis, or Binance API is unreachable
     """
+    # Check database connection
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "ok"
+    except Exception as db_exc:
+        logger.error(f"Database health check failed: {db_exc}")
+        db.close()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database connection failed: {str(db_exc)[:200]}"
+        ) from db_exc
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+    
+    # Check Redis connection (if enabled)
+    redis_status = "disabled"
+    settings = get_settings()
+    if settings.redis_enabled:
+        try:
+            import socket
+            redis_url = settings.redis_url
+            if "://" in redis_url:
+                redis_url = redis_url.split("://")[1]
+            parts = redis_url.split(":")
+            redis_host = parts[0] if parts else "localhost"
+            redis_port = int(parts[1].split("/")[0]) if len(parts) > 1 else 6379
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            try:
+                result = sock.connect_ex((redis_host, redis_port))
+                sock.close()
+                if result == 0:
+                    try:
+                        import redis
+                        redis_client = redis.from_url(
+                            settings.redis_url,
+                            socket_timeout=1.0,
+                            socket_connect_timeout=1.0,
+                            decode_responses=True
+                        )
+                        redis_client.ping()
+                        redis_status = "ok"
+                        redis_client.close()
+                    except Exception:
+                        redis_status = "failed"
+                else:
+                    redis_status = "failed"
+            except (socket.timeout, OSError, Exception):
+                redis_status = "failed"
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        except Exception:
+            redis_status = "failed"
+    
+    # Check Binance API connection
+    btc_price = None
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(client.get_price, "BTCUSDT")
+            try:
+                btc_price = future.result(timeout=5.0)
+            except concurrent.futures.TimeoutError:
+                logger.warning("Binance API health check timed out")
+            except Exception as binance_exc:
+                logger.warning(f"Binance API health check failed: {binance_exc}")
+    except Exception as exc:
+        logger.warning(f"Binance health check error: {exc}")
+    
+    return {
+        "status": "ok" if db_status == "ok" else "error",
+        "database": db_status,
+        "redis": redis_status,
+        "btc_price": btc_price
+    }
 
 
 @router.get("/health/detailed")
