@@ -159,12 +159,41 @@ class DatabaseService:
         ).first()
     
     def get_account_by_id(self, user_id: UUID, account_id: str) -> Optional[Account]:
-        """Get account by user_id and account_id."""
-        return self.db.query(Account).filter(
+        """Get account by user_id and account_id.
+        
+        Note: account_id is the string identifier (e.g., 'main1'), not the UUID primary key (Account.id).
+        The query is case-insensitive to handle any case variations.
+        
+        Args:
+            user_id: User UUID
+            account_id: Account string identifier (e.g., 'main1'), NOT the UUID primary key
+            
+        Returns:
+            Account if found and active, None otherwise
+        """
+        # Normalize account_id to lowercase (constraint requires lowercase)
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if not account_id_lower:
+            return None
+        
+        # Query using Account.account_id (string column), not Account.id (UUID primary key)
+        result = self.db.query(Account).filter(
             Account.user_id == user_id,
-            Account.account_id == account_id,
+            Account.account_id.ilike(account_id_lower),  # Case-insensitive match on string column
             Account.is_active == True
         ).first()
+        
+        if result:
+            logger.debug(
+                f"Found account: id={result.id} (UUID), account_id='{result.account_id}' (string), "
+                f"user_id={result.user_id}, is_active={result.is_active}"
+            )
+        else:
+            logger.debug(
+                f"No active account found with user_id={user_id}, account_id='{account_id_lower}' (string column)"
+            )
+        
+        return result
     
     def update_account(
         self,

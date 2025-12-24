@@ -39,7 +39,27 @@ class BinanceClientManager:
         Args:
             account_id: Account identifier
             account_config: Account configuration
+            
+        Raises:
+            ValueError: If API keys are invalid or missing
         """
+        # Validate API keys before creating client
+        if not account_config.api_key or not account_config.api_secret:
+            error_msg = f"Account '{account_id}' has empty API key or secret"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # Validate API key format (Binance API keys are typically 64 characters)
+        if len(account_config.api_key) < 20:
+            error_msg = f"Account '{account_id}' has invalid API key format (too short: {len(account_config.api_key)} chars)"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        if len(account_config.api_secret) < 20:
+            error_msg = f"Account '{account_id}' has invalid API secret format (too short: {len(account_config.api_secret)} chars)"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
         try:
             client = BinanceClient(
                 api_key=account_config.api_key,
@@ -49,11 +69,13 @@ class BinanceClientManager:
             self._clients[account_id.lower()] = client
             self._accounts[account_id.lower()] = account_config
             logger.info(
-                f"Added Binance client for account '{account_id}' "
+                f"✅ Added Binance client for account '{account_id}' "
                 f"({account_config.name}) - Testnet: {account_config.testnet}"
             )
         except Exception as e:
-            logger.error(f"Failed to add Binance client for account '{account_id}': {e}")
+            error_msg = f"Failed to add Binance client for account '{account_id}': {e}"
+            logger.error(error_msg, exc_info=True)
+            raise ValueError(error_msg) from e
     
     def get_client(self, account_id: str) -> Optional[BinanceClient]:
         """Get Binance client for a specific account.

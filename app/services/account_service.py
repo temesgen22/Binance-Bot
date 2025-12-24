@@ -111,10 +111,27 @@ class AccountService(BaseCacheService):
         
         # Cache miss - check database
         logger.debug(f"Cache MISS for account {account_id}, checking database")
-        accounts = self.db_service.get_user_accounts(user_id)
-        db_account = next((acc for acc in accounts if acc.account_id == account_id), None)
+        # Normalize account_id to lowercase for querying
+        account_id_normalized = account_id.lower().strip() if account_id else None
+        if not account_id_normalized:
+            logger.warning(f"Invalid account_id provided: {account_id}")
+            return None
+        
+        # Use direct query for better performance and to check inactive accounts
+        # Note: We're querying Account.account_id (string column), not Account.id (UUID primary key)
+        logger.debug(f"Querying account with user_id={user_id}, account_id='{account_id_normalized}' (string column)")
+        db_account = self.db_service.get_account_by_id(user_id, account_id_normalized)
         
         if not db_account:
+            # Also check if account exists but is inactive (for better error messages)
+            from app.models.db_models import Account
+            inactive_account = self.db.query(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id.ilike(account_id_normalized),  # Case-insensitive match
+                Account.is_active == False
+            ).first()
+            if inactive_account:
+                logger.warning(f"Account '{account_id}' exists but is INACTIVE for user {user_id}")
             return None
         
         # Convert to config

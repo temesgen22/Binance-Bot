@@ -190,17 +190,77 @@ class StrategyRunner:
                     )
                 
                 account_service = AccountService(db, redis_storage)
+                logger.info(f"🔍 Attempting to load account '{account_id}' from database for user {self.user_id}")
                 account_config = account_service.get_account(self.user_id, account_id)
                 
                 if account_config:
-                    # Add client to manager
-                    self.client_manager.add_client(account_id, account_config)
-                    logger.info(f"Loaded account '{account_id}' from database and added to client manager")
-                    return self.client_manager.get_client(account_id)
+                    # Validate API keys before adding
+                    if not account_config.api_key or not account_config.api_secret:
+                        logger.error(
+                            f"❌ Account '{account_id}' loaded but has empty API key or secret. "
+                            f"API key present: {bool(account_config.api_key)}, Secret present: {bool(account_config.api_secret)}. "
+                            f"This may indicate a decryption failure."
+                        )
+                    else:
+                        # Add client to manager
+                        try:
+                            self.client_manager.add_client(account_id, account_config)
+                            logger.info(f"✅ Loaded account '{account_id}' from database and added to client manager")
+                            loaded_client = self.client_manager.get_client(account_id)
+                            if loaded_client:
+                                return loaded_client
+                            else:
+                                logger.error(f"❌ Failed to retrieve client after adding account '{account_id}' to manager")
+                        except ValueError as add_exc:
+                            # API key validation failed
+                            logger.error(f"❌ Failed to add account '{account_id}' to client manager: {add_exc}")
+                            raise  # Re-raise to prevent fallback to default client
+                        except Exception as add_exc:
+                            logger.error(f"❌ Failed to add account '{account_id}' to client manager: {add_exc}", exc_info=True)
+                            raise  # Re-raise to prevent fallback to default client
                 else:
-                    logger.warning(f"Account '{account_id}' not found in database for user {self.user_id}")
+                    # Account not found - check if it exists but is inactive or has other issues
+                    from app.models.db_models import Account
+                    # Normalize account_id to lowercase for querying
+                    account_id_normalized = account_id.lower().strip() if account_id else None
+                    if account_id_normalized:
+                        db_account = db.query(Account).filter(
+                            Account.user_id == self.user_id,
+                            Account.account_id.ilike(account_id_normalized)  # Case-insensitive match
+                        ).first()
+                    else:
+                        db_account = None
+                    
+                    if db_account:
+                        if not db_account.is_active:
+                            logger.error(
+                                f"❌ Account '{account_id}' exists but is INACTIVE for user {self.user_id}. "
+                                f"Please activate the account or use a different account."
+                            )
+                        else:
+                            logger.error(
+                                f"❌ Account '{account_id}' found in database but failed to load configuration. "
+                                f"This may indicate a decryption issue. Check account API keys."
+                            )
+                    else:
+                        # List available accounts for better error message
+                        try:
+                            available_accounts = account_service.list_accounts(self.user_id)
+                            account_names = [acc.account_id for acc in available_accounts]
+                            logger.error(
+                                f"❌ Account '{account_id}' not found in database for user {self.user_id}. "
+                                f"Available accounts: {', '.join(account_names) if account_names else 'none'}"
+                            )
+                        except Exception:
+                            logger.error(f"❌ Account '{account_id}' not found in database for user {self.user_id}")
             except Exception as e:
-                logger.error(f"Failed to load account '{account_id}' from database: {e}")
+                logger.error(f"❌ Failed to load account '{account_id}' from database: {e}", exc_info=True)
+        else:
+            # Log why we can't load the account
+            if not self.strategy_service:
+                logger.debug(f"Cannot load account '{account_id}': strategy_service not available")
+            if not self.user_id:
+                logger.debug(f"Cannot load account '{account_id}': user_id not available")
         
         # Fall back to default client if account not found or loading failed
         fallback_client = self.client
@@ -1359,19 +1419,59 @@ class StrategyRunner:
                     account_service = AccountService(db, redis_storage)
                     
                     loaded_accounts = 0
+                    failed_accounts = []
                     for account_id in account_ids:
                         if not self.client_manager.account_exists(account_id):
-                            account_config = account_service.get_account(self.user_id, account_id)
-                            if account_config:
-                                self.client_manager.add_client(account_id, account_config)
-                                loaded_accounts += 1
-                            else:
-                                logger.warning(f"Account '{account_id}' referenced by strategies not found in database")
+                            try:
+                                account_config = account_service.get_account(self.user_id, account_id)
+                                if account_config:
+                                    # Validate API keys before adding
+                                    if not account_config.api_key or not account_config.api_secret:
+                                        logger.error(
+                                            f"❌ Account '{account_id}' has empty API key or secret. "
+                                            f"Cannot add to client manager."
+                                        )
+                                        failed_accounts.append(account_id)
+                                    else:
+                                        try:
+                                            self.client_manager.add_client(account_id, account_config)
+                                            loaded_accounts += 1
+                                            logger.debug(f"✅ Preloaded account '{account_id}' into client manager")
+                                        except ValueError as add_exc:
+                                            logger.error(
+                                                f"❌ Failed to add account '{account_id}' to client manager: {add_exc}"
+                                            )
+                                            failed_accounts.append(account_id)
+                                        except Exception as add_exc:
+                                            logger.error(
+                                                f"❌ Unexpected error adding account '{account_id}': {add_exc}",
+                                                exc_info=True
+                                            )
+                                            failed_accounts.append(account_id)
+                                else:
+                                    logger.warning(
+                                        f"⚠️ Account '{account_id}' referenced by strategies not found in database"
+                                    )
+                                    failed_accounts.append(account_id)
+                            except Exception as load_exc:
+                                logger.error(
+                                    f"❌ Failed to load account '{account_id}' during preload: {load_exc}",
+                                    exc_info=True
+                                )
+                                failed_accounts.append(account_id)
                     
                     if loaded_accounts > 0:
-                        logger.info(f"Preloaded {loaded_accounts} account(s) into client manager")
+                        logger.info(f"✅ Preloaded {loaded_accounts} account(s) into client manager")
+                    if failed_accounts:
+                        logger.warning(
+                            f"⚠️ Failed to preload {len(failed_accounts)} account(s): {', '.join(failed_accounts)}. "
+                            f"These accounts will be loaded on-demand when strategies try to use them."
+                        )
                 except Exception as account_exc:
-                    logger.warning(f"Failed to preload accounts: {account_exc}. Accounts will be loaded on-demand.")
+                    logger.error(
+                        f"❌ Failed to preload accounts: {account_exc}. Accounts will be loaded on-demand.",
+                        exc_info=True
+                    )
             
             for summary in strategies:
                 self._strategies[summary.id] = summary
