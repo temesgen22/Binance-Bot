@@ -101,31 +101,41 @@ def health(
             # Don't fail health check if Redis fails, but log it
             # Redis is optional, database is critical
     
-    # Check Binance API connection
+    # Check Binance API connection with timeout
+    # Use quick_health endpoint for Docker health checks to avoid timeouts
+    binance_status = "ok"
+    btc_price = None
     try:
-        price = client.get_price("BTCUSDT")
-        return {
-            "status": "ok",
-            "database": db_status,
-            "redis": redis_status,
-            "btc_price": price
-        }
+        # Use threading timeout (more reliable in FastAPI than signal-based timeout)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(client.get_price, "BTCUSDT")
+            try:
+                price = future.result(timeout=5.0)  # 5 second timeout
+                btc_price = price
+                binance_status = "ok"
+            except concurrent.futures.TimeoutError:
+                logger.warning("Binance API health check timed out after 5 seconds")
+                binance_status = "timeout"
+                # Don't fail health check - database is more critical
+            except Exception as binance_exc:
+                logger.warning(f"Binance API health check failed: {binance_exc}")
+                binance_status = "error"
+                # Don't fail health check - database is more critical
     except Exception as exc:
-        from app.core.exceptions import BinanceAPIError, BinanceNetworkError
-        
-        logger.error(f"Binance health check failed: {exc}")
-        # Database is OK, but Binance failed - return degraded status
-        # Don't fail completely since database is more critical
-        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Binance API unreachable: {exc}"
-            ) from exc
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Binance API error: {exc}"
-            ) from exc
+        logger.warning(f"Binance health check error: {exc}")
+        binance_status = "error"
+        # Don't fail health check - database is more critical
+    
+    # Return OK status if database is OK, even if Binance fails
+    # This prevents Docker health check failures when Binance API is temporarily unavailable
+    return {
+        "status": "ok" if db_status == "ok" else "degraded",
+        "database": db_status,
+        "redis": redis_status,
+        "binance": binance_status,
+        "btc_price": btc_price
+    }
 
 
 @router.get("/health/detailed")

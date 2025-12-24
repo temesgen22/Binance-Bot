@@ -170,30 +170,67 @@ class StrategyRunner:
         if client:
             return client
         
-        # Client not found - try to load from database if we have strategy_service and user_id
-        if self.strategy_service and self.user_id:
-            try:
-                from app.services.account_service import AccountService
-                from app.core.redis_storage import RedisStorage
-                from app.core.config import get_settings
-                
-                # Get database session from strategy_service
+        # Client not found - try to load from database
+        # First try with user_id if available, otherwise try to find user by account_id
+        try:
+            from app.services.account_service import AccountService
+            from app.core.redis_storage import RedisStorage
+            from app.core.config import get_settings
+            from app.models.db_models import Account
+            from app.core.database import get_db_session_dependency
+            
+            # Get database session - use strategy_service if available, otherwise create a new session
+            db = None
+            db_gen = None
+            if self.strategy_service:
                 db = self.strategy_service.db_service.db
-                
-                # Create AccountService to load account
-                settings = get_settings()
-                redis_storage = None
-                if settings.redis_enabled:
-                    redis_storage = RedisStorage(
-                        redis_url=settings.redis_url,
-                        enabled=settings.redis_enabled
-                    )
-                
+            else:
+                # Create a new database session for account lookup
+                # Use the dependency function to get a session
+                try:
+                    db_gen = get_db_session_dependency()
+                    db = next(db_gen)
+                except StopIteration:
+                    logger.error("Failed to get database session")
+                    db = None
+            
+            # Create AccountService to load account
+            settings = get_settings()
+            redis_storage = None
+            if settings.redis_enabled:
+                redis_storage = RedisStorage(
+                    redis_url=settings.redis_url,
+                    enabled=settings.redis_enabled
+                )
+            
+            if db is None:
+                logger.error("❌ Cannot load account: database session not available")
+            else:
                 account_service = AccountService(db, redis_storage)
-                logger.info(f"🔍 Attempting to load account '{account_id}' from database for user {self.user_id}")
-                account_config = account_service.get_account(self.user_id, account_id)
                 
-                if account_config:
+                # If we have user_id, use it directly
+                user_id_to_use = self.user_id
+                
+                # If no user_id, try to find the user by querying accounts with this account_id
+                if not user_id_to_use:
+                    logger.debug(f"🔍 No user_id available, searching for account '{account_id}' in database")
+                    account_id_normalized = account_id.lower().strip() if account_id else None
+                    if account_id_normalized:
+                        db_account = db.query(Account).filter(
+                            Account.account_id.ilike(account_id_normalized),
+                            Account.is_active == True
+                        ).first()
+                        if db_account:
+                            user_id_to_use = db_account.user_id
+                            logger.info(f"✅ Found account '{account_id}' belongs to user {user_id_to_use}")
+                        else:
+                            logger.warning(f"⚠️ Account '{account_id}' not found in database")
+                
+                if user_id_to_use:
+                    logger.info(f"🔍 Attempting to load account '{account_id}' from database for user {user_id_to_use}")
+                    account_config = account_service.get_account(user_id_to_use, account_id)
+                    
+                    if account_config:
                     # Validate API keys before adding
                     if not account_config.api_key or not account_config.api_secret:
                         logger.error(
@@ -218,23 +255,30 @@ class StrategyRunner:
                         except Exception as add_exc:
                             logger.error(f"❌ Failed to add account '{account_id}' to client manager: {add_exc}", exc_info=True)
                             raise  # Re-raise to prevent fallback to default client
-                else:
-                    # Account not found - check if it exists but is inactive or has other issues
-                    from app.models.db_models import Account
-                    # Normalize account_id to lowercase for querying
+                    else:
+                        # Account not found - check if it exists but is inactive or has other issues
+                        # Normalize account_id to lowercase for querying
                     account_id_normalized = account_id.lower().strip() if account_id else None
+                    user_id_for_query = user_id_to_use if user_id_to_use else None
+                    
                     if account_id_normalized:
-                        db_account = db.query(Account).filter(
-                            Account.user_id == self.user_id,
-                            Account.account_id.ilike(account_id_normalized)  # Case-insensitive match
-                        ).first()
+                        if user_id_for_query:
+                            db_account = db.query(Account).filter(
+                                Account.user_id == user_id_for_query,
+                                Account.account_id.ilike(account_id_normalized)  # Case-insensitive match
+                            ).first()
+                        else:
+                            # Search without user_id filter
+                            db_account = db.query(Account).filter(
+                                Account.account_id.ilike(account_id_normalized)
+                            ).first()
                     else:
                         db_account = None
                     
                     if db_account:
                         if not db_account.is_active:
                             logger.error(
-                                f"❌ Account '{account_id}' exists but is INACTIVE for user {self.user_id}. "
+                                f"❌ Account '{account_id}' exists but is INACTIVE for user {db_account.user_id}. "
                                 f"Please activate the account or use a different account."
                             )
                         else:
@@ -245,22 +289,36 @@ class StrategyRunner:
                     else:
                         # List available accounts for better error message
                         try:
-                            available_accounts = account_service.list_accounts(self.user_id)
-                            account_names = [acc.account_id for acc in available_accounts]
-                            logger.error(
-                                f"❌ Account '{account_id}' not found in database for user {self.user_id}. "
-                                f"Available accounts: {', '.join(account_names) if account_names else 'none'}"
-                            )
+                            if user_id_for_query:
+                                available_accounts = account_service.list_accounts(user_id_for_query)
+                                account_names = [acc.account_id for acc in available_accounts]
+                                logger.error(
+                                    f"❌ Account '{account_id}' not found in database for user {user_id_for_query}. "
+                                    f"Available accounts: {', '.join(account_names) if account_names else 'none'}"
+                                )
+                            else:
+                                logger.error(f"❌ Account '{account_id}' not found in database")
                         except Exception:
-                            logger.error(f"❌ Account '{account_id}' not found in database for user {self.user_id}")
+                            if user_id_for_query:
+                                logger.error(f"❌ Account '{account_id}' not found in database for user {user_id_for_query}")
+                            else:
+                                logger.error(f"❌ Account '{account_id}' not found in database")
             except Exception as e:
                 logger.error(f"❌ Failed to load account '{account_id}' from database: {e}", exc_info=True)
-        else:
-            # Log why we can't load the account
-            if not self.strategy_service:
-                logger.debug(f"Cannot load account '{account_id}': strategy_service not available")
-            if not self.user_id:
-                logger.debug(f"Cannot load account '{account_id}': user_id not available")
+            finally:
+                # Close database session if we created it (not from strategy_service)
+                if not self.strategy_service and db_gen is not None:
+                    try:
+                        # Close the generator which will clean up the session
+                        db_gen.close()
+                    except Exception:
+                        pass
+                    # Also try to close the session directly if it exists
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
         
         # Fall back to default client if account not found or loading failed
         fallback_client = self.client
