@@ -278,10 +278,16 @@ def create_app() -> FastAPI:
             # This ensures strategies that were running before restart are automatically started
             logger.info("🔄 Restoring running strategies...")
             try:
-                restored_strategies = await runner.restore_running_strategies()
-                if restored_strategies:
-                    restored_strategies_count = len(restored_strategies)
-                    logger.info(f"Restored {restored_strategies_count} running strategies after restart")
+                restored_strategy_ids = await runner.restore_running_strategies()
+                if restored_strategy_ids:
+                    restored_strategies_count = len(restored_strategy_ids)
+                    logger.info(
+                        f"✅ Restored {restored_strategies_count} running strategies after restart: "
+                        f"{', '.join(restored_strategy_ids[:5])}"
+                        f"{'...' if len(restored_strategy_ids) > 5 else ''}"
+                    )
+                else:
+                    logger.info("No strategies needed restoration (all were stopped or already running)")
             except Exception as exc:
                 error_msg = f"Failed to restore running strategies: {str(exc)[:200]}"
                 startup_errors.append(error_msg)

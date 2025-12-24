@@ -36,15 +36,10 @@ async def list_strategies(
     """List all registered strategies for the current user.
     
     Note: Changed from GET / to GET /list to avoid conflict with GUI route at /strategies
-    """
-    # Restore running strategies if needed (lazy restoration)
-    if hasattr(runner, '_needs_restore') and runner._needs_restore:
-        try:
-            await runner.restore_running_strategies()
-            runner._needs_restore = False
-        except Exception as exc:
-            logger.warning(f"Failed to restore running strategies for user {current_user.id}: {exc}")
     
+    Strategies are automatically restored on server startup via lifespan events.
+    This endpoint returns all strategies currently in memory.
+    """
     # If runner has StrategyService, it will automatically filter by user_id
     # Otherwise, return all strategies (backward compatibility)
     return runner.list_strategies()

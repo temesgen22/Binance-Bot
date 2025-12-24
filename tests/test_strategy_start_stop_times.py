@@ -243,6 +243,9 @@ async def test_multiple_start_stop_cycles_update_timestamps():
         first_started_at = started1.started_at
         assert first_started_at is not None
         
+        # Wait a bit to ensure different timestamps
+        await asyncio.sleep(0.01)
+        
         # Stop
         stopped1 = await runner.stop(strategy_id)
         first_stopped_at = stopped1.stopped_at

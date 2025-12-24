@@ -1621,12 +1621,15 @@ class StrategyRunner:
         except Exception as exc:
             logger.error(f"Failed to load strategies from Redis: {exc}", exc_info=True)
     
-    async def restore_running_strategies(self) -> None:
+    async def restore_running_strategies(self) -> list[str]:
         """Restore and start all strategies that were running before server restart.
         
         This should be called after strategies are loaded from Redis/database.
         It will automatically start any strategy that has status == StrategyState.running
         but doesn't have an active asyncio task.
+        
+        Returns:
+            List of strategy IDs that were successfully restored
         """
         from app.core.exceptions import StrategyNotFoundError, StrategyAlreadyRunningError, MaxConcurrentStrategiesError
         
@@ -1638,12 +1641,13 @@ class StrategyRunner:
         
         if not running_strategies:
             logger.info("No running strategies to restore")
-            return
+            return []
         
         logger.info(f"Restoring {len(running_strategies)} running strategies after server restart...")
         
         restored_count = 0
         failed_count = 0
+        restored_strategy_ids: list[str] = []
         
         for strategy_id, summary in running_strategies:
             try:
@@ -1688,6 +1692,22 @@ class StrategyRunner:
                     failed_count += 1
                     continue
                 
+                # CRITICAL: Sync position info from Binance BEFORE creating strategy
+                # This ensures strategy knows about its position immediately on restore
+                try:
+                    await self._update_position_info(summary)
+                    logger.debug(
+                        f"Synced position info for {strategy_id} before restore: "
+                        f"position_side={summary.position_side}, entry_price={summary.entry_price}, "
+                        f"position_size={summary.position_size}"
+                    )
+                except Exception as sync_exc:
+                    logger.warning(
+                        f"Failed to sync position info for {strategy_id} before restore: {sync_exc}. "
+                        f"Strategy will sync on first loop iteration."
+                    )
+                    # Continue with restoration - position will sync in first loop iteration
+                
                 # Create account-specific risk manager and executor
                 account_risk = RiskManager(client=account_client)
                 account_executor = OrderExecutor(client=account_client)
@@ -1716,6 +1736,53 @@ class StrategyRunner:
                     metadata={},
                 )
                 strategy = self.registry.build(summary.strategy_type, context, account_client)
+                
+                # CRITICAL: Sync strategy's internal position state BEFORE starting loop
+                # This ensures strategy knows about position immediately, not after first iteration
+                try:
+                    strategy.sync_position_state(
+                        position_side=summary.position_side,
+                        entry_price=summary.entry_price,
+                    )
+                    logger.debug(
+                        f"Synced strategy internal state for {strategy_id}: "
+                        f"position={getattr(strategy, 'position', None)}, "
+                        f"entry_price={getattr(strategy, 'entry_price', None)}"
+                    )
+                except Exception as sync_exc:
+                    logger.warning(
+                        f"Failed to sync strategy internal state for {strategy_id}: {sync_exc}. "
+                        f"State will sync in first loop iteration."
+                    )
+                
+                # Check and restore TP/SL orders if position exists
+                if summary.position_size and summary.position_size > 0 and summary.entry_price:
+                    try:
+                        # Check if TP/SL orders still exist on Binance
+                        open_orders = account_client.get_open_orders(summary.symbol)
+                        open_order_ids = {o.get("orderId") for o in open_orders}
+                        tp_sl_meta = summary.meta.get("tp_sl_orders", {})
+                        tp_order_id = tp_sl_meta.get("tp_order_id")
+                        sl_order_id = tp_sl_meta.get("sl_order_id")
+                        
+                        # If orders don't exist but we have a position, re-place them
+                        has_tp = tp_order_id and tp_order_id in open_order_ids
+                        has_sl = sl_order_id and sl_order_id in open_order_ids
+                        
+                        if not (has_tp and has_sl):
+                            logger.info(
+                                f"[{summary.id}] TP/SL orders missing for restored strategy with position. "
+                                f"TP exists: {has_tp}, SL exists: {has_sl}. Will re-place on first loop iteration."
+                            )
+                            # Clear stale metadata - TP/SL will be re-placed in _run_loop
+                            if not has_tp and not has_sl:
+                                summary.meta["tp_sl_orders"] = {}
+                    except Exception as tp_sl_exc:
+                        logger.warning(
+                            f"Failed to check TP/SL orders for {strategy_id} during restore: {tp_sl_exc}. "
+                            f"Will check in first loop iteration."
+                        )
+                
                 task = asyncio.create_task(self._run_loop(strategy, summary, account_risk, account_executor))
                 self._tasks[strategy_id] = task
                 
@@ -1735,29 +1802,54 @@ class StrategyRunner:
                 logger.info(
                     f"✅ Strategy RESTORED: {summary.id} ({summary.name}) | "
                     f"Symbol: {summary.symbol} | Type: {summary.strategy_type.value} | "
-                    f"Leverage: {summary.leverage}x | Account: {account_id} ({account_display})"
+                    f"Leverage: {summary.leverage}x | Account: {account_id} ({account_display}) | "
+                    f"Position: {summary.position_side or 'FLAT'} @ {summary.entry_price or 'N/A'}"
                 )
                 restored_count += 1
+                restored_strategy_ids.append(strategy_id)
                 
             except Exception as exc:
                 logger.error(f"Failed to restore strategy {strategy_id}: {exc}", exc_info=True)
-                # Mark as stopped since restoration failed
-                summary.status = StrategyState.stopped
-                # Update database FIRST (source of truth), then Redis
-                self._update_strategy_in_db(
-                    strategy_id,
-                    save_to_redis=True,
-                    status=StrategyState.stopped.value
-                )
-                # Fallback: save to Redis if database update failed or not available
-                if not (self.strategy_service and self.user_id):
-                    self._save_to_redis(strategy_id, summary)
+                
+                # Determine if error is retryable (temporary) or permanent
+                # Retryable: network errors, API timeouts, temporary Binance issues
+                # Permanent: invalid configuration, missing account, code errors
+                is_retryable = any(keyword in str(exc).lower() for keyword in [
+                    'timeout', 'connection', 'network', 'temporary', 'rate limit',
+                    '503', '502', '504', 'temporarily unavailable'
+                ])
+                
+                if is_retryable:
+                    # Keep status as 'running' for retry - don't mark as stopped
+                    logger.warning(
+                        f"Strategy {strategy_id} restoration failed with retryable error. "
+                        f"Status remains 'running' for retry. Error: {exc}"
+                    )
+                    # Don't update status - keep it as 'running' in database
+                else:
+                    # Permanent failure - mark as stopped
+                    logger.error(
+                        f"Strategy {strategy_id} restoration failed with permanent error. "
+                        f"Marking as stopped. Error: {exc}"
+                    )
+                    summary.status = StrategyState.stopped
+                    # Update database FIRST (source of truth), then Redis
+                    self._update_strategy_in_db(
+                        strategy_id,
+                        save_to_redis=True,
+                        status=StrategyState.stopped.value
+                    )
+                    # Fallback: save to Redis if database update failed or not available
+                    if not (self.strategy_service and self.user_id):
+                        self._save_to_redis(strategy_id, summary)
                 failed_count += 1
         
         logger.info(
             f"Strategy restoration complete: {restored_count} restored, {failed_count} failed. "
             f"Total running strategies: {len(self._tasks)}"
         )
+        
+        return restored_strategy_ids
     
     def _save_to_redis(self, strategy_id: str, summary: StrategySummary) -> None:
         """Save strategy to Redis."""
