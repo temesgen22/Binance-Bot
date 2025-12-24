@@ -174,6 +174,53 @@ def get_overall_stats(runner: StrategyRunner = Depends(get_strategy_runner)) -> 
     return runner.calculate_overall_stats()
 
 
+@router.get("/{strategy_id}/activity", response_model=list[dict])
+def get_strategy_activity(
+    strategy_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+    runner: StrategyRunner = Depends(get_strategy_runner),
+    limit: int = 50
+) -> list[dict]:
+    """Get activity history for a strategy (start/stop events).
+    
+    Returns a list of activity events ordered by most recent first.
+    
+    Raises:
+        StrategyNotFoundError: If strategy does not exist
+    """
+    # Verify strategy exists
+    strategies = runner.list_strategies()
+    if not any(s.id == strategy_id for s in strategies):
+        raise StrategyNotFoundError(strategy_id)
+    
+    # Get strategy UUID from database
+    db_service = get_database_service(db)
+    db_strategy = db_service.get_strategy(current_user.id, strategy_id)
+    if not db_strategy:
+        raise StrategyNotFoundError(strategy_id)
+    
+    # Get activity events
+    events = db_service.get_strategy_events(
+        strategy_id=db_strategy.id,
+        event_type=None,  # Get all event types
+        limit=limit
+    )
+    
+    # Convert to response format
+    activity_list = []
+    for event in events:
+        activity_list.append({
+            "event_type": event.event_type,
+            "event_level": event.event_level,
+            "message": event.message,
+            "created_at": event.created_at.isoformat(),
+            "metadata": event.event_metadata or {}
+        })
+    
+    return activity_list
+
+
 @router.delete("/{strategy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_strategy(
     strategy_id: str,

@@ -416,4 +416,68 @@ class DatabaseService:
             Backtest.id == backtest_id,
             Backtest.user_id == user_id
         ).first()
+    
+    # ============================================
+    # SYSTEM EVENT OPERATIONS
+    # ============================================
+    
+    def create_system_event(
+        self,
+        event_type: str,
+        event_level: str,
+        message: str,
+        strategy_id: Optional[UUID] = None,
+        account_id: Optional[UUID] = None,
+        event_metadata: Optional[dict] = None
+    ) -> SystemEvent:
+        """Create a system event (audit log entry).
+        
+        Args:
+            event_type: Type of event (e.g., 'strategy_started', 'strategy_stopped')
+            event_level: Event level ('INFO', 'WARNING', 'ERROR', 'CRITICAL')
+            message: Event message
+            strategy_id: Optional strategy UUID
+            account_id: Optional account UUID
+            event_metadata: Optional additional metadata as dict
+            
+        Returns:
+            SystemEvent model instance
+        """
+        event = SystemEvent(
+            event_type=event_type,
+            event_level=event_level,
+            message=message,
+            strategy_id=strategy_id,
+            account_id=account_id,
+            event_metadata=event_metadata or {}
+        )
+        self.db.add(event)
+        with self._transaction(event, error_message="Failed to create system event"):
+            pass
+        return event
+    
+    def get_strategy_events(
+        self,
+        strategy_id: UUID,
+        event_type: Optional[str] = None,
+        limit: int = 100
+    ) -> List[SystemEvent]:
+        """Get system events for a strategy.
+        
+        Args:
+            strategy_id: Strategy UUID
+            event_type: Optional filter by event type
+            limit: Maximum number of events to return
+            
+        Returns:
+            List of SystemEvent instances, ordered by created_at descending
+        """
+        query = self.db.query(SystemEvent).filter(
+            SystemEvent.strategy_id == strategy_id
+        )
+        
+        if event_type:
+            query = query.filter(SystemEvent.event_type == event_type)
+        
+        return query.order_by(SystemEvent.created_at.desc()).limit(limit).all()
 

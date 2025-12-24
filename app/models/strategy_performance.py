@@ -54,6 +54,10 @@ class StrategyPerformance(BaseModel):
     last_trade_at: Optional[datetime] = None
     last_signal: Optional[Literal["BUY", "SELL", "HOLD"]] = None
     
+    # Account information
+    account_id: Optional[str] = Field(default=None, description="Binance account ID used by this strategy")
+    account_info: Optional[Dict[str, Any]] = Field(default=None, description="Account details (name, testnet status)")
+    
     # Ranking
     rank: Optional[int] = Field(default=None, description="Rank based on total PnL (1 = best)")
     percentile: Optional[float] = Field(default=None, description="Performance percentile (0-100)")

@@ -839,6 +839,19 @@
             // Strategy configuration
             html += '<div class="detail-section"><h4>Strategy Configuration</h4>';
             html += `<div class="detail-item"><label>Strategy Type:</label><value>${strategy.strategy_type}</value></div>`;
+            
+            // Account information
+            if (strategy.account_info) {
+                const accountName = strategy.account_info.account_name || strategy.account_id || 'default';
+                const testnetLabel = strategy.account_info.testnet ? ' [TESTNET]' : ' [LIVE]';
+                const testnetClass = strategy.account_info.testnet ? 'warning' : 'success';
+                html += `<div class="detail-item"><label>Account:</label><value><span class="badge ${testnetClass}">${accountName}${testnetLabel}</span></value></div>`;
+            } else if (strategy.account_id && strategy.account_id !== 'default') {
+                html += `<div class="detail-item"><label>Account:</label><value>${strategy.account_id}</value></div>`;
+            } else {
+                html += `<div class="detail-item"><label>Account:</label><value>default</value></div>`;
+            }
+            
             html += `<div class="detail-item"><label>Leverage:</label><value>${strategy.leverage}x</value></div>`;
             html += `<div class="detail-item"><label>Risk per Trade:</label><value>${(strategy.risk_per_trade * 100).toFixed(2)}%</value></div>`;
             if (strategy.fixed_amount) {
@@ -893,10 +906,10 @@
             html += '<div class="detail-section"><h4>Timestamps</h4>';
             html += `<div class="detail-item"><label>Created:</label><value>${formatDateTime(strategy.created_at)}</value></div>`;
             if (strategy.started_at) {
-                html += `<div class="detail-item"><label>Started:</label><value>${formatDateTime(strategy.started_at)}</value></div>`;
+                html += `<div class="detail-item"><label>Last Started:</label><value>${formatDateTime(strategy.started_at)}</value></div>`;
             }
             if (strategy.stopped_at) {
-                html += `<div class="detail-item"><label>Stopped:</label><value>${formatDateTime(strategy.stopped_at)}</value></div>`;
+                html += `<div class="detail-item"><label>Last Stopped:</label><value>${formatDateTime(strategy.stopped_at)}</value></div>`;
             }
             if (strategy.last_trade_at) {
                 html += `<div class="detail-item"><label>Last Trade:</label><value>${formatDateTime(strategy.last_trade_at)}</value></div>`;
@@ -906,17 +919,70 @@
             }
             html += '</div>';
             
+            // Activity History
+            html += '<div class="detail-section"><h4>Activity History</h4>';
+            html += `<div id="activity-${strategy.strategy_id}" class="activity-history">`;
+            html += '<div class="activity-loading">Loading activity history...</div>';
+            html += '</div></div>';
+            
             html += '</div>';
             return html;
         }
+        
+        async function loadActivityHistory(strategyId) {
+            try {
+                const response = await authFetch(`/strategies/${strategyId}/activity?limit=20`);
+                if (!response.ok) throw new Error('Failed to load activity history');
+                const activities = await response.json();
+                
+                const container = document.getElementById(`activity-${strategyId}`);
+                if (!container) return;
+                
+                if (activities.length === 0) {
+                    container.innerHTML = '<div class="activity-empty">No activity history available</div>';
+                    return;
+                }
+                
+                let html = '<div class="activity-list">';
+                activities.forEach(activity => {
+                    const eventClass = activity.event_type === 'strategy_started' ? 'start' : 
+                                     activity.event_type === 'strategy_stopped' ? 'stop' : 'other';
+                    const icon = activity.event_type === 'strategy_started' ? '▶️' : 
+                                activity.event_type === 'strategy_stopped' ? '⏹️' : '📝';
+                    html += `
+                        <div class="activity-item ${eventClass}">
+                            <div class="activity-icon">${icon}</div>
+                            <div class="activity-content">
+                                <div class="activity-message">${activity.message}</div>
+                                <div class="activity-time">${formatDateTime(activity.created_at)}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error loading activity history:', error);
+                const container = document.getElementById(`activity-${strategyId}`);
+                if (container) {
+                    container.innerHTML = '<div class="activity-error">Failed to load activity history</div>';
+                }
+            }
+        }
 
         function toggleDetails(strategyId) {
-            if (expandedStrategies.has(strategyId)) {
+            const wasExpanded = expandedStrategies.has(strategyId);
+            if (wasExpanded) {
                 expandedStrategies.delete(strategyId);
             } else {
                 expandedStrategies.add(strategyId);
             }
-            loadData();
+            loadData().then(() => {
+                // Load activity history after details are expanded
+                if (!wasExpanded) {
+                    setTimeout(() => loadActivityHistory(strategyId), 200);
+                }
+            });
         }
 
         function clearFilters() {

@@ -59,6 +59,25 @@ def get_strategy_performance(
             total_pnl = stats.total_pnl + unrealized_pnl
             
             # Calculate percentile (will be set after ranking)
+            # Get account information if available
+            account_info = None
+            if strategy.account_id and strategy.account_id != "default":
+                try:
+                    account_config = runner.client_manager.get_account_config(strategy.account_id)
+                    if account_config:
+                        account_info = {
+                            "account_id": strategy.account_id,
+                            "account_name": account_config.name or strategy.account_id,
+                            "testnet": account_config.testnet
+                        }
+                except Exception:
+                    # Fallback if account not found in manager
+                    account_info = {
+                        "account_id": strategy.account_id,
+                        "account_name": strategy.account_id,
+                        "testnet": None
+                    }
+            
             performance = StrategyPerformance(
                 strategy_id=strategy.id,
                 strategy_name=strategy.name,
@@ -89,6 +108,8 @@ def get_strategy_performance(
                 stopped_at=strategy.stopped_at,
                 last_trade_at=stats.last_trade_at,
                 last_signal=strategy.last_signal,
+                account_id=strategy.account_id,
+                account_info=account_info,
             )
             performance_list.append(performance)
         except StrategyNotFoundError:

@@ -645,6 +645,39 @@ class StrategyRunner:
             f"Leverage: {summary.leverage}x | Account: {account_id} ({account_display})"
         )
         
+        # Log to SystemEvent for activity history
+        if self.strategy_service and self.user_id:
+            try:
+                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                if db_strategy:
+                    account_uuid = None
+                    if account_id and account_id != "default":
+                        from app.models.db_models import Account
+                        account = self.strategy_service.db_service.db.query(Account).filter(
+                            Account.user_id == self.user_id,
+                            Account.account_id.ilike(account_id.lower())
+                        ).first()
+                        if account:
+                            account_uuid = account.id
+                    
+                    self.strategy_service.db_service.create_system_event(
+                        event_type="strategy_started",
+                        event_level="INFO",
+                        message=f"Strategy '{summary.name}' ({strategy_id}) started",
+                        strategy_id=db_strategy.id,
+                        account_id=account_uuid,
+                        event_metadata={
+                            "strategy_id": strategy_id,
+                            "strategy_name": summary.name,
+                            "symbol": summary.symbol,
+                            "strategy_type": summary.strategy_type.value,
+                            "leverage": summary.leverage,
+                            "account_id": account_id
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to log strategy start event: {e}")
+        
         # Send notification that strategy started
         if self.notifications:
             asyncio.create_task(
@@ -742,6 +775,40 @@ class StrategyRunner:
         else:
             # No database mode - save to Redis only (backward compatibility)
             self._save_to_redis(strategy_id, summary)
+        
+        # Log to SystemEvent for activity history
+        if self.strategy_service and self.user_id:
+            try:
+                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                if db_strategy:
+                    account_uuid = None
+                    account_id = summary.account_id or "default"
+                    if account_id and account_id != "default":
+                        from app.models.db_models import Account
+                        account = self.strategy_service.db_service.db.query(Account).filter(
+                            Account.user_id == self.user_id,
+                            Account.account_id.ilike(account_id.lower())
+                        ).first()
+                        if account:
+                            account_uuid = account.id
+                    
+                    self.strategy_service.db_service.create_system_event(
+                        event_type="strategy_stopped",
+                        event_level="INFO",
+                        message=f"Strategy '{summary.name}' ({strategy_id}) stopped",
+                        strategy_id=db_strategy.id,
+                        account_id=account_uuid,
+                        event_metadata={
+                            "strategy_id": strategy_id,
+                            "strategy_name": summary.name,
+                            "symbol": summary.symbol,
+                            "final_pnl": float(summary.unrealized_pnl) if summary.unrealized_pnl else None,
+                            "position_size": float(summary.position_size) if summary.position_size else None,
+                            "account_id": account_id
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to log strategy stop event: {e}")
         
         # Get final PnL before sending notification
         final_pnl = None
