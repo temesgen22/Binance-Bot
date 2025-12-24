@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
+from app.api.routes.metrics import router as metrics_router
 from app.api.routes.strategies import router as strategies_router
 from app.api.routes.logs import router as logs_router
 from app.api.routes.trades import router as trades_router
@@ -41,6 +42,7 @@ from app.core.my_binance_client import BinanceClient
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import get_settings
 from app.core.logger import configure_logging
+from app.core.correlation_id import CorrelationIDMiddleware
 from loguru import logger
 from app.core.redis_storage import RedisStorage
 from app.core.database import init_database, close_database
@@ -419,6 +421,9 @@ def create_app() -> FastAPI:
     logger.info("🔨 Creating FastAPI application instance...")
     try:
         app = FastAPI(title="Binance Trading Bot", version="0.1.0", lifespan=lifespan)
+        
+        # Add correlation ID middleware (should be first middleware)
+        app.add_middleware(CorrelationIDMiddleware)
         logger.info("✅ FastAPI application instance created successfully")
     except Exception as app_exc:
         logger.error(f"❌ Failed to create FastAPI application: {app_exc}", exc_info=True)
@@ -560,6 +565,7 @@ def create_app() -> FastAPI:
     # This ensures /trades/list matches before /trades GUI route
     app.include_router(auth_router)  # Authentication endpoints
     app.include_router(health_router)
+    app.include_router(metrics_router)  # Prometheus metrics endpoint
     app.include_router(accounts_router)
     app.include_router(test_accounts_router)  # Test accounts API
     app.include_router(trades_router)  # Must be before /trades GUI route

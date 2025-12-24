@@ -41,6 +41,8 @@ from app.core.exceptions import (
     OrderExecutionError,
     OrderNotFilledError,
 )
+from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitBreakerOpenError
+from app.core.metrics import track_api_request
 
 
 class BinanceClient:
@@ -65,6 +67,19 @@ class BinanceClient:
         self._min_notional_cache: Dict[str, float] = {}
         # Time offset cache (difference between local time and Binance server time)
         self._time_offset_ms: int = 0
+        
+        # Circuit breaker for Binance API calls
+        # Protects against cascading failures when Binance API is down
+        self._circuit_breaker = CircuitBreaker(
+            name="binance_api",
+            component="binance",
+            config=CircuitBreakerConfig(
+                failure_threshold=5,  # Open after 5 failures
+                success_threshold=2,  # Close after 2 successes in half-open
+                timeout=60.0,  # Wait 60s before attempting half-open
+                expected_exception=(BinanceAPIError, BinanceRateLimitError, BinanceNetworkError)
+            )
+        )
     
     def _non_blocking_sleep(self, seconds: float) -> None:
         """Sleep that minimizes event loop blocking when called from async context.
@@ -240,12 +255,27 @@ class BinanceClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_price(self, symbol: str) -> float:
-        """Get current market price for a symbol.
+        """Get current market price for a symbol with circuit breaker protection.
         
         Raises:
-            BinanceAPIError: If API call fails
+            BinanceAPIError: If API call fails or circuit breaker is open
             BinanceNetworkError: If network error occurs
         """
+        with track_api_request("binance", "get_price"):
+            try:
+                return self._circuit_breaker.call_sync(
+                    self._get_price_impl,
+                    symbol
+                )
+            except CircuitBreakerOpenError as exc:
+                # Convert circuit breaker error to BinanceAPIError
+                raise BinanceAPIError(
+                    f"Binance API circuit breaker is OPEN: {exc}",
+                    details={"symbol": symbol, "operation": "get_price"}
+                ) from exc
+    
+    def _get_price_impl(self, symbol: str) -> float:
+        """Internal implementation of get_price (without circuit breaker)."""
         rest = self._ensure()
         try:
             ticker = rest.futures_symbol_ticker(symbol=symbol)
@@ -457,6 +487,38 @@ class BinanceClient:
         price: Optional[float] = None,
         client_order_id: Optional[str] = None,
     ) -> OrderResponse:
+        """Place an order with circuit breaker protection."""
+        with track_api_request("binance", "place_order"):
+            try:
+                return self._circuit_breaker.call_sync(
+                    self._place_order_impl,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    order_type=order_type,
+                    reduce_only=reduce_only,
+                    price=price,
+                    client_order_id=client_order_id
+                )
+            except CircuitBreakerOpenError as exc:
+                # Convert circuit breaker error to BinanceAPIError
+                raise BinanceAPIError(
+                    f"Binance API circuit breaker is OPEN: {exc}",
+                    details={"symbol": symbol, "operation": "place_order", "side": side}
+                ) from exc
+    
+    def _place_order_impl(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        quantity: float,
+        order_type: Literal["MARKET", "LIMIT"] = "MARKET",
+        reduce_only: bool = False,
+        price: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> OrderResponse:
+        """Internal implementation of place_order (without circuit breaker)."""
         # Round quantity to correct precision for the symbol
         rounded_quantity = self.round_quantity(symbol, quantity)
         logger.info(

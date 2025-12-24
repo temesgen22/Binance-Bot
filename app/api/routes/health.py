@@ -15,21 +15,37 @@ from app.core.redis_storage import RedisStorage
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
-def health(
-    db: Session = Depends(get_db_session_dependency),
-    client: BinanceClient = Depends(get_binance_client)
-) -> dict[str, str | float]:
-    """Health check endpoint.
+@router.get("/health/live")
+def liveness() -> dict[str, str]:
+    """Liveness probe endpoint.
     
-    Checks database, Redis (if enabled), and Binance API connections.
-    This is used by Docker health checks, so it must verify critical services.
+    Kubernetes/Docker uses this to check if the container is alive.
+    This should return quickly and not check external dependencies.
     
     Returns:
-        Status and BTC price if all critical services are working
+        Always returns OK if the application is running
+    """
+    return {
+        "status": "alive",
+        "message": "Application is running"
+    }
+
+
+@router.get("/health/ready")
+def readiness(
+    db: Session = Depends(get_db_session_dependency),
+    client: BinanceClient = Depends(get_binance_client)
+) -> dict[str, str | float | dict]:
+    """Readiness probe endpoint.
+    
+    Kubernetes/Docker uses this to check if the application is ready
+    to accept traffic. Checks critical dependencies (database).
+    
+    Returns:
+        Status and component health if ready to serve traffic
         
     Raises:
-        HTTPException: If database, Redis, or Binance API is unreachable
+        HTTPException: If critical services (database) are unreachable
     """
     from fastapi import HTTPException, status
     
@@ -129,13 +145,46 @@ def health(
     
     # Return OK status if database is OK, even if Binance fails
     # This prevents Docker health check failures when Binance API is temporarily unavailable
+    overall_status = "ready" if db_status == "ok" else "not_ready"
+    
+    # For readiness, database is critical - fail if database is down
+    if db_status != "ok":
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Application not ready: database is {db_status}"
+        )
+    
     return {
-        "status": "ok" if db_status == "ok" else "degraded",
+        "status": overall_status,
         "database": db_status,
         "redis": redis_status,
         "binance": binance_status,
-        "btc_price": btc_price
+        "btc_price": btc_price,
+        "components": {
+            "database": {"status": db_status},
+            "redis": {"status": redis_status, "enabled": settings.redis_enabled},
+            "binance": {"status": binance_status}
+        }
     }
+
+
+@router.get("/health")
+def health(
+    db: Session = Depends(get_db_session_dependency),
+    client: BinanceClient = Depends(get_binance_client)
+) -> dict[str, str | float]:
+    """Health check endpoint (backward compatibility).
+    
+    Checks database, Redis (if enabled), and Binance API connections.
+    This is used by Docker health checks, so it must verify critical services.
+    
+    Returns:
+        Status and BTC price if all critical services are working
+        
+    Raises:
+        HTTPException: If database, Redis, or Binance API is unreachable
+    """
 
 
 @router.get("/health/detailed")
