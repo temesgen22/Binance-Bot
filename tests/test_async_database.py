@@ -126,25 +126,28 @@ async def test_async_batch_queries():
 @pytest.mark.asyncio
 async def test_concurrent_async_queries():
     """Test that multiple async queries can run concurrently."""
-    async for db in get_async_db():
-        db_service = DatabaseService(db)
-        
-        # Run multiple queries concurrently
-        async def run_query(query_id: int):
+    import time
+    from app.core.database import get_async_engine
+    
+    # Use separate connections for concurrent queries (SQLAlchemy async sessions don't support concurrent ops)
+    engine = await get_async_engine()
+    
+    # Run multiple queries concurrently using separate connections
+    async def run_query(query_id: int):
+        async with engine.connect() as conn:
             from sqlalchemy import text
-            result = await db.execute(text("SELECT :id"), {"id": query_id})
+            # Use a simple query that works with asyncpg
+            result = await conn.execute(text(f"SELECT {query_id}"))
             return result.scalar()
-        
-        # Run 5 queries concurrently
-        start_time = time.time()
-        results = await asyncio.gather(*[run_query(i) for i in range(5)])
-        concurrent_time = time.time() - start_time
-        
-        assert len(results) == 5
-        assert all(r == i for i, r in enumerate(results))
-        print(f"✅ 5 concurrent async queries completed in {concurrent_time:.4f}s")
-        
-        break
+    
+    # Run 5 queries concurrently
+    start_time = time.time()
+    results = await asyncio.gather(*[run_query(i) for i in range(5)])
+    concurrent_time = time.time() - start_time
+    
+    assert len(results) == 5
+    assert all(r == i for i, r in enumerate(results))
+    print(f"✅ 5 concurrent async queries completed in {concurrent_time:.4f}s")
 
 
 @pytest.mark.asyncio
