@@ -1,14 +1,17 @@
 """
 Database service layer for CRUD operations.
 Provides high-level database operations with proper error handling.
+Supports both synchronous and asynchronous operations.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from typing import Optional, List, Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
@@ -20,10 +23,16 @@ from app.models.db_models import (
 
 
 class DatabaseService:
-    """Service layer for database operations."""
+    """Service layer for database operations.
     
-    def __init__(self, db: Session):
+    Supports both sync (Session) and async (AsyncSession) database operations.
+    When initialized with AsyncSession, use async methods.
+    When initialized with Session, use sync methods.
+    """
+    
+    def __init__(self, db: Session | AsyncSession):
         self.db = db
+        self._is_async = isinstance(db, AsyncSession)
     
     @contextmanager
     def _transaction(self, *objects_to_refresh, error_message: str = "Database operation"):
@@ -80,16 +89,43 @@ class DatabaseService:
         return user
     
     def get_user_by_id(self, user_id: UUID) -> Optional[User]:
-        """Get user by ID."""
+        """Get user by ID (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_by_id() with AsyncSession")
         return self.db.query(User).filter(User.id == user_id).first()
     
+    async def async_get_user_by_id(self, user_id: UUID) -> Optional[User]:
+        """Get user by ID (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_by_id() with Session")
+        result = await self.db.execute(select(User).filter(User.id == user_id))
+        return result.scalar_one_or_none()
+    
     def get_user_by_username(self, username: str) -> Optional[User]:
-        """Get user by username."""
+        """Get user by username (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_by_username() with AsyncSession")
         return self.db.query(User).filter(User.username == username).first()
     
+    async def async_get_user_by_username(self, username: str) -> Optional[User]:
+        """Get user by username (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_by_username() with Session")
+        result = await self.db.execute(select(User).filter(User.username == username))
+        return result.scalar_one_or_none()
+    
     def get_user_by_email(self, email: str) -> Optional[User]:
-        """Get user by email."""
+        """Get user by email (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_by_email() with AsyncSession")
         return self.db.query(User).filter(User.email == email).first()
+    
+    async def async_get_user_by_email(self, email: str) -> Optional[User]:
+        """Get user by email (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_by_email() with Session")
+        result = await self.db.execute(select(User).filter(User.email == email))
+        return result.scalar_one_or_none()
     
     def update_user(self, user_id: UUID, **updates) -> Optional[User]:
         """Update user."""
@@ -144,19 +180,48 @@ class DatabaseService:
         return account
     
     def get_user_accounts(self, user_id: UUID) -> List[Account]:
-        """Get all accounts for a user."""
+        """Get all accounts for a user (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_accounts() with AsyncSession")
         return self.db.query(Account).filter(
             Account.user_id == user_id,
             Account.is_active == True
         ).all()
     
+    async def async_get_user_accounts(self, user_id: UUID) -> List[Account]:
+        """Get all accounts for a user (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_accounts() with Session")
+        result = await self.db.execute(
+            select(Account).filter(
+                Account.user_id == user_id,
+                Account.is_active == True
+            )
+        )
+        return list(result.scalars().all())
+    
     def get_default_account(self, user_id: UUID) -> Optional[Account]:
-        """Get user's default account."""
+        """Get user's default account (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_default_account() with AsyncSession")
         return self.db.query(Account).filter(
             Account.user_id == user_id,
             Account.is_default == True,
             Account.is_active == True
         ).first()
+    
+    async def async_get_default_account(self, user_id: UUID) -> Optional[Account]:
+        """Get user's default account (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_default_account() with Session")
+        result = await self.db.execute(
+            select(Account).filter(
+                Account.user_id == user_id,
+                Account.is_default == True,
+                Account.is_active == True
+            )
+        )
+        return result.scalar_one_or_none()
     
     def get_account_by_id(self, user_id: UUID, account_id: str) -> Optional[Account]:
         """Get account by user_id and account_id.
@@ -274,17 +339,42 @@ class DatabaseService:
         return strategy
     
     def get_user_strategies(self, user_id: UUID) -> List[Strategy]:
-        """Get all strategies for a user."""
+        """Get all strategies for a user (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_strategies() with AsyncSession")
         return self.db.query(Strategy).filter(
             Strategy.user_id == user_id
         ).all()
     
+    async def async_get_user_strategies(self, user_id: UUID) -> List[Strategy]:
+        """Get all strategies for a user (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_strategies() with Session")
+        result = await self.db.execute(
+            select(Strategy).filter(Strategy.user_id == user_id)
+        )
+        return list(result.scalars().all())
+    
     def get_strategy(self, user_id: UUID, strategy_id: str) -> Optional[Strategy]:
-        """Get a specific strategy by user and strategy_id."""
+        """Get a specific strategy by user and strategy_id (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy() with AsyncSession")
         return self.db.query(Strategy).filter(
             Strategy.user_id == user_id,
             Strategy.strategy_id == strategy_id
         ).first()
+    
+    async def async_get_strategy(self, user_id: UUID, strategy_id: str) -> Optional[Strategy]:
+        """Get a specific strategy by user and strategy_id (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_strategy() with Session")
+        result = await self.db.execute(
+            select(Strategy).filter(
+                Strategy.user_id == user_id,
+                Strategy.strategy_id == strategy_id
+            )
+        )
+        return result.scalar_one_or_none()
     
     def update_strategy(
         self,
@@ -334,7 +424,9 @@ class DatabaseService:
         strategy_id: Optional[UUID] = None,
         limit: int = 100
     ) -> List[Trade]:
-        """Get trades for a user, optionally filtered by strategy."""
+        """Get trades for a user, optionally filtered by strategy (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_trades() with AsyncSession")
         query = self.db.query(Trade).filter(Trade.user_id == user_id)
         
         if strategy_id:
@@ -342,22 +434,33 @@ class DatabaseService:
         
         return query.order_by(Trade.timestamp.desc()).limit(limit).all()
     
+    async def async_get_user_trades(
+        self,
+        user_id: UUID,
+        strategy_id: Optional[UUID] = None,
+        limit: int = 100
+    ) -> List[Trade]:
+        """Get trades for a user, optionally filtered by strategy (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_trades() with Session")
+        stmt = select(Trade).filter(Trade.user_id == user_id)
+        
+        if strategy_id:
+            stmt = stmt.filter(Trade.strategy_id == strategy_id)
+        
+        stmt = stmt.order_by(Trade.timestamp.desc()).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+    
     def get_user_trades_batch(
         self,
         user_id: UUID,
         strategy_ids: List[UUID],
         limit: int = 10000
     ) -> List[Trade]:
-        """Get trades for multiple strategies in a single query (optimizes N+1 problem).
-        
-        Args:
-            user_id: User ID
-            strategy_ids: List of strategy UUIDs to fetch trades for
-            limit: Maximum total trades to return (across all strategies)
-        
-        Returns:
-            List of Trade objects for all specified strategies
-        """
+        """Get trades for multiple strategies in a single query (optimizes N+1 problem) - sync."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_user_trades_batch() with AsyncSession")
         if not strategy_ids:
             return []
         
@@ -367,6 +470,26 @@ class DatabaseService:
         )
         
         return query.order_by(Trade.timestamp.desc()).limit(limit).all()
+    
+    async def async_get_user_trades_batch(
+        self,
+        user_id: UUID,
+        strategy_ids: List[UUID],
+        limit: int = 10000
+    ) -> List[Trade]:
+        """Get trades for multiple strategies in a single query (optimizes N+1 problem) - async."""
+        if not self._is_async:
+            raise RuntimeError("Use get_user_trades_batch() with Session")
+        if not strategy_ids:
+            return []
+        
+        stmt = select(Trade).filter(
+            Trade.user_id == user_id,
+            Trade.strategy_id.in_(strategy_ids)
+        ).order_by(Trade.timestamp.desc()).limit(limit)
+        
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
     
     # ============================================
     # TRADE PAIR OPERATIONS

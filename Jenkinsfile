@@ -13,6 +13,22 @@ pipeline {
 
   options { timestamps() }
 
+  // Automatic triggers: Uncomment one of these for automatic deployment
+  // Option 1: GitHub webhook trigger (recommended)
+  // triggers {
+  //   githubPush()
+  // }
+  
+  // Option 2: Poll SCM every 5 minutes
+  // triggers {
+  //   pollSCM('H/5 * * * *')
+  // }
+  
+  // Option 3: Schedule daily at 2 AM
+  // triggers {
+  //   cron('H 2 * * *')
+  // }
+
   stages {
     stage('Checkout') {
       steps { checkout scm }

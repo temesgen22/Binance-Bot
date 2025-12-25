@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.gzip import GZipMiddleware
 
 from fastapi.exceptions import RequestValidationError
+from time import time
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
@@ -45,7 +47,7 @@ from app.core.logger import configure_logging
 from app.core.correlation_id import CorrelationIDMiddleware
 from loguru import logger
 from app.core.redis_storage import RedisStorage
-from app.core.database import init_database, close_database
+from app.core.database import init_database, close_database, init_database_async, close_async_database
 from app.core.exceptions import (
     BinanceAPIError,
     BinanceRateLimitError,
@@ -199,24 +201,33 @@ def create_app() -> FastAPI:
         db_connection_error = None
         
         try:
-            logger.info("📊 Initializing database connection pool...")
-            # Initialize database connection pool with timeout protection
+            logger.info("📊 Initializing database connection pools...")
+            # Initialize both sync and async database connection pools
             try:
-                # Run init_database in executor to prevent blocking the event loop
-                # Use get_running_loop() which is safer in async context
+                # Initialize sync database (for backward compatibility)
                 try:
                     loop = asyncio.get_running_loop()
                 except RuntimeError:
-                    # Fallback to get_event_loop() if get_running_loop() fails
                     loop = asyncio.get_event_loop()
                 
-                # Increase timeout to allow for DB startup (postgres has 380s start_period)
-                # Use 120 seconds to match API health check start_period
+                # Sync database initialization (run in executor to not block)
                 db_init_success, db_connection_error = await asyncio.wait_for(
                     loop.run_in_executor(None, lambda: init_database(max_retries=10)),
-                    timeout=120.0  # 120 second timeout for database initialization
+                    timeout=120.0
                 )
-                logger.info(f"✅ Database initialization completed: success={db_init_success}")
+                logger.info(f"✅ Sync database initialization completed: success={db_init_success}")
+                
+                # Initialize async database (native async)
+                if db_init_success:
+                    async_db_init_success, async_db_connection_error = await asyncio.wait_for(
+                        init_database_async(max_retries=10),
+                        timeout=120.0
+                    )
+                    logger.info(f"✅ Async database initialization completed: success={async_db_init_success}")
+                    if not async_db_init_success:
+                        logger.warning("Async database initialization failed, but sync database is available. Some features may be slower.")
+                else:
+                    logger.warning("Skipping async database initialization due to sync database failure")
             except asyncio.TimeoutError:
                 logger.error("❌ Database initialization timed out after 30 seconds")
                 db_init_success = False
@@ -407,9 +418,14 @@ def create_app() -> FastAPI:
                 
                 # Close database connections (critical - must complete)
                 try:
-                    close_database()
+                    close_database()  # Close sync database
                 except (asyncio.CancelledError, Exception) as e:
-                    logger.warning(f"Error closing database: {type(e).__name__}")
+                    logger.warning(f"Error closing sync database: {type(e).__name__}")
+                
+                try:
+                    await close_async_database()  # Close async database
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.warning(f"Error closing async database: {type(e).__name__}")
             except asyncio.CancelledError:
                 # Final catch-all for any remaining CancelledError
                 # This is expected during shutdown and can be safely ignored
@@ -424,6 +440,20 @@ def create_app() -> FastAPI:
         
         # Add correlation ID middleware (should be first middleware)
         app.add_middleware(CorrelationIDMiddleware)
+        
+        # Add compression middleware for faster response times
+        app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses >1KB
+        
+        # Add process time header middleware for performance monitoring
+        @app.middleware("http")
+        async def add_process_time_header(request: Request, call_next):
+            """Add X-Process-Time header to responses for performance monitoring."""
+            start_time = time()
+            response = await call_next(request)
+            process_time = time() - start_time
+            response.headers["X-Process-Time"] = f"{process_time:.4f}"
+            return response
+        
         logger.info("✅ FastAPI application instance created successfully")
     except Exception as app_exc:
         logger.error(f"❌ Failed to create FastAPI application: {app_exc}", exc_info=True)

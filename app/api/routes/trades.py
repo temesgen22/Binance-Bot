@@ -9,7 +9,11 @@ from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_binance_client, get_client_manager, get_current_user, get_database_service
+from app.api.deps import (
+    get_strategy_runner, get_binance_client, get_client_manager, 
+    get_current_user, get_current_user_async, 
+    get_database_service, get_database_service_async
+)
 from app.core.binance_client_manager import BinanceClientManager
 from app.models.trade import (
     TradeWithTimestamp,
@@ -68,16 +72,16 @@ def _convert_order_to_trade_with_timestamp(
 
 
 @router.get("/list", response_model=List[TradeWithTimestamp])
-def list_all_trades(
+async def list_all_trades(
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
     start_date: Optional[str] = Query(default=None, description="Filter from date (ISO format or YYYY-MM-DD)"),
     end_date: Optional[str] = Query(default=None, description="Filter until date (ISO format or YYYY-MM-DD)"),
     side: Optional[str] = Query(default=None, description="Filter by side (BUY/SELL)"),
     strategy_id: Optional[str] = Query(default=None, description="Filter by strategy ID"),
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_async),
     runner: StrategyRunner = Depends(get_strategy_runner),
-    db_service: DatabaseService = Depends(get_database_service),
+    db_service: DatabaseService = Depends(get_database_service_async),
 ) -> List[TradeWithTimestamp]:
     """Get all trades across all strategies with optional filtering.
     
@@ -189,10 +193,10 @@ def list_all_trades(
                     if symbol and strategy.symbol.upper() != symbol.upper():
                         continue
                     
-                    # Get strategy UUID from database
+                    # Get strategy UUID from database (async)
                     from app.services.strategy_service import StrategyService
-                    strategy_service = StrategyService(db_session, redis_storage)
-                    db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy.id)
+                    strategy_service = StrategyService(db_service.db, redis_storage)
+                    db_strategy = await db_service.async_get_strategy(current_user.id, strategy.id)
                     
                     if db_strategy:
                         strategy_uuids.append(db_strategy.id)

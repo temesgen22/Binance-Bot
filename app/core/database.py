@@ -1,23 +1,35 @@
 """
 Database connection and session management for PostgreSQL.
+Supports both synchronous (psycopg2) and asynchronous (asyncpg) operations.
 """
 from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncGenerator, Generator, Optional
 
-from sqlalchemy import create_engine, event, pool, text
+from sqlalchemy import create_engine, event, pool, text, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
 from sqlalchemy.exc import OperationalError, DisconnectionError
 from loguru import logger
 
 from app.core.config import get_settings
 from app.models.db_models import Base
 
-# Global engine and session factory
+# Global sync engine and session factory (for backward compatibility)
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+
+# Global async engine and session factory (new async support)
+_async_engine: AsyncEngine | None = None
+_AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
+
 # Global notification callback for connection failures
 _notification_callback = None
 _last_connection_state = None  # Track connection state to detect changes
@@ -391,12 +403,262 @@ def drop_tables() -> None:
 
 
 def close_database() -> None:
-    """Close database connections."""
-    global _engine, _SessionLocal
+    """Close database connections (both sync and async)."""
+    global _engine, _SessionLocal, _async_engine, _AsyncSessionLocal
     
     if _engine:
         _engine.dispose()
         _engine = None
         _SessionLocal = None
-        logger.info("Database connections closed")
+    
+    if _async_engine:
+        # Note: async engine disposal should be done in async context
+        # This is a sync function, so we'll dispose it in the lifespan shutdown
+        _async_engine = None
+        _AsyncSessionLocal = None
+    
+    logger.info("Database connections closed")
+
+
+# ============================================
+# ASYNC DATABASE OPERATIONS
+# ============================================
+
+async def init_database_async(max_retries: int = 10, force_reconnect: bool = False) -> tuple[bool, Optional[Exception]]:
+    """Initialize async database connection pool using asyncpg.
+    
+    Args:
+        max_retries: Maximum number of connection retry attempts
+        force_reconnect: If True, force reconnection even if engine exists
+        
+    Returns:
+        Tuple of (success: bool, error: Optional[Exception])
+    """
+    global _async_engine, _AsyncSessionLocal, _last_connection_state
+    
+    # If engine exists and we're not forcing reconnect, validate it
+    if _async_engine is not None and not force_reconnect:
+        # Validate existing connection
+        try:
+            async with _async_engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            logger.debug("Async database connection validated successfully")
+            return True, None
+        except Exception as e:
+            logger.warning(f"Async database connection is broken, resetting engine...: {e}")
+            await _reset_async_engine()
+    
+    settings = get_settings()
+    database_url = settings.database_url
+    
+    # Convert postgresql:// to postgresql+asyncpg://
+    if database_url.startswith("postgresql://"):
+        async_database_url = database_url.replace("postgresql://", "postgresql+asyncpg://")
+    elif database_url.startswith("postgresql+psycopg2://"):
+        async_database_url = database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    else:
+        async_database_url = database_url
+    
+    logger.info(f"Initializing async database connection: {async_database_url.split('@')[-1] if '@' in async_database_url else '***'}")
+    
+    last_error = None
+    
+    # Retry connection attempts
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Create async engine with connection pooling
+            _async_engine = create_async_engine(
+                async_database_url,
+                echo=settings.database_echo,
+                pool_size=settings.database_pool_size,
+                max_overflow=settings.database_max_overflow,
+                pool_pre_ping=True,  # Verify connections before using
+                pool_recycle=3600,  # Recycle connections after 1 hour
+                connect_args={
+                    "command_timeout": 10,  # 10 second timeout for commands
+                },
+            )
+            
+            # Test connection
+            logger.debug("Testing async database connection...")
+            async with _async_engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            logger.debug("Async database connection test successful")
+            
+            # Create async session factory
+            _AsyncSessionLocal = async_sessionmaker(
+                _async_engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+            
+            logger.info("Async database connection pool initialized successfully")
+            
+            # Update connection state
+            _last_connection_state = True
+            
+            return True, last_error if attempt > 1 else None
+            
+        except Exception as e:
+            last_error = e
+            logger.error(f"Async database connection attempt {attempt}/{max_retries} failed: {e}")
+            
+            # Send notification on connection failure (only on last attempt)
+            if attempt == max_retries and _notification_callback:
+                try:
+                    await _notification_callback(e, attempt, max_retries)
+                except Exception as notify_exc:
+                    logger.warning(f"Failed to send database connection failure notification: {notify_exc}")
+            
+            # Wait before retry (exponential backoff)
+            if attempt < max_retries:
+                import asyncio
+                wait_time = min(2 ** min(attempt, 3), 10)
+                if attempt >= 5:
+                    wait_time = 15
+                logger.info(f"Retrying async database connection in {wait_time} seconds... (attempt {attempt}/{max_retries})")
+                await asyncio.sleep(wait_time)
+    
+    # All retries failed
+    logger.error(f"Failed to initialize async database after {max_retries} attempts")
+    _last_connection_state = False
+    
+    return False, last_error
+
+
+async def _reset_async_engine() -> None:
+    """Dispose and reset the async database engine."""
+    global _async_engine, _AsyncSessionLocal
+    
+    if _async_engine is not None:
+        try:
+            await _async_engine.dispose()
+            logger.info("Disposed broken async database engine")
+        except Exception as e:
+            logger.warning(f"Error disposing async engine: {e}")
+    
+    _async_engine = None
+    _AsyncSessionLocal = None
+
+
+async def get_async_engine(retry_on_failure: bool = True) -> AsyncEngine:
+    """Get async database engine. Initializes if not already initialized.
+    
+    Args:
+        retry_on_failure: If True, attempt to reconnect on failure
+        
+    Raises:
+        RuntimeError: If database initialization failed after retries
+    """
+    global _async_engine
+    
+    # If engine doesn't exist, initialize it
+    if _async_engine is None:
+        success, error = await init_database_async()
+        if not success:
+            raise RuntimeError(
+                f"Async database is not available. Initialization failed: {error}"
+            ) from error
+    
+    # Validate connection and recover if broken
+    if _async_engine is not None:
+        try:
+            async with _async_engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception:
+            if retry_on_failure:
+                logger.warning("Async database connection is broken, attempting to recover...")
+                success, error = await init_database_async(force_reconnect=True)
+                if not success:
+                    raise RuntimeError(
+                        f"Async database connection lost and recovery failed: {error}"
+                    ) from error
+            else:
+                raise RuntimeError("Async database connection is broken")
+    
+    if _async_engine is None:
+        raise RuntimeError("Async database engine is not initialized")
+    
+    return _async_engine
+
+
+async def get_async_session_factory(retry_on_failure: bool = True) -> async_sessionmaker[AsyncSession]:
+    """Get async session factory. Initializes database if not already initialized.
+    
+    Args:
+        retry_on_failure: If True, attempt to reconnect on failure
+        
+    Raises:
+        RuntimeError: If database initialization failed after retries
+    """
+    global _AsyncSessionLocal
+    
+    # Ensure engine is valid (this will recover if broken)
+    await get_async_engine(retry_on_failure=retry_on_failure)
+    
+    if _AsyncSessionLocal is None:
+        raise RuntimeError("Async database session factory is not initialized")
+    
+    return _AsyncSessionLocal
+
+
+async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    """Async database session dependency for FastAPI.
+    
+    Usage:
+        @router.get("/users")
+        async def get_users(db: AsyncSession = Depends(get_async_db)):
+            result = await db.execute(select(User))
+            return result.scalars().all()
+    
+    Automatically recovers from connection failures by recreating the engine.
+    """
+    max_retries = 2
+    last_error = None
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            session_factory = await get_async_session_factory(retry_on_failure=(attempt < max_retries))
+            async with session_factory() as session:
+                try:
+                    yield session
+                    await session.commit()
+                    return  # Success, exit retry loop
+                except (OperationalError, DisconnectionError) as e:
+                    await session.rollback()
+                    last_error = e
+                    
+                    # If this is not the last attempt, reset engine and retry
+                    if attempt < max_retries:
+                        logger.warning(f"Async database connection lost during request (attempt {attempt}/{max_retries}), retrying...")
+                        await _reset_async_engine()
+                        continue
+                    else:
+                        raise RuntimeError(f"Async database connection failed after {max_retries} attempts: {e}") from e
+                except Exception:
+                    await session.rollback()
+                    raise
+        except (OperationalError, DisconnectionError) as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f"Async database connection failed (attempt {attempt}/{max_retries}), retrying...")
+                await _reset_async_engine()
+                continue
+            else:
+                raise RuntimeError(f"Async database connection unavailable: {e}") from e
+    
+    # Should not reach here, but just in case
+    if last_error:
+        raise RuntimeError(f"Async database connection failed: {last_error}") from last_error
+
+
+async def close_async_database() -> None:
+    """Close async database connections."""
+    global _async_engine, _AsyncSessionLocal
+    
+    if _async_engine:
+        await _async_engine.dispose()
+        _async_engine = None
+        _AsyncSessionLocal = None
+        logger.info("Async database connections closed")
 

@@ -1,5 +1,6 @@
 """
 FastAPI dependencies for authentication, database access, and application services.
+Supports both synchronous and asynchronous database operations.
 """
 from __future__ import annotations
 
@@ -9,8 +10,9 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db_session_dependency
+from app.core.database import get_db_session_dependency, get_async_db
 from app.core.auth import decode_token, get_user_id_from_token
 from app.core.my_binance_client import BinanceClient
 from app.core.binance_client_manager import BinanceClientManager
@@ -23,12 +25,22 @@ from loguru import logger
 security = HTTPBearer()
 
 
-# Note: Use get_db_session_dependency directly as a dependency
+# Note: Use get_db_session_dependency directly as a dependency for sync operations
 # Example: db: Session = Depends(get_db_session_dependency)
+# For async operations, use get_async_db
+# Example: db: AsyncSession = Depends(get_async_db)
 
 
 def get_database_service(db: Session = Depends(get_db_session_dependency)) -> DatabaseService:
-    """Get database service dependency."""
+    """Get database service dependency (sync)."""
+    return DatabaseService(db)
+
+
+async def get_database_service_async(db: AsyncSession = Depends(get_async_db)) -> DatabaseService:
+    """Get database service dependency (async).
+    
+    Use this for async route handlers to get better performance.
+    """
     return DatabaseService(db)
 
 
@@ -36,7 +48,7 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db_session_dependency)
 ) -> User:
-    """Get current authenticated user from JWT token.
+    """Get current authenticated user from JWT token (sync).
     
     Raises:
         HTTPException: If token is invalid or user not found
@@ -71,6 +83,64 @@ def get_current_user(
     # Get user from database
     db_service = DatabaseService(db)
     user = db_service.get_user_by_id(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
+    
+    return user
+
+
+async def get_current_user_async(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_async_db)
+) -> User:
+    """Get current authenticated user from JWT token (async).
+    
+    Use this for async route handlers to get better performance.
+    
+    Raises:
+        HTTPException: If token is invalid or user not found
+    """
+    token = credentials.credentials
+    payload = decode_token(token)
+    
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Check token type
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Get user_id from token
+    user_id = get_user_id_from_token(token)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Get user from database (async)
+    db_service = DatabaseService(db)
+    user = await db_service.async_get_user_by_id(user_id)
     
     if not user:
         raise HTTPException(
