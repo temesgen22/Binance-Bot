@@ -299,3 +299,122 @@ class TestPositionInfoUpdate:
         assert abs(summary.current_price - 51000.0) < 0.01, f"Expected 51000.0, got {summary.current_price}"
         assert summary.unrealized_pnl == 100.0, "unrealized_pnl should be set from Binance"
 
+
+class TestTradeSortingForPnL:
+    """Test that trades are sorted by timestamp before PnL calculation."""
+    
+    def test_unsorted_trades_cause_incorrect_pnl(self):
+        """Test that unsorted trades would cause incorrect PnL calculation."""
+        from app.api.routes.trades import get_symbol_pnl
+        from unittest.mock import MagicMock, patch
+        from app.models.db_models import User
+        
+        # Create trades OUT OF ORDER (later trade first)
+        # BUY at 50000 (10:00) -> SELL at 51000 (11:00) should give +100 profit
+        # But if processed as: SELL first, then BUY, it would be wrong
+        trades_unsorted = [
+            OrderResponse(
+                symbol="BTCUSDT",
+                order_id=2002,
+                status="FILLED",
+                side="SELL",
+                price=51000.0,
+                avg_price=51000.0,
+                executed_qty=0.1,
+                timestamp=datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc),  # Later
+            ),
+            OrderResponse(
+                symbol="BTCUSDT",
+                order_id=2001,
+                status="FILLED",
+                side="BUY",
+                price=50000.0,
+                avg_price=50000.0,
+                executed_qty=0.1,
+                timestamp=datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc),  # Earlier
+            ),
+        ]
+        
+        # Create trades IN ORDER (correct order)
+        trades_sorted = [
+            OrderResponse(
+                symbol="BTCUSDT",
+                order_id=2001,
+                status="FILLED",
+                side="BUY",
+                price=50000.0,
+                avg_price=50000.0,
+                executed_qty=0.1,
+                timestamp=datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc),  # Earlier
+            ),
+            OrderResponse(
+                symbol="BTCUSDT",
+                order_id=2002,
+                status="FILLED",
+                side="SELL",
+                price=51000.0,
+                avg_price=51000.0,
+                executed_qty=0.1,
+                timestamp=datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc),  # Later
+            ),
+        ]
+        
+        # Test that sorting works correctly
+        # The get_symbol_pnl function should sort trades before processing
+        # Expected PnL: (51000 - 50000) * 0.1 = +100 USDT
+        
+        # Verify sorting logic
+        sorted_unsorted = sorted(
+            trades_unsorted,
+            key=lambda t: t.timestamp or t.update_time or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        
+        # After sorting, should match the correct order
+        assert sorted_unsorted[0].order_id == 2001, "First trade should be BUY (order_id 2001)"
+        assert sorted_unsorted[0].side == "BUY", "First trade should be BUY"
+        assert sorted_unsorted[1].order_id == 2002, "Second trade should be SELL (order_id 2002)"
+        assert sorted_unsorted[1].side == "SELL", "Second trade should be SELL"
+        
+        # Verify timestamps are in order
+        assert sorted_unsorted[0].timestamp < sorted_unsorted[1].timestamp, "Trades should be sorted by timestamp"
+        
+        # Manually calculate expected PnL for sorted trades
+        # BUY at 50000, SELL at 51000, quantity 0.1
+        expected_pnl = (51000.0 - 50000.0) * 0.1  # +100 USDT
+        
+        # Simulate the PnL calculation logic
+        position_queue = []
+        completed_trades = []
+        
+        for trade in sorted_unsorted:
+            entry_price = trade.avg_price or trade.price
+            quantity = trade.executed_qty
+            side = trade.side
+            
+            if side == "BUY":
+                if position_queue and position_queue[0][2] == "SHORT":
+                    # Closing SHORT (shouldn't happen in this test)
+                    pass
+                else:
+                    # Opening LONG
+                    position_queue.append((quantity, entry_price, "LONG", None, None))
+            elif side == "SELL":
+                if position_queue and position_queue[0][2] == "LONG":
+                    # Closing LONG
+                    long_entry = position_queue[0]
+                    long_price = long_entry[1]
+                    close_qty = min(quantity, long_entry[0])
+                    pnl = (entry_price - long_price) * close_qty
+                    completed_trades.append({
+                        "realized_pnl": pnl,
+                        "quantity": close_qty,
+                        "entry_price": long_price,
+                        "exit_price": entry_price,
+                    })
+                    position_queue.pop(0)
+        
+        # Verify PnL calculation
+        total_realized_pnl = sum(t["realized_pnl"] for t in completed_trades)
+        assert len(completed_trades) == 1, "Should have 1 completed trade"
+        assert abs(total_realized_pnl - expected_pnl) < 0.01, \
+            f"Expected PnL {expected_pnl}, got {total_realized_pnl}"

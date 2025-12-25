@@ -417,7 +417,7 @@ def close_database() -> None:
         _async_engine = None
         _AsyncSessionLocal = None
     
-    logger.info("Database connections closed")
+        logger.info("Database connections closed")
 
 
 # ============================================

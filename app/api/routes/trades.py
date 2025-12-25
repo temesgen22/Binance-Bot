@@ -341,6 +341,10 @@ def get_symbol_pnl(
         trades = runner.get_trades(strategy.id)
         all_trades.extend(trades)
     
+    # CRITICAL: Sort trades by timestamp (oldest first) for correct FIFO position matching
+    # The position queue logic requires trades to be processed in chronological order
+    all_trades.sort(key=lambda t: t.timestamp or t.update_time or datetime.min.replace(tzinfo=timezone.utc))
+    
     # Calculate completed trades and realized PnL
     completed_trades = []
     position_queue = []  # List of (quantity, entry_price, side, strategy_id, strategy_name) tuples
@@ -463,17 +467,40 @@ def get_symbol_pnl(
         position_data = position_client.get_open_position(symbol)
         if position_data:
             position_side = "LONG" if position_data["positionAmt"] > 0 else "SHORT"
+            binance_position_size = abs(position_data["positionAmt"])
             
-            # Find matching strategy if any
+            # Find matching strategy - verify position size and side match
             strategy_match = None
             for strategy in symbol_strategies:
                 if strategy.position_size and abs(strategy.position_size) > 0:
-                    strategy_match = strategy
-                    break
+                    # Check if position side matches
+                    strategy_side = "LONG" if strategy.position_size > 0 else "SHORT"
+                    if strategy_side == position_side:
+                        # Position sizes should be approximately equal (allow small difference for rounding)
+                        size_diff = abs(abs(strategy.position_size) - binance_position_size)
+                        if size_diff < 0.01 or size_diff / max(abs(strategy.position_size), binance_position_size, 0.01) < 0.05:
+                            strategy_match = strategy
+                            break
+            
+            # If no exact match found, try to find any strategy for this symbol
+            if not strategy_match and symbol_strategies:
+                # Use first strategy as fallback (might be a partial match or manual position)
+                strategy_match = symbol_strategies[0]
+                logger.debug(
+                    f"Position for {symbol} doesn't exactly match any strategy. "
+                    f"Binance: {binance_position_size} {position_side}, "
+                    f"Using strategy: {strategy_match.name}"
+                )
+            
+            # Validate position data
+            if position_data["entryPrice"] <= 0:
+                logger.warning(f"Invalid entry price for {symbol}: {position_data['entryPrice']}")
+            if position_data["markPrice"] <= 0:
+                logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}")
             
             open_positions.append(PositionSummary(
                 symbol=symbol,
-                position_size=abs(position_data["positionAmt"]),
+                position_size=binance_position_size,
                 entry_price=position_data["entryPrice"],
                 current_price=position_data["markPrice"],
                 position_side=position_side,
@@ -483,6 +510,19 @@ def get_symbol_pnl(
                 strategy_name=strategy_match.name if strategy_match else None,
             ))
             total_unrealized_pnl = position_data["unRealizedProfit"]
+            
+            # Log if position doesn't match any strategy's tracked position
+            if symbol_strategies:
+                tracked_positions = [
+                    (s.name, abs(s.position_size), "LONG" if s.position_size > 0 else "SHORT")
+                    for s in symbol_strategies
+                    if s.position_size and abs(s.position_size) > 0
+                ]
+                if tracked_positions:
+                    logger.debug(
+                        f"Binance position for {symbol}: {binance_position_size} {position_side}, "
+                        f"Tracked positions: {tracked_positions}"
+                    )
     except Exception as exc:
         logger.warning(f"Could not get open position for {symbol}: {exc}")
     
@@ -507,9 +547,14 @@ def get_pnl_overview(
     current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
+    client_manager: BinanceClientManager = Depends(get_client_manager),
 ) -> List[SymbolPnL]:
-    """Get PnL overview for all symbols with trades."""
-    # Get all unique symbols
+    """Get PnL overview for all symbols with trades.
+    
+    Also checks Binance for positions that might not have corresponding trades
+    (e.g., manually opened positions).
+    """
+    # Get all unique symbols from strategies with trades
     symbols = set()
     strategies = runner.list_strategies()
     for strategy in strategies:
@@ -520,11 +565,46 @@ def get_pnl_overview(
         if trades:
             symbols.add(strategy.symbol)
     
+    # Also check Binance for positions that might not have trades
+    # Use account-specific client when filtering by account_id
+    position_client = client
+    if account_id:
+        try:
+            account_client = client_manager.get_client(account_id)
+            if account_client:
+                position_client = account_client
+        except Exception as exc:
+            logger.warning(f"Could not get account-specific client for {account_id}, using default: {exc}")
+    
+    # Query Binance for all positions to find symbols we might have missed
+    # This helps catch manually opened positions or positions from other systems
+    try:
+        # Get all positions from Binance
+        # Note: Binance futures_position_information() without symbol returns all positions
+        rest = position_client._ensure()
+        all_binance_positions = rest.futures_position_information()
+        for pos in all_binance_positions:
+            position_amt = float(pos.get("positionAmt", 0))
+            if abs(position_amt) > 0:
+                symbol = pos.get("symbol", "").upper()
+                if symbol:
+                    symbols.add(symbol)
+                    logger.debug(f"Found Binance position for {symbol} (not in strategies with trades)")
+    except Exception as exc:
+        logger.debug(f"Could not fetch all positions from Binance (this is optional): {exc}")
+        # Continue with symbols from strategies only - this is not critical
+    
     # Get PnL for each symbol
     pnl_list = []
     for symbol in sorted(symbols):
         try:
-            pnl = get_symbol_pnl(symbol, account_id=account_id, runner=runner, client=client)
+            pnl = get_symbol_pnl(
+                symbol, 
+                account_id=account_id, 
+                runner=runner, 
+                client=client,
+                client_manager=client_manager
+            )
             pnl_list.append(pnl)
         except Exception as exc:
             logger.warning(f"Failed to get PnL for {symbol}: {exc}")

@@ -612,6 +612,11 @@
                 if (!response.ok) throw new Error('Failed to load PnL data');
                 const pnlData = await response.json();
                 
+                // Ensure pnlData is an array before processing
+                if (!pnlData || !Array.isArray(pnlData)) {
+                    throw new Error('Invalid data format received from server');
+                }
+                
                 displayOverview(pnlData);
                 displayPositions(pnlData);
                 updateOverallStats(pnlData);
@@ -623,6 +628,10 @@
         }
 
         function updateOverallStats(pnlData) {
+            if (!pnlData || !Array.isArray(pnlData)) {
+                return;
+            }
+            
             let totalPnL = 0;
             let totalRealizedPnL = 0;
             let totalUnrealizedPnL = 0;
@@ -640,7 +649,7 @@
                 totalCompleted += symbol.completed_trades || 0;
                 totalWinning += symbol.winning_trades || 0;
                 totalLosing += symbol.losing_trades || 0;
-                activePositions += symbol.open_positions.length || 0;
+                activePositions += (symbol.open_positions && symbol.open_positions.length) || 0;
             });
 
             const winRate = totalCompleted > 0 ? (totalWinning / totalCompleted * 100).toFixed(2) : 0;
@@ -678,7 +687,7 @@
                 html += `<td>${symbol.completed_trades}</td>`;
                 html += `<td>${(symbol.win_rate || 0).toFixed(2)}%</td>`;
                 html += `<td><span class="badge success">${symbol.winning_trades || 0}W</span> / <span class="badge danger">${symbol.losing_trades || 0}L</span></td>`;
-                html += `<td>${symbol.open_positions.length}</td>`;
+                html += `<td>${(symbol.open_positions && symbol.open_positions.length) || 0}</td>`;
                 html += '</tr>';
             });
 
@@ -689,11 +698,18 @@
         function displayPositions(pnlData) {
             const content = document.getElementById('positionsContent');
             
+            if (!pnlData || !Array.isArray(pnlData)) {
+                content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
+                return;
+            }
+            
             const allPositions = [];
             pnlData.forEach(symbol => {
-                symbol.open_positions.forEach(pos => {
-                    allPositions.push({...pos, symbolPnL: symbol});
-                });
+                if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
+                    symbol.open_positions.forEach(pos => {
+                        allPositions.push({...pos, symbolPnL: symbol});
+                    });
+                }
             });
 
             if (allPositions.length === 0) {
@@ -713,7 +729,7 @@
                 
                 html += `<div class="position-card ${sideClass}">`;
                 html += `<div class="position-header">`;
-                html += `<div class="position-symbol">${pos.symbol}</div>`;
+                html += `<div class="position-symbol">${pos.symbol || 'N/A'}</div>`;
                 html += `<div class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</div>`;
                 html += `</div>`;
                 html += `<div class="position-details">`;

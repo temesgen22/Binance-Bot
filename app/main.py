@@ -222,7 +222,7 @@ def create_app() -> FastAPI:
                     async_db_init_success, async_db_connection_error = await asyncio.wait_for(
                         init_database_async(max_retries=10),
                         timeout=120.0
-                    )
+                )
                     logger.info(f"✅ Async database initialization completed: success={async_db_init_success}")
                     if not async_db_init_success:
                         logger.warning("Async database initialization failed, but sync database is available. Some features may be slower.")
