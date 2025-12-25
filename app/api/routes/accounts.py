@@ -8,10 +8,16 @@ from pydantic import BaseModel, Field
 
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import BinanceAccountConfig
-from app.api.deps import get_current_user, get_db_session_dependency, get_client_manager, get_account_service
+from app.api.deps import (
+    get_current_user, get_current_user_async,
+    get_db_session_dependency, get_async_db,
+    get_client_manager, get_account_service, get_account_service_async
+)
+from fastapi import Request
 from app.models.db_models import User
 from app.services.account_service import AccountService
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 
@@ -84,13 +90,14 @@ def get_client_manager(request: Request) -> BinanceClientManager:
 
 
 @router.get("/debug")
-def debug_accounts(
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service)
+async def debug_accounts(
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async)
 ) -> Dict:
     """Debug endpoint to check account loading status."""
     try:
-        db_accounts = account_service.db_service.get_user_accounts(current_user.id)
+        db_accounts = await account_service.db_service.async_get_user_accounts(current_user.id)
         
         return {
             'database_accounts_count': len(db_accounts),
@@ -110,9 +117,10 @@ def debug_accounts(
 
 
 @router.get("/list", response_model=List[AccountResponse])
-def list_accounts(
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service),
+async def list_accounts(
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async),
     include_env: bool = False
 ) -> List[AccountResponse]:
     """List all Binance accounts for the current user.
@@ -122,9 +130,9 @@ def list_accounts(
     """
     result = []
     
-    # Get accounts from database (multi-user mode)
+    # Get accounts from database (multi-user mode) - async
     try:
-        db_accounts = account_service.db_service.get_user_accounts(current_user.id)
+        db_accounts = await account_service.db_service.async_get_user_accounts(current_user.id)
         
         for acc in db_accounts:
             response = AccountResponse.from_account(acc)
@@ -141,43 +149,44 @@ def list_accounts(
 
 
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
-def create_account(
-    request: CreateAccountRequest,
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service)
+async def create_account(
+    request_data: CreateAccountRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async)
 ) -> AccountResponse:
     """Create a new Binance account for the current user."""
     try:
         
-        # Check if account_id already exists for this user
-        existing = account_service.db_service.get_account_by_id(current_user.id, request.account_id)
+        # Check if account_id already exists for this user (async)
+        existing = await account_service.db_service.async_get_account_by_id(current_user.id, request_data.account_id)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Account '{request.account_id}' already exists"
+                detail=f"Account '{request_data.account_id}' already exists"
             )
         
-        # Create account
+        # Create account (sync method for now - create_account is still sync)
         config = account_service.create_account(
             user_id=current_user.id,
-            account_id=request.account_id,
-            api_key=request.api_key,
-            api_secret=request.api_secret,
-            name=request.name,
-            exchange_platform=request.exchange_platform,
-            testnet=request.testnet,
-            is_default=request.is_default
+            account_id=request_data.account_id,
+            api_key=request_data.api_key,
+            api_secret=request_data.api_secret,
+            name=request_data.name,
+            exchange_platform=request_data.exchange_platform,
+            testnet=request_data.testnet,
+            is_default=request_data.is_default
         )
         
-        # Get the created account from database
-        db_account = account_service.db_service.get_account_by_id(current_user.id, request.account_id)
+        # Get the created account from database (async)
+        db_account = await account_service.db_service.async_get_account_by_id(current_user.id, request_data.account_id)
         if not db_account:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Account created but could not be retrieved"
             )
         
-        logger.info(f"Created account {request.account_id} for user {current_user.id}")
+        logger.info(f"Created account {request_data.account_id} for user {current_user.id}")
         return AccountResponse.from_account(db_account)
         
     except HTTPException:
@@ -191,14 +200,15 @@ def create_account(
 
 
 @router.get("/{account_id}", response_model=AccountResponse)
-def get_account(
+async def get_account(
     account_id: str,
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service)
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async)
 ) -> AccountResponse:
     """Get a specific account by ID."""
     try:
-        db_account = account_service.db_service.get_account_by_id(current_user.id, account_id)
+        db_account = await account_service.db_service.async_get_account_by_id(current_user.id, account_id)
         
         if not db_account:
             raise HTTPException(
@@ -219,27 +229,28 @@ def get_account(
 
 
 @router.put("/{account_id}", response_model=AccountResponse)
-def update_account(
+async def update_account(
     account_id: str,
-    request: UpdateAccountRequest,
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service)
+    request_data: UpdateAccountRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async)
 ) -> AccountResponse:
     """Update an account."""
     try:
         
         # Build update dict
         updates = {}
-        if request.name is not None:
-            updates["name"] = request.name
-        if request.exchange_platform is not None:
-            updates["exchange_platform"] = request.exchange_platform
-        if request.testnet is not None:
-            updates["testnet"] = request.testnet
-        if request.is_default is not None:
-            updates["is_default"] = request.is_default
-        if request.is_active is not None:
-            updates["is_active"] = request.is_active
+        if request_data.name is not None:
+            updates["name"] = request_data.name
+        if request_data.exchange_platform is not None:
+            updates["exchange_platform"] = request_data.exchange_platform
+        if request_data.testnet is not None:
+            updates["testnet"] = request_data.testnet
+        if request_data.is_default is not None:
+            updates["is_default"] = request_data.is_default
+        if request_data.is_active is not None:
+            updates["is_active"] = request_data.is_active
         
         if not updates:
             raise HTTPException(
@@ -247,6 +258,7 @@ def update_account(
                 detail="No fields to update"
             )
         
+        # Update account (sync method for now - update_account is still sync)
         config = account_service.update_account(current_user.id, account_id, **updates)
         
         if not config:
@@ -255,7 +267,8 @@ def update_account(
                 detail=f"Account '{account_id}' not found"
             )
         
-        db_account = account_service.db_service.get_account_by_id(current_user.id, account_id)
+        # Get updated account from database (async)
+        db_account = await account_service.db_service.async_get_account_by_id(current_user.id, account_id)
         return AccountResponse.from_account(db_account)
         
     except HTTPException:
@@ -269,10 +282,11 @@ def update_account(
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_account(
+async def delete_account(
     account_id: str,
-    current_user: User = Depends(get_current_user),
-    account_service: AccountService = Depends(get_account_service)
+    request: Request,
+    current_user: User = Depends(get_current_user_async),
+    account_service: AccountService = Depends(get_account_service_async)
 ):
     """Delete (deactivate) an account."""
     try:

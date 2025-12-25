@@ -143,14 +143,14 @@ async def list_all_trades(
                         break
                 
                 if target_strategy:
-                    # Get strategy UUID from database
+                    # Get strategy UUID from database (async)
                     from app.services.strategy_service import StrategyService
                     strategy_service = StrategyService(db_session, redis_storage)
-                    db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy_id)
+                    db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy_id)
                     
                     if db_strategy:
-                        # Fetch trades from database for this strategy
-                        db_trades = trade_service.get_strategy_trades(
+                        # Fetch trades from database for this strategy (async)
+                        db_trades = await trade_service.async_get_strategy_trades(
                             user_id=current_user.id,
                             strategy_id=db_strategy.id,
                             limit=10000  # Large limit to get all trades
@@ -196,15 +196,15 @@ async def list_all_trades(
                     # Get strategy UUID from database (async)
                     from app.services.strategy_service import StrategyService
                     strategy_service = StrategyService(db_service.db, redis_storage)
-                    db_strategy = await db_service.async_get_strategy(current_user.id, strategy.id)
+                    db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy.id)
                     
                     if db_strategy:
                         strategy_uuids.append(db_strategy.id)
                         strategy_map[db_strategy.id] = strategy
                 
                 if strategy_uuids:
-                    # Batch fetch trades from database
-                    trades_by_strategy = trade_service.get_trades_batch(
+                    # Batch fetch trades from database (async)
+                    trades_by_strategy = await trade_service.async_get_trades_batch(
                         user_id=current_user.id,
                         strategy_ids=strategy_uuids,
                         limit_per_strategy=10000

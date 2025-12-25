@@ -288,11 +288,47 @@ def get_account_service(
     request: Request,
     db: Session = Depends(get_db_session_dependency)
 ):
-    """Get AccountService with Redis storage (cached per request).
+    """Get AccountService with Redis storage (cached per request) - sync.
     
     This dependency eliminates duplication of Redis/AccountService initialization
     across multiple endpoints. The service is cached in request.state to avoid
     recreating it multiple times within the same request.
+    
+    Returns:
+        AccountService instance with Redis storage configured
+    """
+    # Cache in request state to avoid recreating on each dependency call
+    if hasattr(request.state, 'account_service'):
+        return request.state.account_service
+    
+    from app.services.account_service import AccountService
+    from app.core.redis_storage import RedisStorage
+    from app.core.config import get_settings
+    
+    settings = get_settings()
+    redis_storage = None
+    if settings.redis_enabled:
+        redis_storage = RedisStorage(
+            redis_url=settings.redis_url,
+            enabled=settings.redis_enabled
+        )
+    
+    account_service = AccountService(db, redis_storage)
+    request.state.account_service = account_service
+    return account_service
+
+
+async def get_account_service_async(
+    request: Request,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Get AccountService with Redis storage (cached per request) - async.
+    
+    This dependency eliminates duplication of Redis/AccountService initialization
+    across multiple endpoints. The service is cached in request.state to avoid
+    recreating it multiple times within the same request.
+    
+    Use this for async route handlers to get better performance.
     
     Returns:
         AccountService instance with Redis storage configured

@@ -10,6 +10,7 @@ from typing import Optional, List, Dict
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.core.redis_storage import RedisStorage
@@ -19,12 +20,16 @@ from app.models.db_models import Trade as DBTrade, Strategy
 
 
 class TradeService:
-    """Service for managing trades with database + Redis cache-aside pattern."""
+    """Service for managing trades with database + Redis cache-aside pattern.
     
-    def __init__(self, db: Session, redis_storage: Optional[RedisStorage] = None):
+    Supports both sync (Session) and async (AsyncSession) database operations.
+    """
+    
+    def __init__(self, db: Session | AsyncSession, redis_storage: Optional[RedisStorage] = None):
         self.db_service = DatabaseService(db)
         self.redis = redis_storage
         self._cache_ttl = 86400  # 24 hours cache TTL for recent trades
+        self._is_async = isinstance(db, AsyncSession)
     
     def _redis_key(self, user_id: UUID, strategy_id: str) -> str:
         """Generate Redis key for recent trades with user_id."""
@@ -250,7 +255,7 @@ class TradeService:
         strategy_ids: List[UUID],
         limit_per_strategy: int = 1000
     ) -> Dict[UUID, List[OrderResponse]]:
-        """Get trades for multiple strategies in a single batch query.
+        """Get trades for multiple strategies in a single batch query (sync).
         
         This method optimizes the N+1 query problem by fetching trades
         for all strategies in a single database query.
@@ -263,11 +268,60 @@ class TradeService:
         Returns:
             Dictionary mapping strategy_id to list of trades
         """
+        if self._is_async:
+            raise RuntimeError("Use async_get_trades_batch() with AsyncSession")
+        
         if not strategy_ids:
             return {}
         
         # Batch query from database (single query for all strategies)
         db_trades = self.db_service.get_user_trades_batch(
+            user_id=user_id,
+            strategy_ids=strategy_ids,
+            limit=limit_per_strategy * len(strategy_ids)  # Total limit for all strategies
+        )
+        
+        # Group trades by strategy_id
+        trades_by_strategy: Dict[UUID, List[OrderResponse]] = {sid: [] for sid in strategy_ids}
+        
+        for db_trade in db_trades:
+            strategy_id = db_trade.strategy_id
+            if strategy_id in trades_by_strategy:
+                # Limit per strategy
+                if len(trades_by_strategy[strategy_id]) < limit_per_strategy:
+                    trades_by_strategy[strategy_id].append(
+                        self._db_trade_to_order_response(db_trade)
+                    )
+        
+        return trades_by_strategy
+    
+    async def async_get_trades_batch(
+        self,
+        user_id: UUID,
+        strategy_ids: List[UUID],
+        limit_per_strategy: int = 1000
+    ) -> Dict[UUID, List[OrderResponse]]:
+        """Get trades for multiple strategies in a single batch query (async).
+        
+        This method optimizes the N+1 query problem by fetching trades
+        for all strategies in a single database query.
+        
+        Args:
+            user_id: User ID
+            strategy_ids: List of strategy UUIDs
+            limit_per_strategy: Maximum trades per strategy
+            
+        Returns:
+            Dictionary mapping strategy_id to list of trades
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_trades_batch() with Session")
+        
+        if not strategy_ids:
+            return {}
+        
+        # Batch query from database (single query for all strategies) - async
+        db_trades = await self.db_service.async_get_user_trades_batch(
             user_id=user_id,
             strategy_ids=strategy_ids,
             limit=limit_per_strategy * len(strategy_ids)  # Total limit for all strategies

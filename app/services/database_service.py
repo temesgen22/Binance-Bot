@@ -224,7 +224,7 @@ class DatabaseService:
         return result.scalar_one_or_none()
     
     def get_account_by_id(self, user_id: UUID, account_id: str) -> Optional[Account]:
-        """Get account by user_id and account_id.
+        """Get account by user_id and account_id (sync).
         
         Note: account_id is the string identifier (e.g., 'main1'), not the UUID primary key (Account.id).
         The query is case-insensitive to handle any case variations.
@@ -236,6 +236,9 @@ class DatabaseService:
         Returns:
             Account if found and active, None otherwise
         """
+        if self._is_async:
+            raise RuntimeError("Use async_get_account_by_id() with AsyncSession")
+        
         # Normalize account_id to lowercase (constraint requires lowercase)
         account_id_lower = account_id.lower().strip() if account_id else None
         if not account_id_lower:
@@ -259,6 +262,49 @@ class DatabaseService:
             )
         
         return result
+    
+    async def async_get_account_by_id(self, user_id: UUID, account_id: str) -> Optional[Account]:
+        """Get account by user_id and account_id (async).
+        
+        Note: account_id is the string identifier (e.g., 'main1'), not the UUID primary key (Account.id).
+        The query is case-insensitive to handle any case variations.
+        
+        Args:
+            user_id: User UUID
+            account_id: Account string identifier (e.g., 'main1'), NOT the UUID primary key
+            
+        Returns:
+            Account if found and active, None otherwise
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_account_by_id() with Session")
+        
+        # Normalize account_id to lowercase (constraint requires lowercase)
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if not account_id_lower:
+            return None
+        
+        # Query using Account.account_id (string column), not Account.id (UUID primary key)
+        result = await self.db.execute(
+            select(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id.ilike(account_id_lower),  # Case-insensitive match on string column
+                Account.is_active == True
+            )
+        )
+        account = result.scalar_one_or_none()
+        
+        if account:
+            logger.debug(
+                f"Found account: id={account.id} (UUID), account_id='{account.account_id}' (string), "
+                f"user_id={account.user_id}, is_active={account.is_active}"
+            )
+        else:
+            logger.debug(
+                f"No active account found with user_id={user_id}, account_id='{account_id_lower}' (string column)"
+            )
+        
+        return account
     
     def update_account(
         self,
@@ -585,7 +631,7 @@ class DatabaseService:
         event_type: Optional[str] = None,
         limit: int = 100
     ) -> List[SystemEvent]:
-        """Get system events for a strategy.
+        """Get system events for a strategy (sync).
         
         Args:
             strategy_id: Strategy UUID
@@ -595,6 +641,9 @@ class DatabaseService:
         Returns:
             List of SystemEvent instances, ordered by created_at descending
         """
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy_events() with AsyncSession")
+        
         query = self.db.query(SystemEvent).filter(
             SystemEvent.strategy_id == strategy_id
         )
@@ -603,4 +652,36 @@ class DatabaseService:
             query = query.filter(SystemEvent.event_type == event_type)
         
         return query.order_by(SystemEvent.created_at.desc()).limit(limit).all()
+    
+    async def async_get_strategy_events(
+        self,
+        strategy_id: UUID,
+        event_type: Optional[str] = None,
+        limit: int = 100
+    ) -> List[SystemEvent]:
+        """Get system events for a strategy (async).
+        
+        Args:
+            strategy_id: Strategy UUID
+            event_type: Optional filter by event type
+            limit: Maximum number of events to return
+            
+        Returns:
+            List of SystemEvent instances, ordered by created_at descending
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_strategy_events() with Session")
+        
+        from sqlalchemy import select
+        query = select(SystemEvent).filter(
+            SystemEvent.strategy_id == strategy_id
+        )
+        
+        if event_type:
+            query = query.filter(SystemEvent.event_type == event_type)
+        
+        query = query.order_by(SystemEvent.created_at.desc()).limit(limit)
+        result = await self.db.execute(query)
+        events = list(result.scalars().all())
+        return events
 

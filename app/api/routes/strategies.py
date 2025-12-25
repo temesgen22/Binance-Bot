@@ -4,7 +4,11 @@ from uuid import UUID
 
 from loguru import logger
 
-from app.api.deps import get_strategy_runner, get_current_user, get_database_service, get_db_session_dependency
+from app.api.deps import (
+    get_strategy_runner, get_current_user, get_current_user_async,
+    get_database_service, get_database_service_async,
+    get_db_session_dependency, get_async_db
+)
 from app.models.order import OrderResponse
 from app.models.strategy import CreateStrategyRequest, StrategySummary, StrategyStats, OverallStats
 from app.models.db_models import User
@@ -13,6 +17,7 @@ from app.services.strategy_service import StrategyService
 from app.core.redis_storage import RedisStorage
 from app.core.config import get_settings
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import (
     StrategyNotFoundError,
     StrategyAlreadyRunningError,
@@ -29,8 +34,8 @@ router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 @router.get("/list", response_model=list[StrategySummary])
 async def list_strategies(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency),
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db),
     runner: StrategyRunner = Depends(get_strategy_runner)
 ) -> list[StrategySummary]:
     """List all registered strategies for the current user.
@@ -46,7 +51,7 @@ async def list_strategies(
 
 
 @router.get("/{strategy_id}", response_model=StrategySummary)
-def get_strategy(strategy_id: str, runner: StrategyRunner = Depends(get_strategy_runner)) -> StrategySummary:
+async def get_strategy(strategy_id: str, runner: StrategyRunner = Depends(get_strategy_runner)) -> StrategySummary:
     """Get details of a specific strategy by ID.
     
     Raises:
@@ -62,8 +67,8 @@ def get_strategy(strategy_id: str, runner: StrategyRunner = Depends(get_strategy
 @router.post("/", response_model=StrategySummary, status_code=status.HTTP_201_CREATED)
 async def register_strategy(
     payload: CreateStrategyRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency),
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db),
     runner: StrategyRunner = Depends(get_strategy_runner)
 ) -> StrategySummary:
     """Register a new trading strategy.
@@ -83,13 +88,13 @@ async def register_strategy(
     try:
         # Get account UUID from account_id
         account_id = payload.account_id.lower() if payload.account_id else "default"
-        db_service = get_database_service(db)
+        db_service = get_database_service_async(db)
         
-        # Find account in database
+        # Find account in database (async)
         account_uuid = None
         if runner.strategy_service and runner.user_id:
             # Multi-user mode: get account from database
-            accounts = db_service.get_user_accounts(current_user.id)
+            accounts = await db_service.async_get_user_accounts(current_user.id)
             account = next((acc for acc in accounts if acc.account_id == account_id), None)
             if not account:
                 raise HTTPException(
@@ -140,7 +145,7 @@ async def stop_strategy(strategy_id: str, runner: StrategyRunner = Depends(get_s
 
 
 @router.get("/{strategy_id}/trades", response_model=list[OrderResponse])
-def get_strategy_trades(strategy_id: str, runner: StrategyRunner = Depends(get_strategy_runner)) -> list[OrderResponse]:
+async def get_strategy_trades(strategy_id: str, runner: StrategyRunner = Depends(get_strategy_runner)) -> list[OrderResponse]:
     """Get all executed trades for a specific strategy.
     
     Raises:
@@ -170,10 +175,10 @@ def get_overall_stats(runner: StrategyRunner = Depends(get_strategy_runner)) -> 
 
 
 @router.get("/{strategy_id}/activity", response_model=list[dict])
-def get_strategy_activity(
+async def get_strategy_activity(
     strategy_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency),
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db),
     runner: StrategyRunner = Depends(get_strategy_runner),
     limit: int = 50
 ) -> list[dict]:
@@ -189,14 +194,14 @@ def get_strategy_activity(
     if not any(s.id == strategy_id for s in strategies):
         raise StrategyNotFoundError(strategy_id)
     
-    # Get strategy UUID from database
-    db_service = get_database_service(db)
-    db_strategy = db_service.get_strategy(current_user.id, strategy_id)
+    # Get strategy UUID from database (async)
+    db_service = get_database_service_async(db)
+    db_strategy = await db_service.async_get_strategy(current_user.id, strategy_id)
     if not db_strategy:
         raise StrategyNotFoundError(strategy_id)
     
-    # Get activity events
-    events = db_service.get_strategy_events(
+    # Get activity events (async)
+    events = await db_service.async_get_strategy_events(
         strategy_id=db_strategy.id,
         event_type=None,  # Get all event types
         limit=limit
@@ -219,7 +224,7 @@ def get_strategy_activity(
 @router.delete("/{strategy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_strategy(
     strategy_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_async),
     runner: StrategyRunner = Depends(get_strategy_runner)
 ) -> None:
     """Delete a strategy permanently.

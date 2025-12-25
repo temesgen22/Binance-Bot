@@ -9,6 +9,7 @@ from typing import Optional, List
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.core.redis_storage import RedisStorage
@@ -19,10 +20,14 @@ from app.core.encryption import get_encryption_service
 
 
 class AccountService(BaseCacheService):
-    """Service for managing accounts with database + Redis cache-aside pattern."""
+    """Service for managing accounts with database + Redis cache-aside pattern.
     
-    def __init__(self, db: Session, redis_storage: Optional[RedisStorage] = None):
+    Supports both sync (Session) and async (AsyncSession) database operations.
+    """
+    
+    def __init__(self, db: Session | AsyncSession, redis_storage: Optional[RedisStorage] = None):
         super().__init__(db, redis_storage, cache_ttl=3600)
+        self._is_async = isinstance(db, AsyncSession)
     
     def _redis_key(self, user_id: UUID, account_id: str) -> str:
         """Generate Redis key for account with user_id."""
@@ -155,8 +160,22 @@ class AccountService(BaseCacheService):
         user_id: UUID,
         decrypt_func: Optional[callable] = None
     ) -> List[BinanceAccountConfig]:
-        """List all accounts for a user."""
+        """List all accounts for a user (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_list_accounts() with AsyncSession")
         db_accounts = self.db_service.get_user_accounts(user_id)
+        configs = [self._db_account_to_config(acc, decrypt_func) for acc in db_accounts]
+        return configs
+    
+    async def async_list_accounts(
+        self,
+        user_id: UUID,
+        decrypt_func: Optional[callable] = None
+    ) -> List[BinanceAccountConfig]:
+        """List all accounts for a user (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use list_accounts() with Session")
+        db_accounts = await self.db_service.async_get_user_accounts(user_id)
         configs = [self._db_account_to_config(acc, decrypt_func) for acc in db_accounts]
         return configs
     
@@ -165,8 +184,23 @@ class AccountService(BaseCacheService):
         user_id: UUID,
         decrypt_func: Optional[callable] = None
     ) -> Optional[BinanceAccountConfig]:
-        """Get user's default account."""
+        """Get user's default account (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_default_account() with AsyncSession")
         db_account = self.db_service.get_default_account(user_id)
+        if not db_account:
+            return None
+        return self._db_account_to_config(db_account, decrypt_func)
+    
+    async def async_get_default_account(
+        self,
+        user_id: UUID,
+        decrypt_func: Optional[callable] = None
+    ) -> Optional[BinanceAccountConfig]:
+        """Get user's default account (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use get_default_account() with Session")
+        db_account = await self.db_service.async_get_default_account(user_id)
         if not db_account:
             return None
         return self._db_account_to_config(db_account, decrypt_func)

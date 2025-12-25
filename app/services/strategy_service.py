@@ -10,6 +10,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.core.redis_storage import RedisStorage
@@ -19,10 +20,14 @@ from app.models.db_models import Strategy as DBStrategy
 
 
 class StrategyService(BaseCacheService):
-    """Service for managing strategies with database + Redis cache-aside pattern."""
+    """Service for managing strategies with database + Redis cache-aside pattern.
     
-    def __init__(self, db: Session, redis_storage: Optional[RedisStorage] = None):
+    Supports both sync (Session) and async (AsyncSession) database operations.
+    """
+    
+    def __init__(self, db: Session | AsyncSession, redis_storage: Optional[RedisStorage] = None):
         super().__init__(db, redis_storage, cache_ttl=3600)
+        self._is_async = isinstance(db, AsyncSession)
     
     def _redis_key(self, user_id: UUID, strategy_id: str) -> str:
         """Generate Redis key for strategy with user_id."""
@@ -145,12 +150,15 @@ class StrategyService(BaseCacheService):
         user_id: UUID,
         strategy_id: str
     ) -> Optional[StrategySummary]:
-        """Get strategy using cache-aside pattern.
+        """Get strategy using cache-aside pattern (sync).
         
         1. Check Redis cache
         2. If not found, check database
         3. Cache the result in Redis
         """
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy() with AsyncSession")
+        
         key = self._redis_key(user_id, strategy_id)
         
         # Try Redis first
@@ -175,9 +183,57 @@ class StrategyService(BaseCacheService):
         
         return summary
     
+    async def async_get_strategy(
+        self,
+        user_id: UUID,
+        strategy_id: str
+    ) -> Optional[StrategySummary]:
+        """Get strategy using cache-aside pattern (async).
+        
+        1. Check Redis cache
+        2. If not found, check database
+        3. Cache the result in Redis
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_strategy() with Session")
+        
+        key = self._redis_key(user_id, strategy_id)
+        
+        # Try Redis first
+        cached_data = self._get_from_cache(key)
+        if cached_data:
+            logger.debug(f"Cache HIT for strategy {strategy_id}")
+            return self._dict_to_strategy_summary(cached_data)
+        
+        # Cache miss - check database (async)
+        logger.debug(f"Cache MISS for strategy {strategy_id}, checking database")
+        db_strategy = await self.db_service.async_get_strategy(user_id, strategy_id)
+        
+        if not db_strategy:
+            return None
+        
+        # Convert to summary
+        summary = self._db_strategy_to_summary(db_strategy)
+        
+        # Cache in Redis
+        data = self._strategy_summary_to_dict(summary)
+        self._save_to_cache(key, data)
+        
+        return summary
+    
     def list_strategies(self, user_id: UUID) -> list[StrategySummary]:
-        """List all strategies for a user."""
+        """List all strategies for a user (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_list_strategies() with AsyncSession")
         db_strategies = self.db_service.get_user_strategies(user_id)
+        summaries = [self._db_strategy_to_summary(s) for s in db_strategies]
+        return summaries
+    
+    async def async_list_strategies(self, user_id: UUID) -> list[StrategySummary]:
+        """List all strategies for a user (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use list_strategies() with Session")
+        db_strategies = await self.db_service.async_get_user_strategies(user_id)
         summaries = [self._db_strategy_to_summary(s) for s in db_strategies]
         return summaries
     
