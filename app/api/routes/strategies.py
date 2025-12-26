@@ -88,7 +88,7 @@ async def register_strategy(
     try:
         # Get account UUID from account_id
         account_id = payload.account_id.lower() if payload.account_id else "default"
-        db_service = get_database_service_async(db)
+        db_service = await get_database_service_async(db)
         
         # Find account in database (async)
         account_uuid = None
@@ -195,7 +195,7 @@ async def get_strategy_activity(
         raise StrategyNotFoundError(strategy_id)
     
     # Get strategy UUID from database (async)
-    db_service = get_database_service_async(db)
+    db_service = await get_database_service_async(db)
     db_strategy = await db_service.async_get_strategy(current_user.id, strategy_id)
     if not db_strategy:
         raise StrategyNotFoundError(strategy_id)
