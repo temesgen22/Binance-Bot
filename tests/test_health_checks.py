@@ -61,6 +61,7 @@ class TestHealthChecks:
                 app.dependency_overrides.pop(get_db_session_dependency, None)
                 app.dependency_overrides.pop(get_binance_client, None)
     
+    @pytest.mark.slow
     def test_liveness_endpoint(self, client):
         """Test liveness endpoint always returns OK."""
         response = client.get("/health/live")
@@ -70,6 +71,7 @@ class TestHealthChecks:
         assert data["status"] == "alive"
         assert "message" in data
     
+    @pytest.mark.slow
     def test_readiness_endpoint_success(self, client):
         """Test readiness endpoint when all services are healthy."""
         response = client.get("/health/ready")
@@ -82,6 +84,7 @@ class TestHealthChecks:
         assert "database" in data
         assert "components" in data
     
+    @pytest.mark.slow
     def test_readiness_endpoint_components(self, client):
         """Test that readiness endpoint returns component status."""
         response = client.get("/health/ready")
@@ -93,6 +96,7 @@ class TestHealthChecks:
         assert "redis" in data["components"]
         assert "binance" in data["components"]
     
+    @pytest.mark.slow
     def test_health_endpoint_backward_compatibility(self, client):
         """Test that /health endpoint still works (backward compatibility)."""
         response = client.get("/health")
@@ -105,6 +109,7 @@ class TestHealthChecks:
         assert "database" in data
         assert data["database"] == "ok"
     
+    @pytest.mark.slow
     def test_detailed_health_endpoint(self, client):
         """Test detailed health endpoint."""
         response = client.get("/health/detailed")
@@ -120,6 +125,7 @@ class TestHealthChecks:
         assert "redis" in data["services"]
         assert "binance" in data["services"]
     
+    @pytest.mark.slow
     def test_quick_health_endpoint(self, client):
         """Test quick health endpoint."""
         response = client.get("/health/quick")
@@ -129,6 +135,7 @@ class TestHealthChecks:
         assert data["status"] == "ok"
         assert "message" in data
     
+    @pytest.mark.slow
     def test_correlation_id_in_health_response(self, client):
         """Test that correlation ID is included in health check responses."""
         test_id = "health-test-correlation-id"

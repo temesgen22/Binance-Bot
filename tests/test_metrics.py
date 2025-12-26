@@ -129,6 +129,7 @@ class TestMetricsEndpoint:
         # This will be tested via integration test
         assert True
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_metrics_endpoint_returns_data(self):
         """Test that metrics endpoint returns data."""

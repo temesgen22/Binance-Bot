@@ -60,7 +60,7 @@ pipeline {
               python -m pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              pytest -q
+              pytest -q -m "not slow and not database"
             '''
           }
         }

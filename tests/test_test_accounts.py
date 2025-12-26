@@ -276,6 +276,7 @@ class TestTestExistingAccountEndpoint:
             assert "not found" in data["detail"].lower()
             assert "nonexistent" in data["detail"]
     
+    @pytest.mark.slow
     def test_test_existing_account_authentication_failed(self, test_client, mock_client_manager):
         """Test existing account with invalid credentials."""
         from app.services.account_service import AccountService

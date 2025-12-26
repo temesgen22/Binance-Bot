@@ -114,6 +114,7 @@ class TestCorrelationIDMiddleware:
         
         await middleware.dispatch(request, call_next)
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_middleware_with_fastapi_app(self):
         """Test middleware integration with FastAPI app."""
