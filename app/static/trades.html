@@ -706,9 +706,9 @@
             const allPositions = [];
             pnlData.forEach(symbol => {
                 if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
-                    symbol.open_positions.forEach(pos => {
-                        allPositions.push({...pos, symbolPnL: symbol});
-                    });
+                symbol.open_positions.forEach(pos => {
+                    allPositions.push({...pos, symbolPnL: symbol});
+                });
                 }
             });
 

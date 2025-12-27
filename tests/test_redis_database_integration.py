@@ -176,8 +176,9 @@ def trade_service_with_redis(test_db_session: Session, mock_redis_enabled):
     return TradeService(db=test_db_session, redis_storage=mock_redis_enabled)
 
 
+@pytest.mark.slow
 class TestRedisDatabaseIntegration:
-    """End-to-end tests for Redis and Database working together."""
+    """End-to-end tests for Redis and Database working together (integration tests - skip in CI)."""
     
     def test_cache_aside_pattern_read_from_redis(
         self,

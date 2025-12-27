@@ -216,7 +216,7 @@ class TestStrategyRunnerOrderExecution:
             price=40000.0
         )
         
-        await runner._execute(signal, strategy_summary)
+        await runner.order_manager.execute_order(signal, strategy_summary)
         
         # Verify no order was placed
         mock_binance_client.place_order.assert_not_called()
@@ -259,7 +259,7 @@ class TestStrategyRunnerOrderExecution:
                 price=40000.0
             )
             
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
             
             # Verify order was placed
             mock_binance_client.place_order.assert_called_once()
@@ -301,7 +301,7 @@ class TestStrategyRunnerOrderExecution:
                 price=40000.0
             )
             
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
             
             # Verify order was placed
             mock_binance_client.place_order.assert_called_once()
@@ -345,7 +345,7 @@ class TestStrategyRunnerOrderExecution:
             side_effect=AssertionError("size_position should not be called when closing"),
         ):
             mock_binance_client.place_order.return_value = mock_order_response
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
 
         # Verify place_order was called with client_order_id (for idempotency)
         mock_binance_client.place_order.assert_called_once()
@@ -391,7 +391,7 @@ class TestStrategyRunnerOrderExecution:
             
             # Should not raise exception, but handle gracefully
             try:
-                await runner._execute(signal, strategy_summary)
+                await runner.order_manager.execute_order(signal, strategy_summary)
             except Exception:
                 # If exception is raised, it should be caught and logged
                 pass
@@ -428,7 +428,7 @@ class TestStrategyRunnerOrderExecution:
             
             # Should raise PositionSizingError (converted from ValueError)
             with pytest.raises(PositionSizingError, match="Notional too small"):
-                await runner._execute(signal, strategy_summary)
+                await runner.order_manager.execute_order(signal, strategy_summary)
             
             # Verify no order was placed
             mock_binance_client.place_order.assert_not_called()
@@ -466,7 +466,7 @@ class TestStrategyRunnerOrderExecution:
                 price=40000.0,
             )
 
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
 
             # Should check current leverage and set it to target
             mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
@@ -512,7 +512,7 @@ class TestStrategyRunnerOrderExecution:
             price=40000.0,
         )
 
-        await runner._execute(signal, strategy_summary)
+        await runner.order_manager.execute_order(signal, strategy_summary)
 
         # Leverage should be checked and reset to target even when closing
         mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
@@ -556,13 +556,14 @@ class TestStrategyRunnerOrderExecution:
                 price=40000.0,
             )
 
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
 
             # Should check leverage but not adjust since it's already correct
             mock_binance_client.get_current_leverage.assert_called_once_with("BTCUSDT")
             mock_binance_client.adjust_leverage.assert_not_called()
 
 
+@pytest.mark.slow
 class TestOrderExecutionIntegration:
     """Integration tests for complete order execution flow."""
     
@@ -606,7 +607,7 @@ class TestOrderExecutionIntegration:
             )
             
             # Execute
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
             
             # Verify complete flow
             risk_manager.size_position.assert_called_once_with(
@@ -662,7 +663,7 @@ class TestOrderExecutionIntegration:
             )
             
             # Execute
-            await runner._execute(signal, strategy_summary)
+            await runner.order_manager.execute_order(signal, strategy_summary)
             
             # Verify order was placed
             mock_binance_client.place_order.assert_called_once()
@@ -770,7 +771,7 @@ class TestTradeTrackingAndPersistence:
             
             # Execute order
             import asyncio
-            asyncio.run(runner._execute(signal, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal, strategy_summary))
         
         # Verify trade is tracked in memory
         assert strategy_summary.id in runner._trades
@@ -837,7 +838,7 @@ class TestTradeTrackingAndPersistence:
                 price=40000.0,
             )
             import asyncio
-            asyncio.run(runner._execute(signal1, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal1, strategy_summary))
             
             # Update position for SELL
             strategy_summary.position_size = 0.01
@@ -850,7 +851,7 @@ class TestTradeTrackingAndPersistence:
                 confidence=0.75,
                 price=41000.0,
             )
-            asyncio.run(runner._execute(signal2, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal2, strategy_summary))
         
         # Verify both trades are tracked
         trades = runner._trades[strategy_summary.id]
@@ -914,7 +915,7 @@ class TestTradeTrackingAndPersistence:
             )
             
             import asyncio
-            asyncio.run(runner._execute(signal, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal, strategy_summary))
         
         # Verify invalid trade was NOT tracked
         assert strategy_summary.id not in runner._trades or len(runner._trades[strategy_summary.id]) == 0
@@ -958,7 +959,7 @@ class TestTradeTrackingAndPersistence:
             )
             
             import asyncio
-            asyncio.run(runner._execute(signal, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal, strategy_summary))
         
         # Retrieve trades via get_trades()
         retrieved_trades = runner.get_trades(strategy_summary.id)
@@ -1014,7 +1015,7 @@ class TestTradeTrackingAndPersistence:
             )
             
             import asyncio
-            asyncio.run(runner._execute(signal, strategy_summary))
+            asyncio.run(runner.order_manager.execute_order(signal, strategy_summary))
         
         # Verify trade tracked with None avg_price
         trades = runner._trades[strategy_summary.id]

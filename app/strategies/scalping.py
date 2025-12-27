@@ -420,10 +420,18 @@ class EmaScalpingStrategy(Strategy):
                     f"(last_processed={self.last_closed_candle_time}). "
                     f"Only checking TP/SL if in position."
                 )
-                # Use centralized TP/SL check method
-                tp_sl_signal = self._check_tp_sl(live_price, context="older candle")
-                if tp_sl_signal:
-                    return tp_sl_signal
+                # CRITICAL: When processing an older candle, we're NOT on the entry candle
+                # (entry was at a later time), so temporarily clear entry_candle_time to allow TP/SL
+                saved_entry_candle_time = self.entry_candle_time
+                self.entry_candle_time = None  # Allow TP/SL on older candles
+                try:
+                    # Use centralized TP/SL check method
+                    tp_sl_signal = self._check_tp_sl(live_price, context="older candle")
+                    if tp_sl_signal:
+                        return tp_sl_signal
+                finally:
+                    # Restore entry_candle_time (in case TP/SL didn't trigger)
+                    self.entry_candle_time = saved_entry_candle_time
                 
                 # No position or TP/SL didn't trigger
                 return StrategySignal(
@@ -510,8 +518,11 @@ class EmaScalpingStrategy(Strategy):
             # This eliminates redundant updates while maintaining safety
             try:
                 # --- Cooldown check (D) - simplified counter approach ---
+                # BUG FIX: Only decrement cooldown when processing a new candle
+                # This prevents cooldown from being decremented multiple times on the same candle
                 if self.cooldown_left > 0:
-                    self.cooldown_left -= 1
+                    if processed_new_candle:
+                        self.cooldown_left -= 1
                     logger.warning(
                         f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
                         f"Price: {live_price:.8f} | Position: {self.position}"

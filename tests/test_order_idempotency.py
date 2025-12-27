@@ -445,10 +445,10 @@ class TestStateSynchronization:
             unrealized_pnl=0.0,
         )
         
-        # Mock _update_strategy_in_db to track calls
-        with patch.object(strategy_runner, '_update_strategy_in_db', return_value=True) as mock_update:
+        # Mock state_manager.update_strategy_in_db to track calls
+        with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Reconcile
-            await strategy_runner._reconcile_position_state(strategy_summary)
+            await strategy_runner.state_manager.reconcile_position_state(strategy_summary)
             
             # Should not update database (no mismatch)
             mock_update.assert_not_called()
@@ -479,10 +479,10 @@ class TestStateSynchronization:
             unrealized_pnl=0.0,
         )
         
-        # Mock _update_strategy_in_db
-        with patch.object(strategy_runner, '_update_strategy_in_db', return_value=True) as mock_update:
+        # Mock state_manager.update_strategy_in_db
+        with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Reconcile
-            await strategy_runner._reconcile_position_state(strategy_summary)
+            await strategy_runner.state_manager.reconcile_position_state(strategy_summary)
             
             # Should update database with Binance reality
             mock_update.assert_called_once()
@@ -562,8 +562,8 @@ class TestStateSynchronization:
         
         strategy_summary.account_id = "default"
         
-        # Mock _update_strategy_in_db
-        with patch.object(strategy_runner, '_update_strategy_in_db', return_value=True) as mock_update:
+        # Mock state_manager.update_strategy_in_db
+        with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Update position info
             await strategy_runner._update_position_info(strategy_summary)
             
@@ -590,8 +590,8 @@ class TestStateSynchronization:
         # Binance has no position
         mock_binance_client.get_open_position.return_value = None
         
-        # Mock _update_strategy_in_db
-        with patch.object(strategy_runner, '_update_strategy_in_db', return_value=True) as mock_update:
+        # Mock state_manager.update_strategy_in_db
+        with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Update position info
             await strategy_runner._update_position_info(strategy_summary)
             
@@ -624,7 +624,7 @@ class TestStateSynchronization:
         strategy_runner.strategy_service.db_service.get_strategy.return_value = None
         
         # Should not raise exception
-        await strategy_runner._reconcile_position_state(strategy_summary)
+        await strategy_runner.state_manager.reconcile_position_state(strategy_summary)
     
     @pytest.mark.asyncio
     async def test_reconcile_position_state_handles_binance_error(self, strategy_runner, strategy_summary, mock_binance_client):
@@ -635,7 +635,7 @@ class TestStateSynchronization:
         strategy_summary.account_id = "default"
         
         # Should not raise exception
-        await strategy_runner._reconcile_position_state(strategy_summary)
+        await strategy_runner.state_manager.reconcile_position_state(strategy_summary)
     
     @pytest.mark.asyncio
     async def test_check_state_consistency_handles_missing_strategy(self, strategy_runner):

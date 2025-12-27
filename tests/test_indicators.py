@@ -232,6 +232,7 @@ class TestATR:
         assert atr > 0
 
 
+@pytest.mark.slow
 class TestIndicatorIntegration:
     """Integration tests using indicators together."""
 

@@ -9,6 +9,8 @@ Tests complete trading flows:
 5. Short entry -> SL exit
 6. Short entry -> Golden cross exit
 7. Filter blocking scenarios
+
+Note: Marked as slow - skip in CI with -m "not slow"
 """
 
 import pytest

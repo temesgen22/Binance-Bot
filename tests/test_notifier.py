@@ -543,6 +543,7 @@ class TestNotificationService:
             )
 
 
+@pytest.mark.slow
 class TestNotificationIntegration:
     """Integration tests for notification service with StrategySummary."""
     

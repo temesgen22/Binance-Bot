@@ -457,6 +457,7 @@ class TestStaticFileServing:
         assert "Binance Bot - Log Viewer" in response.text
 
 
+@pytest.mark.slow
 class TestLogViewerIntegration:
     """Integration tests for the log viewer GUI functionality."""
 

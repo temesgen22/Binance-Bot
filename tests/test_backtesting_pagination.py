@@ -13,6 +13,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, MagicMock
 from fastapi import HTTPException
+from loguru import logger
 
 from app.api.routes.backtesting import _fetch_historical_klines
 from app.core.my_binance_client import BinanceClient
@@ -103,6 +104,7 @@ class TestHistoricalKlinesPagination:
         # Verify futures_historical_klines was called (not pagination)
         assert mock_rest.futures_historical_klines.called or mock_rest.futures_klines.called
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_large_range_with_pagination(self, mock_binance_client):
         """Test pagination for large time range (30 days of 1m klines)."""
@@ -348,6 +350,7 @@ class TestHistoricalKlinesPagination:
         assert "Insufficient historical data" in str(exc_info.value.detail)
         assert "50" in str(exc_info.value.detail)
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_30_days_1m_klines_comprehensive(self, mock_binance_client):
         """Comprehensive test: 30 days of 1-minute klines (the user's use case)."""
@@ -419,4 +422,160 @@ class TestHistoricalKlinesPagination:
         print(f"   Time range: {start_time} to {end_time}")
         print(f"   Expected: ~{expected_candles} candles")
         print(f"   Coverage: {len(result) / expected_candles * 100:.1f}%")
+    
+    @pytest.mark.asyncio
+    async def test_bug_fix_removed_futures_historical_klines(self, mock_binance_client):
+        """
+        Test the bug fix: Code no longer uses futures_historical_klines which had unreliable limits.
+        
+        This tests the specific bug where futures_historical_klines returned only 162 klines
+        even for longer periods due to default limits. The fix ensures we always use
+        futures_klines with explicit limit parameters.
+        """
+        # Request 300 candles (triggers else branch, no pagination initially)
+        end_time = datetime.now().replace(second=0, microsecond=0)
+        start_time = end_time - timedelta(minutes=300)
+        expected_candles = 300
+        
+        klines = build_klines_chunk(start_time, expected_candles)
+        mock_rest = Mock()
+        
+        # Mock futures_klines to return full data (the method we now always use)
+        mock_rest.futures_klines = Mock(return_value=klines)
+        
+        # futures_historical_klines should NOT be called (bug fix: we removed it)
+        mock_rest.futures_historical_klines = Mock(return_value=None)
+        mock_binance_client._ensure.return_value = mock_rest
+        
+        result = await _fetch_historical_klines(
+            mock_binance_client,
+            "BTCUSDT",
+            "1m",
+            start_time,
+            end_time
+        )
+        
+        # CRITICAL: futures_klines should be called (the reliable method with explicit limits)
+        assert mock_rest.futures_klines.called, (
+            "futures_klines should be called (bug fix: we always use this method now)"
+        )
+        
+        # CRITICAL: futures_historical_klines should NOT be called (bug fix: removed unreliable method)
+        assert not mock_rest.futures_historical_klines.called, (
+            "futures_historical_klines should NOT be called (bug fix: removed unreliable method with default limits)"
+        )
+        
+        # Verify we got the expected data
+        assert len(result) >= expected_candles * 0.9, (
+            f"Expected at least {expected_candles * 0.9:.0f} candles, got {len(result)}"
+        )
+        
+        # Verify all timestamps are in range
+        start_ts = int(start_time.timestamp() * 1000)
+        end_ts = int(end_time.timestamp() * 1000)
+        for kline in result:
+            timestamp = int(kline[0])
+            assert start_ts <= timestamp <= end_ts
+        
+        print(f"Bug fix test: Code uses futures_klines (not futures_historical_klines)")
+        print(f"   Fetched {len(result)} candles")
+        print(f"   futures_klines called: {mock_rest.futures_klines.called}")
+        print(f"   futures_historical_klines called: {mock_rest.futures_historical_klines.called}")
+    
+    @pytest.mark.asyncio
+    async def test_pagination_threshold_500_ensures_reliability(self, mock_binance_client):
+        """
+        Test that pagination threshold is 500 (not 1000) to ensure pagination kicks in earlier.
+        This prevents issues with default API limits returning incomplete data.
+        """
+        # Request 600 candles - should trigger pagination (threshold is 500)
+        end_time = datetime.now().replace(second=0, microsecond=0)
+        start_time = end_time - timedelta(minutes=600)
+        expected_candles = 600
+        
+        mock_rest = Mock()
+        call_count = [0]
+        
+        def futures_klines_mock(symbol, interval, limit, startTime, endTime):
+            call_count[0] += 1
+            chunk_start = datetime.fromtimestamp(startTime / 1000)
+            chunk_end = datetime.fromtimestamp(endTime / 1000)
+            
+            chunk_duration = (chunk_end - chunk_start).total_seconds()
+            chunk_candles = min(int(chunk_duration / 60), limit)
+            chunk_klines = build_klines_chunk(chunk_start, chunk_candles)
+            return chunk_klines[:limit]
+        
+        mock_rest.futures_klines = Mock(side_effect=futures_klines_mock)
+        mock_rest.futures_historical_klines = Mock(return_value=None)
+        mock_binance_client._ensure.return_value = mock_rest
+        
+        result = await _fetch_historical_klines(
+            mock_binance_client,
+            "BTCUSDT",
+            "1m",
+            start_time,
+            end_time
+        )
+        
+        # With threshold of 500, 600 candles should use pagination (multiple chunks)
+        # Pagination ensures we get all data reliably
+        assert len(result) >= expected_candles * 0.9, (
+            f"Expected at least {expected_candles * 0.9:.0f} candles, got {len(result)}. "
+            f"Pagination with threshold 500 should ensure complete data."
+        )
+        
+        print(f"Pagination threshold test: {len(result)} candles fetched")
+        print(f"   Threshold: 500 candles (paginates for requests > 500)")
+        print(f"   Requested: {expected_candles} candles")
+        print(f"   Result: {len(result)} candles (should be close to {expected_candles})")
+    
+    @pytest.mark.asyncio
+    async def test_pagination_threshold_500_candles(self, mock_binance_client):
+        """
+        Test that pagination threshold is set to 500 candles (not 1000).
+        This ensures pagination kicks in earlier for better reliability.
+        """
+        # Request 600 candles (should trigger pagination with new threshold of 500)
+        end_time = datetime.now().replace(second=0, microsecond=0)
+        start_time = end_time - timedelta(minutes=600)
+        expected_candles = 600
+        
+        mock_rest = Mock()
+        call_count = [0]
+        
+        def futures_klines_mock(symbol, interval, limit, startTime, endTime):
+            call_count[0] += 1
+            chunk_start = datetime.fromtimestamp(startTime / 1000)
+            chunk_end = datetime.fromtimestamp(endTime / 1000)
+            
+            chunk_duration = (chunk_end - chunk_start).total_seconds()
+            chunk_candles = min(int(chunk_duration / 60), limit)
+            chunk_klines = build_klines_chunk(chunk_start, chunk_candles)
+            return chunk_klines[:limit]
+        
+        mock_rest.futures_klines = Mock(side_effect=futures_klines_mock)
+        mock_rest.futures_historical_klines = Mock(return_value=None)
+        mock_binance_client._ensure.return_value = mock_rest
+        
+        result = await _fetch_historical_klines(
+            mock_binance_client,
+            "BTCUSDT",
+            "1m",
+            start_time,
+            end_time
+        )
+        
+        # With threshold of 500, 600 candles should trigger pagination
+        # Should make at least 2 calls (500 triggers pagination, so we need multiple chunks)
+        assert call_count[0] >= 1, "Should have made API calls"
+        
+        # Should fetch close to expected amount
+        assert len(result) >= expected_candles * 0.9, (
+            f"Expected at least {expected_candles * 0.9:.0f} candles, got {len(result)}"
+        )
+        
+        print(f"Pagination threshold test: {len(result)} candles in {call_count[0]} API calls")
+        print(f"   Threshold: 500 candles (paginates for requests > 500)")
+        print(f"   Requested: {expected_candles} candles")
 

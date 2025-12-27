@@ -165,6 +165,7 @@ class TestRedisStoragePersistence:
         assert "strategy-3" in result, "Should include strategy-3"
 
 
+@pytest.mark.slow
 class TestRedisPersistenceIntegration:
     """Integration tests for Redis persistence (requires actual Redis or better mocks)."""
     
