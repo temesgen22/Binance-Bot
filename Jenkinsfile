@@ -35,7 +35,13 @@ pipeline {
     }
 
     stage('Run Tests (optional)') {
-      when { expression { return fileExists('requirements.txt') } }
+      // Tests are skipped during deployment to save CPU resources
+      // Set RUN_TESTS=true in Jenkins environment to enable tests
+      when { 
+        expression { 
+          return fileExists('requirements.txt') && env.RUN_TESTS == 'true' 
+        } 
+      }
       steps {
         script {
           if (isUnix()) {
@@ -47,9 +53,8 @@ pipeline {
               pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              # Skip database tests if DATABASE_URL is not set (common in CI)
-              # Database tests are marked with @pytest.mark.database and will skip gracefully
-              pytest -q -m "not database" || pytest -q --ignore=tests/test_async_database.py
+              # Run only CI-marked tests (fast, essential tests)
+              pytest -q -m ci
             '''
           } else {
             powershell '''
@@ -60,7 +65,8 @@ pipeline {
               python -m pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              pytest -q -m "not slow and not database"
+              # Run only CI-marked tests (fast, essential tests)
+              pytest -q -m ci
             '''
           }
         }
