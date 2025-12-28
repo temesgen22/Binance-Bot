@@ -9,6 +9,7 @@ These tests cover high-risk scenarios that are easy to miss but critical for pro
 """
 
 import pytest
+pytestmark = pytest.mark.ci  # Critical edge cases must run in CI
 from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
 

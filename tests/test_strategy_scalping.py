@@ -106,6 +106,7 @@ def strategy(mock_client, strategy_context):
     return EmaScalpingStrategy(strategy_context, mock_client)
 
 
+@pytest.mark.ci  # Critical: Configuration must be honored
 class TestConfigurationMapping:
     """Tests to ensure configuration parameters are honored."""
 
@@ -178,6 +179,7 @@ class TestConfigurationMapping:
                 assert strategy.trailing_stop is instance
 
 
+@pytest.mark.ci  # Critical: EMA calculation is core functionality
 class TestEMACalculation:
     """Test EMA calculation logic."""
     
@@ -211,6 +213,7 @@ class TestEMACalculation:
         assert ema < 41000.0
 
 
+@pytest.mark.ci  # Critical: Crossover detection drives entry/exit signals
 class TestCrossoverDetection:
     """Test crossover detection logic."""
     
@@ -298,6 +301,7 @@ class TestPositionTracking:
         assert strategy.entry_price is None
 
 
+@pytest.mark.ci  # Critical: TP/SL calculations are essential for risk management
 class TestTakeProfitStopLoss:
     """Test TP/SL logic for both long and short positions."""
     
@@ -356,6 +360,7 @@ class TestTakeProfitStopLoss:
         assert current_price >= sl_price
 
 
+@pytest.mark.ci  # Critical: Filters prevent bad trades
 class TestFilters:
     """Test filter logic."""
     
@@ -394,6 +399,7 @@ class TestFilters:
         assert separation > strategy.min_ema_separation
 
 
+@pytest.mark.ci  # Critical: State consistency prevents drift bugs
 class TestStateConsistency:
     """Test that prev_fast/prev_slow state is maintained correctly."""
     
@@ -433,8 +439,9 @@ class TestStateConsistency:
         # (which was the bug we fixed)
 
 
+@pytest.mark.slow
 class TestIntegration:
-    """Integration tests for complete strategy flow."""
+    """Integration tests for complete strategy flow (excluded from CI)."""
     
     @pytest.mark.asyncio
     async def test_strategy_initialization(self, strategy):

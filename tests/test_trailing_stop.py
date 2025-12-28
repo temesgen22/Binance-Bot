@@ -3,6 +3,7 @@ Tests for Dynamic Trailing Stop Manager
 """
 
 import pytest
+pytestmark = pytest.mark.ci  # Trailing stop is critical functionality
 from app.strategies.trailing_stop import TrailingStopManager
 
 

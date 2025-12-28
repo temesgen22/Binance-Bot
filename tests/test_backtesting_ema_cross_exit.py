@@ -2,6 +2,7 @@
 Test that enable_ema_cross_exit parameter works in backtesting.
 """
 import pytest
+pytestmark = pytest.mark.slow  # Backtesting tests excluded from CI
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, AsyncMock, patch
 

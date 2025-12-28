@@ -9,10 +9,14 @@ This test suite focuses on the exact problematic areas:
 4. TP/SL order lifecycle
 5. Trade tracking correctness
 6. Event-loop blocking
+
+Note: Marked as slow due to many async operations and sleeps, but contains critical tests.
+Consider splitting critical tests into a separate file for CI.
 """
 
 import asyncio
 import pytest
+# Most tests are slow (excluded from CI), but critical ones are marked with @pytest.mark.ci
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from datetime import datetime, timezone
 from uuid import uuid4, UUID
@@ -113,6 +117,7 @@ def strategy_summary():
 class TestConcurrencyRaceConditions:
     """Test concurrent operations and race conditions."""
 
+    @pytest.mark.ci  # Critical: Prevents duplicate strategy starts
     @pytest.mark.asyncio
     async def test_tc01_start_same_strategy_twice_concurrently(
         self, strategy_runner, strategy_summary, mock_binance_client
@@ -147,6 +152,7 @@ class TestConcurrencyRaceConditions:
         assert len(strategy_runner._tasks) == 1, "Only one task should exist"
         assert strategy_summary.id in strategy_runner._tasks, "Task should exist for strategy"
 
+    @pytest.mark.ci  # Critical: Prevents exceeding max concurrent strategies
     @pytest.mark.asyncio
     async def test_tc02_start_two_strategies_when_max_concurrent_is_one(
         self, strategy_runner, mock_binance_client

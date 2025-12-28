@@ -1,6 +1,7 @@
 """Test cases for exit_reason tracking in trades and reports."""
 
 import pytest
+pytestmark = pytest.mark.ci  # Exit reason tracking is critical
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 

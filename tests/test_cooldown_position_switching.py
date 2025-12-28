@@ -2,6 +2,7 @@
 Test that cooldown prevents switching from LONG to SHORT (and vice versa).
 """
 import pytest
+pytestmark = pytest.mark.ci  # Cooldown logic is critical
 from datetime import datetime, timezone
 from unittest.mock import Mock, AsyncMock
 

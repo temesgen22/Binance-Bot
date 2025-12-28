@@ -2,6 +2,7 @@
 Test that enable_ema_cross_exit configuration works correctly.
 """
 import pytest
+pytestmark = pytest.mark.ci  # EMA cross exit config is critical
 from unittest.mock import Mock, AsyncMock
 
 from app.strategies.scalping import EmaScalpingStrategy

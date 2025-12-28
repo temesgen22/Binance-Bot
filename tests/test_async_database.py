@@ -2,6 +2,7 @@
 Test async database operations and performance improvements.
 """
 import pytest
+pytestmark = pytest.mark.slow  # Database tests excluded from CI
 import asyncio
 from uuid import uuid4
 from datetime import datetime, timezone

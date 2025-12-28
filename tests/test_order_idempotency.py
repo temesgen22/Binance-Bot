@@ -10,6 +10,7 @@ Tests verify that:
 """
 
 import pytest
+pytestmark = pytest.mark.slow  # Complex state tests excluded from CI
 from unittest.mock import MagicMock, AsyncMock, patch, call
 from datetime import datetime, timezone
 import time

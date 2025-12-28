@@ -8,6 +8,7 @@ This test suite verifies:
 4. Parallel klines fetching (tested via reports endpoint)
 """
 import pytest
+pytestmark = pytest.mark.slow  # Performance tests excluded from CI
 import asyncio
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID

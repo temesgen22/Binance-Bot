@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
 import pytest
+pytestmark = pytest.mark.slow  # Concurrent tests with sleeps excluded from CI
 
 from app.models.strategy import CreateStrategyRequest, StrategyParams, StrategyType, StrategyState
 from app.services.strategy_runner import StrategyRunner

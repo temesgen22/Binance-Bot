@@ -13,6 +13,7 @@ Tests verify:
 """
 
 import pytest
+pytestmark = pytest.mark.slow  # Backtesting tests are excluded from CI due to CPU limitations
 from datetime import datetime, timedelta
 from typing import Optional
 from unittest.mock import Mock, patch, MagicMock

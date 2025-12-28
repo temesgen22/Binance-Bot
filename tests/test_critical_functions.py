@@ -10,6 +10,7 @@ Tests the most important functions that must work correctly:
 """
 
 import pytest
+pytestmark = pytest.mark.ci  # All tests in this file are critical for CI
 from unittest.mock import MagicMock
 from collections import deque
 

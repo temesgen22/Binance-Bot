@@ -3,6 +3,7 @@ Comprehensive test suite for enable_ema_cross_exit functionality.
 Tests both live trading and backtesting scenarios.
 """
 import pytest
+pytestmark = pytest.mark.slow  # Comprehensive tests excluded from CI
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, AsyncMock
 

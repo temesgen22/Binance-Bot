@@ -9,6 +9,8 @@ Tests verify that:
 """
 
 import pytest
+pytestmark = pytest.mark.ci  # Order execution tests are critical (except TestOrderExecutionIntegration which is marked slow)
+
 from unittest.mock import MagicMock, AsyncMock, patch, call
 from datetime import datetime
 

@@ -7,6 +7,8 @@ Tests verify that _fetch_historical_klines correctly handles:
 3. Deduplication of candles
 4. Proper sorting by timestamp
 5. Edge cases (small ranges, exact boundaries, API errors)
+
+Note: Only essential bug fix tests are marked with @pytest.mark.ci
 """
 
 import pytest
@@ -423,6 +425,7 @@ class TestHistoricalKlinesPagination:
         print(f"   Expected: ~{expected_candles} candles")
         print(f"   Coverage: {len(result) / expected_candles * 100:.1f}%")
     
+    @pytest.mark.ci  # Critical: Bug fix verification
     @pytest.mark.asyncio
     async def test_bug_fix_removed_futures_historical_klines(self, mock_binance_client):
         """
@@ -482,6 +485,7 @@ class TestHistoricalKlinesPagination:
         print(f"   futures_klines called: {mock_rest.futures_klines.called}")
         print(f"   futures_historical_klines called: {mock_rest.futures_historical_klines.called}")
     
+    @pytest.mark.ci  # Critical: Pagination threshold fix
     @pytest.mark.asyncio
     async def test_pagination_threshold_500_ensures_reliability(self, mock_binance_client):
         """
@@ -530,6 +534,7 @@ class TestHistoricalKlinesPagination:
         print(f"   Requested: {expected_candles} candles")
         print(f"   Result: {len(result)} candles (should be close to {expected_candles})")
     
+    @pytest.mark.ci  # Critical: Pagination threshold validation
     @pytest.mark.asyncio
     async def test_pagination_threshold_500_candles(self, mock_binance_client):
         """

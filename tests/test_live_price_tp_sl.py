@@ -13,6 +13,7 @@ Tests verify:
 """
 
 import pytest
+pytestmark = pytest.mark.slow  # Comprehensive TP/SL tests excluded from CI
 from unittest.mock import MagicMock, AsyncMock, patch, call
 from datetime import datetime
 

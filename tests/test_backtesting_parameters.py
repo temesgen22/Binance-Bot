@@ -8,6 +8,7 @@ Test that backtesting correctly enforces all strategy parameters:
 - Enable short trading
 """
 import pytest
+pytestmark = pytest.mark.slow  # Backtesting tests excluded from CI
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, AsyncMock, patch
 

@@ -6,6 +6,7 @@ evaluates market data or when orders are prepared.
 """
 
 import pytest
+pytestmark = pytest.mark.ci  # Parameter contracts are critical for CI
 from unittest.mock import MagicMock, patch
 
 from app.core.my_binance_client import BinanceClient
