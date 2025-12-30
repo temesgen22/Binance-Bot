@@ -2300,6 +2300,10 @@
                     });
                 });
                 
+                // Get user's timezone preference for chart time display
+                const userTimeFormat = (typeof UserSettings !== 'undefined') ? UserSettings.get('timeFormat') : 'utc';
+                const useUTC = userTimeFormat === 'utc';
+                
                 // Create chart with better configuration
                 equityChart = LightweightCharts.createChart(chartContainer, {
                     width: chartContainer.clientWidth,
@@ -2323,6 +2327,42 @@
                         timeVisible: true,
                         secondsVisible: false,
                         borderColor: '#d1d4dc',
+                    },
+                    localization: {
+                        timeFormatter: (businessDayOrTimestamp) => {
+                            // Convert Unix timestamp (seconds) to Date
+                            const timestamp = typeof businessDayOrTimestamp === 'number' 
+                                ? businessDayOrTimestamp * 1000 
+                                : businessDayOrTimestamp;
+                            const date = new Date(timestamp);
+                            
+                            if (isNaN(date.getTime())) {
+                                return '';
+                            }
+                            
+                            // Format according to user's timezone preference
+                            if (useUTC) {
+                                // Format as UTC
+                                const year = date.getUTCFullYear();
+                                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                                const day = String(date.getUTCDate()).padStart(2, '0');
+                                const hours = String(date.getUTCHours()).padStart(2, '0');
+                                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                                return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
+                            } else {
+                                // Format as local time
+                                const year = date.getFullYear();
+                                const month = String(date.getMonth() + 1).padStart(2, '0');
+                                const day = String(date.getDate()).padStart(2, '0');
+                                const hours = String(date.getHours()).padStart(2, '0');
+                                const minutes = String(date.getMinutes()).padStart(2, '0');
+                                const tzOffset = -date.getTimezoneOffset();
+                                const tzHours = Math.floor(Math.abs(tzOffset) / 60);
+                                const tzMinutes = Math.abs(tzOffset) % 60;
+                                const tzSign = tzOffset >= 0 ? '+' : '-';
+                                return `${year}-${month}-${day} ${hours}:${minutes} UTC${tzSign}${String(tzHours).padStart(2, '0')}:${String(tzMinutes).padStart(2, '0')}`;
+                            }
+                        },
                     },
                     rightPriceScale: {
                         borderColor: '#d1d4dc',
@@ -3216,6 +3256,10 @@
             console.log('Last point:', equityCurve[equityCurve.length - 1]);
             
             try {
+                // Get user's timezone preference for chart time display
+                const userTimeFormat = (typeof UserSettings !== 'undefined') ? UserSettings.get('timeFormat') : 'utc';
+                const useUTC = userTimeFormat === 'utc';
+                
                 const chart = LightweightCharts.createChart(container, {
                     width: container.clientWidth,
                     height: 400,
@@ -3233,6 +3277,42 @@
                     },
                     crosshair: {
                         mode: 0, // Normal crosshair mode
+                    },
+                    localization: {
+                        timeFormatter: (businessDayOrTimestamp) => {
+                            // Convert Unix timestamp (seconds) to Date
+                            const timestamp = typeof businessDayOrTimestamp === 'number' 
+                                ? businessDayOrTimestamp * 1000 
+                                : businessDayOrTimestamp;
+                            const date = new Date(timestamp);
+                            
+                            if (isNaN(date.getTime())) {
+                                return '';
+                            }
+                            
+                            // Format according to user's timezone preference
+                            if (useUTC) {
+                                // Format as UTC
+                                const year = date.getUTCFullYear();
+                                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                                const day = String(date.getUTCDate()).padStart(2, '0');
+                                const hours = String(date.getUTCHours()).padStart(2, '0');
+                                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                                return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
+                            } else {
+                                // Format as local time
+                                const year = date.getFullYear();
+                                const month = String(date.getMonth() + 1).padStart(2, '0');
+                                const day = String(date.getDate()).padStart(2, '0');
+                                const hours = String(date.getHours()).padStart(2, '0');
+                                const minutes = String(date.getMinutes()).padStart(2, '0');
+                                const tzOffset = -date.getTimezoneOffset();
+                                const tzHours = Math.floor(Math.abs(tzOffset) / 60);
+                                const tzMinutes = Math.abs(tzOffset) % 60;
+                                const tzSign = tzOffset >= 0 ? '+' : '-';
+                                return `${year}-${month}-${day} ${hours}:${minutes} UTC${tzSign}${String(tzHours).padStart(2, '0')}:${String(tzMinutes).padStart(2, '0')}`;
+                            }
+                        },
                     },
                 });
                 
