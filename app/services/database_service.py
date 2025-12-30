@@ -6,6 +6,7 @@ Supports both synchronous and asynchronous operations.
 from __future__ import annotations
 
 from contextlib import contextmanager, asynccontextmanager
+from datetime import datetime
 from typing import Optional, List, Any
 from uuid import UUID
 
@@ -18,7 +19,8 @@ from loguru import logger
 from app.core.database import get_db_session
 from app.models.db_models import (
     User, Role, Account, Strategy, Trade, TradePair,
-    Backtest, BacktestTrade, StrategyMetric, SystemEvent
+    Backtest, BacktestTrade, StrategyMetric, SystemEvent,
+    WalkForwardAnalysis, WalkForwardWindow, WalkForwardEquityPoint
 )
 
 
@@ -585,6 +587,427 @@ class DatabaseService:
             Backtest.id == backtest_id,
             Backtest.user_id == user_id
         ).first()
+    
+    # ============================================
+    # WALK-FORWARD ANALYSIS OPERATIONS
+    # ============================================
+    
+    async def save_walk_forward_analysis(
+        self,
+        user_id: UUID,
+        result: Any,  # WalkForwardResult from walk_forward.py
+        request: Any,  # WalkForwardRequest from walk_forward.py
+        execution_time_ms: Optional[int] = None,
+        candles_processed: Optional[int] = None,
+        name: Optional[str] = None,
+        label: Optional[str] = None,
+        keep_details: bool = True
+    ) -> UUID:
+        """Save walk-forward analysis results to database.
+        
+        CRITICAL: Always sets user_id to ensure user isolation.
+        
+        Returns:
+            UUID of saved analysis
+        """
+        if self._is_async:
+            return await self._async_save_walk_forward_analysis(
+                user_id, result, request, execution_time_ms, candles_processed,
+                name, label, keep_details
+            )
+        else:
+            return self._sync_save_walk_forward_analysis(
+                user_id, result, request, execution_time_ms, candles_processed,
+                name, label, keep_details
+            )
+    
+    def _sync_save_walk_forward_analysis(
+        self,
+        user_id: UUID,
+        result: Any,
+        request: Any,
+        execution_time_ms: Optional[int],
+        candles_processed: Optional[int],
+        name: Optional[str],
+        label: Optional[str],
+        keep_details: bool
+    ) -> UUID:
+        """Sync implementation of save_walk_forward_analysis."""
+        from datetime import datetime, timezone
+        
+        # Create main analysis record
+        analysis = WalkForwardAnalysis(
+            user_id=user_id,  # CRITICAL: User isolation
+            name=name,
+            label=label,
+            symbol=result.symbol,
+            strategy_type=result.strategy_type,
+            overall_start_time=result.overall_start_time,
+            overall_end_time=result.overall_end_time,
+            training_period_days=result.training_period_days,
+            test_period_days=result.test_period_days,
+            step_size_days=result.step_size_days,
+            window_type=result.window_type,
+            total_windows=result.total_windows,
+            leverage=request.leverage,
+            risk_per_trade=request.risk_per_trade,
+            fixed_amount=request.fixed_amount,
+            initial_balance=result.initial_balance,
+            params=request.params,
+            optimization_enabled=request.optimize_params is not None,
+            optimization_method=request.optimization_method if request.optimize_params else None,
+            optimization_metric=request.optimization_metric if request.optimize_params else None,
+            optimize_params=request.optimize_params if request.optimize_params else {},
+            min_trades_guardrail=request.min_trades_guardrail if request.optimize_params else None,
+            max_drawdown_cap=request.max_drawdown_cap if request.optimize_params else None,
+            lottery_trade_threshold=request.lottery_trade_threshold if request.optimize_params else None,
+            total_return_pct=result.total_return_pct,
+            avg_window_return_pct=result.avg_window_return_pct,
+            consistency_score=result.consistency_score,
+            sharpe_ratio=result.sharpe_ratio,
+            max_drawdown_pct=result.max_drawdown_pct,
+            total_trades=result.total_trades,
+            avg_win_rate=result.avg_win_rate,
+            return_std_dev=result.return_std_dev,
+            best_window=result.best_window,
+            worst_window=result.worst_window,
+            final_balance=result.equity_curve[-1]["balance"] if result.equity_curve else result.initial_balance,
+            execution_time_ms=execution_time_ms,
+            candles_processed=candles_processed,
+            keep_details=keep_details,
+            completed_at=datetime.now(timezone.utc)
+        )
+        
+        self.db.add(analysis)
+        with self._transaction(analysis, error_message="Failed to save walk-forward analysis"):
+            logger.info(f"Created walk-forward analysis {analysis.id} for user {user_id}")
+        
+        # Create window records
+        if keep_details:
+            for window in result.windows:
+                window_record = WalkForwardWindow(
+                    analysis_id=analysis.id,
+                    window_number=window.window_number,
+                    training_start=window.training_start,
+                    training_end=window.training_end,
+                    test_start=window.test_start,
+                    test_end=window.test_end,
+                    optimized_params=window.optimized_params if window.optimized_params else {},
+                    training_return_pct=window.training_return_pct,
+                    training_sharpe=window.training_sharpe,
+                    training_win_rate=window.training_win_rate,
+                    training_trades=window.training_result.completed_trades if window.training_result else 0,
+                    test_return_pct=window.test_return_pct,
+                    test_sharpe=window.test_sharpe,
+                    test_win_rate=window.test_win_rate,
+                    test_trades=window.test_result.completed_trades if window.test_result else 0,
+                    test_final_balance=window.test_result.final_balance if window.test_result else None,
+                    optimization_results=window.optimization_results if window.optimization_results else []
+                )
+                self.db.add(window_record)
+        
+        # Create equity curve points
+        for point in result.equity_curve:
+            equity_point = WalkForwardEquityPoint(
+                analysis_id=analysis.id,
+                time=datetime.fromtimestamp(point["time"], tz=timezone.utc),
+                balance=point["balance"],
+                window_number=point.get("window_number")
+            )
+            self.db.add(equity_point)
+        
+        with self._transaction(error_message="Failed to save walk-forward windows and equity points"):
+            logger.info(f"Saved {len(result.windows)} windows and {len(result.equity_curve)} equity points for analysis {analysis.id}")
+        
+        return analysis.id
+    
+    async def _async_save_walk_forward_analysis(
+        self,
+        user_id: UUID,
+        result: Any,
+        request: Any,
+        execution_time_ms: Optional[int],
+        candles_processed: Optional[int],
+        name: Optional[str],
+        label: Optional[str],
+        keep_details: bool
+    ) -> UUID:
+        """Async implementation of save_walk_forward_analysis."""
+        from datetime import datetime, timezone
+        from sqlalchemy import select
+        
+        # Create main analysis record
+        analysis = WalkForwardAnalysis(
+            user_id=user_id,  # CRITICAL: User isolation
+            name=name,
+            label=label,
+            symbol=result.symbol,
+            strategy_type=result.strategy_type,
+            overall_start_time=result.overall_start_time,
+            overall_end_time=result.overall_end_time,
+            training_period_days=result.training_period_days,
+            test_period_days=result.test_period_days,
+            step_size_days=result.step_size_days,
+            window_type=result.window_type,
+            total_windows=result.total_windows,
+            leverage=request.leverage,
+            risk_per_trade=request.risk_per_trade,
+            fixed_amount=request.fixed_amount,
+            initial_balance=result.initial_balance,
+            params=request.params,
+            optimization_enabled=request.optimize_params is not None,
+            optimization_method=request.optimization_method if request.optimize_params else None,
+            optimization_metric=request.optimization_metric if request.optimize_params else None,
+            optimize_params=request.optimize_params if request.optimize_params else {},
+            min_trades_guardrail=request.min_trades_guardrail if request.optimize_params else None,
+            max_drawdown_cap=request.max_drawdown_cap if request.optimize_params else None,
+            lottery_trade_threshold=request.lottery_trade_threshold if request.optimize_params else None,
+            total_return_pct=result.total_return_pct,
+            avg_window_return_pct=result.avg_window_return_pct,
+            consistency_score=result.consistency_score,
+            sharpe_ratio=result.sharpe_ratio,
+            max_drawdown_pct=result.max_drawdown_pct,
+            total_trades=result.total_trades,
+            avg_win_rate=result.avg_win_rate,
+            return_std_dev=result.return_std_dev,
+            best_window=result.best_window,
+            worst_window=result.worst_window,
+            final_balance=result.equity_curve[-1]["balance"] if result.equity_curve else result.initial_balance,
+            execution_time_ms=execution_time_ms,
+            candles_processed=candles_processed,
+            keep_details=keep_details,
+            completed_at=datetime.now(timezone.utc)
+        )
+        
+        self.db.add(analysis)
+        await self.db.commit()
+        await self.db.refresh(analysis)
+        logger.info(f"Created walk-forward analysis {analysis.id} for user {user_id}")
+        
+        # Create window records
+        if keep_details:
+            for window in result.windows:
+                window_record = WalkForwardWindow(
+                    analysis_id=analysis.id,
+                    window_number=window.window_number,
+                    training_start=window.training_start,
+                    training_end=window.training_end,
+                    test_start=window.test_start,
+                    test_end=window.test_end,
+                    optimized_params=window.optimized_params if window.optimized_params else {},
+                    training_return_pct=window.training_return_pct,
+                    training_sharpe=window.training_sharpe,
+                    training_win_rate=window.training_win_rate,
+                    training_trades=window.training_result.completed_trades if window.training_result else 0,
+                    test_return_pct=window.test_return_pct,
+                    test_sharpe=window.test_sharpe,
+                    test_win_rate=window.test_win_rate,
+                    test_trades=window.test_result.completed_trades if window.test_result else 0,
+                    test_final_balance=window.test_result.final_balance if window.test_result else None,
+                    optimization_results=window.optimization_results if window.optimization_results else []
+                )
+                self.db.add(window_record)
+        
+        # Create equity curve points
+        for point in result.equity_curve:
+            equity_point = WalkForwardEquityPoint(
+                analysis_id=analysis.id,
+                time=datetime.fromtimestamp(point["time"], tz=timezone.utc),
+                balance=point["balance"],
+                window_number=point.get("window_number")
+            )
+            self.db.add(equity_point)
+        
+        await self.db.commit()
+        logger.info(f"Saved {len(result.windows)} windows and {len(result.equity_curve)} equity points for analysis {analysis.id}")
+        
+        return analysis.id
+    
+    async def get_walk_forward_analysis(
+        self,
+        analysis_id: UUID,
+        user_id: UUID
+    ) -> Optional[WalkForwardAnalysis]:
+        """Get walk-forward analysis by ID (with ownership check).
+        
+        CRITICAL: Only returns analysis if it belongs to the specified user.
+        Returns None if analysis doesn't exist or belongs to different user.
+        """
+        if self._is_async:
+            stmt = select(WalkForwardAnalysis).filter(
+                WalkForwardAnalysis.id == analysis_id,
+                WalkForwardAnalysis.user_id == user_id  # CRITICAL: User isolation
+            )
+            result = await self.db.execute(stmt)
+            return result.scalar_one_or_none()
+        else:
+            return self.db.query(WalkForwardAnalysis).filter(
+                WalkForwardAnalysis.id == analysis_id,
+                WalkForwardAnalysis.user_id == user_id  # CRITICAL: User isolation
+            ).first()
+    
+    async def list_walk_forward_analyses(
+        self,
+        user_id: UUID,  # CRITICAL: Always filter by user_id
+        limit: int = 50,
+        offset: int = 0,
+        symbol: Optional[str] = None,
+        strategy_type: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> tuple[list[WalkForwardAnalysis], int]:
+        """List walk-forward analyses with filters.
+        
+        CRITICAL: Only returns analyses belonging to the specified user.
+        All queries MUST include user_id filter to prevent data leakage.
+        
+        Returns:
+            Tuple of (analyses list, total count)
+        """
+        if self._is_async:
+            return await self._async_list_walk_forward_analyses(
+                user_id, limit, offset, symbol, strategy_type, start_date, end_date
+            )
+        else:
+            return self._sync_list_walk_forward_analyses(
+                user_id, limit, offset, symbol, strategy_type, start_date, end_date
+            )
+    
+    def _sync_list_walk_forward_analyses(
+        self,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+        symbol: Optional[str],
+        strategy_type: Optional[str],
+        start_date: Optional[datetime],
+        end_date: Optional[datetime]
+    ) -> tuple[list[WalkForwardAnalysis], int]:
+        """Sync implementation of list_walk_forward_analyses."""
+        # ALWAYS start with user_id filter
+        query = self.db.query(WalkForwardAnalysis).filter(
+            WalkForwardAnalysis.user_id == user_id  # CRITICAL: User isolation
+        )
+        
+        # Apply additional filters
+        if symbol:
+            query = query.filter(WalkForwardAnalysis.symbol == symbol)
+        if strategy_type:
+            query = query.filter(WalkForwardAnalysis.strategy_type == strategy_type)
+        if start_date:
+            query = query.filter(WalkForwardAnalysis.overall_start_time >= start_date)
+        if end_date:
+            query = query.filter(WalkForwardAnalysis.overall_end_time <= end_date)
+        
+        # Get total count
+        total = query.count()
+        
+        # Get paginated results
+        analyses = query.order_by(WalkForwardAnalysis.created_at.desc()).offset(offset).limit(limit).all()
+        
+        return analyses, total
+    
+    async def _async_list_walk_forward_analyses(
+        self,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+        symbol: Optional[str],
+        strategy_type: Optional[str],
+        start_date: Optional[datetime],
+        end_date: Optional[datetime]
+    ) -> tuple[list[WalkForwardAnalysis], int]:
+        """Async implementation of list_walk_forward_analyses."""
+        from sqlalchemy import func as sql_func
+        
+        # ALWAYS start with user_id filter
+        stmt = select(WalkForwardAnalysis).filter(
+            WalkForwardAnalysis.user_id == user_id  # CRITICAL: User isolation
+        )
+        
+        # Apply additional filters
+        if symbol:
+            stmt = stmt.filter(WalkForwardAnalysis.symbol == symbol)
+        if strategy_type:
+            stmt = stmt.filter(WalkForwardAnalysis.strategy_type == strategy_type)
+        if start_date:
+            stmt = stmt.filter(WalkForwardAnalysis.overall_start_time >= start_date)
+        if end_date:
+            stmt = stmt.filter(WalkForwardAnalysis.overall_end_time <= end_date)
+        
+        # Get total count
+        count_stmt = select(sql_func.count()).select_from(stmt.subquery())
+        count_result = await self.db.execute(count_stmt)
+        total = count_result.scalar_one()
+        
+        # Get paginated results
+        stmt = stmt.order_by(WalkForwardAnalysis.created_at.desc()).offset(offset).limit(limit)
+        result = await self.db.execute(stmt)
+        analyses = list(result.scalars().all())
+        
+        return analyses, total
+    
+    async def delete_walk_forward_analysis(
+        self,
+        analysis_id: UUID,
+        user_id: UUID
+    ) -> bool:
+        """Delete walk-forward analysis (with ownership check).
+        
+        CRITICAL: Only deletes if analysis belongs to the specified user.
+        Returns False if analysis doesn't exist or belongs to different user.
+        """
+        analysis = await self.get_walk_forward_analysis(analysis_id, user_id)
+        if not analysis:
+            return False
+        
+        if self._is_async:
+            await self.db.delete(analysis)
+            await self.db.commit()
+        else:
+            self.db.delete(analysis)
+            with self._transaction(error_message=f"Failed to delete walk-forward analysis {analysis_id}"):
+                logger.info(f"Deleted walk-forward analysis {analysis_id} for user {user_id}")
+        
+        return True
+    
+    async def get_walk_forward_equity_curve(
+        self,
+        analysis_id: UUID,
+        user_id: UUID
+    ) -> list[dict]:
+        """Get equity curve points for an analysis.
+        
+        CRITICAL: Only returns equity curve if analysis belongs to the specified user.
+        First verifies ownership before returning data.
+        
+        Returns:
+            List of {"time": datetime, "balance": float}
+        """
+        # First verify ownership
+        analysis = await self.get_walk_forward_analysis(analysis_id, user_id)
+        if not analysis:
+            return []
+        
+        if self._is_async:
+            stmt = select(WalkForwardEquityPoint).filter(
+                WalkForwardEquityPoint.analysis_id == analysis_id
+            ).order_by(WalkForwardEquityPoint.time)
+            result = await self.db.execute(stmt)
+            points = result.scalars().all()
+        else:
+            points = self.db.query(WalkForwardEquityPoint).filter(
+                WalkForwardEquityPoint.analysis_id == analysis_id
+            ).order_by(WalkForwardEquityPoint.time).all()
+        
+        return [
+            {
+                "time": point.time,
+                "balance": float(point.balance),
+                "window_number": point.window_number
+            }
+            for point in points
+        ]
     
     # ============================================
     # SYSTEM EVENT OPERATIONS

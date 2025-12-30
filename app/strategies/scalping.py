@@ -473,8 +473,16 @@ class EmaScalpingStrategy(Strategy):
             self.last_closed_candle_time = last_closed_time
             processed_new_candle = True  # Mark that we're processing a new candle
             
-            logger.info(
-                f"[{self.context.id}] Processing NEW candle: time={last_closed_time} "
+            # Per-candle logging removed for performance (progress tracked via SSE)
+            # Only log occasionally: first 10 candles or every 100th candle
+            if not hasattr(self, '_candle_count'):
+                self._candle_count = 0
+            self._candle_count += 1
+            should_log = self._candle_count <= 10 or self._candle_count % 100 == 0
+            # Keep INFO for live trading where SSE is not available
+            if should_log:
+                logger.debug(
+                f"[{self.context.id}] Processing candle {self._candle_count}: time={last_closed_time} "
                 f"(close_time={last_closed_time}), close_price={last_close_price:.8f}, "
                 f"live_price={live_price:.8f}, position={self.position}"
             )
@@ -508,11 +516,8 @@ class EmaScalpingStrategy(Strategy):
             # For new candles, use live price for TP/SL, closed candle price for EMA logic
             candle_price = last_close_price  # Keep for EMA cross logic
             
-            logger.debug(
-                f"[{self.context.id}] live_price={live_price:.8f} candle_close={candle_price:.8f} "
-                f"fast_ema={fast_ema:.8f} slow_ema={slow_ema:.8f} "
-                f"prev_fast={prev_fast} prev_slow={prev_slow}"
-            )
+            # EMA values logging removed for performance (too verbose per candle)
+            # Only log on trade signals or errors
             
             # Use try/finally to ensure state is always updated at the end
             # This eliminates redundant updates while maintaining safety
@@ -523,7 +528,9 @@ class EmaScalpingStrategy(Strategy):
                 if self.cooldown_left > 0:
                     if processed_new_candle:
                         self.cooldown_left -= 1
-                    logger.warning(
+                    # Cooldown is normal behavior - use DEBUG for backtests, INFO for live
+                    log_level = logger.debug if self.context.id == "backtest" else logger.info
+                    log_level(
                         f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
                         f"Price: {live_price:.8f} | Position: {self.position}"
                     )
@@ -559,7 +566,9 @@ class EmaScalpingStrategy(Strategy):
                 should_check_separation = self.position is None  # Only check for new entries
                 
                 if should_check_separation and ema_separation_pct < self.min_ema_separation:
-                    logger.warning(
+                    # EMA separation filter is normal behavior - use DEBUG for backtests, INFO for live
+                    log_level = logger.debug if self.context.id == "backtest" else logger.info
+                    log_level(
                         f"[{self.context.id}] HOLD: EMA separation too small ({ema_separation_pct:.6f} < {self.min_ema_separation}) | "
                         f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | Position: {self.position}"
                     )
@@ -581,7 +590,9 @@ class EmaScalpingStrategy(Strategy):
                     
                     # BUG FIX: Log crossover detection for debugging
                     if golden_cross or death_cross:
-                        logger.info(
+                        # Crossover detection - use DEBUG for backtests, INFO for live
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
                             f"[{self.context.id}] Crossover detected on candle {last_closed_time}: "
                             f"golden_cross={golden_cross}, death_cross={death_cross}, "
                             f"prev_fast={prev_fast:.8f}, prev_slow={prev_slow:.8f}, "
@@ -591,7 +602,9 @@ class EmaScalpingStrategy(Strategy):
                     
                     # --- LONG Entry: Golden Cross (when flat) ---
                     if golden_cross and self.position is None:
-                        logger.info(
+                        # Crossover detection - use DEBUG for backtests, INFO for live
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
                             f"[{self.context.id}] Golden Cross: fast {fast_ema:.8f} > slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} <= {prev_slow:.8f})"
                         )
@@ -618,7 +631,9 @@ class EmaScalpingStrategy(Strategy):
                                 enabled=True,
                                 activation_pct=activation_pct
                             )
-                            logger.info(
+                            # Trailing stop initialization - use DEBUG for backtests, INFO for live
+                            log_level = logger.debug if self.context.id == "backtest" else logger.info
+                            log_level(
                                 f"[{self.context.id}] Trailing stop enabled for LONG (initial): "
                                 f"TP={self.trailing_stop.current_tp:.8f}, SL={self.trailing_stop.current_sl:.8f}, "
                                 f"Activation={activation_pct*100:.2f}% (will sync with actual entry after fill)"
@@ -642,7 +657,9 @@ class EmaScalpingStrategy(Strategy):
                         and self.enable_ema_cross_exit
                         and self.entry_candle_time != last_closed_time  # Prevent exit on entry candle
                     ):
-                        logger.info(
+                        # Crossover detection - use DEBUG for backtests, INFO for live
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
                             f"[{self.context.id}] Death Cross (exit long): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
                         )
@@ -722,7 +739,9 @@ class EmaScalpingStrategy(Strategy):
                                     price=live_price
                                 )
                         
-                        logger.info(
+                        # Crossover detection - use DEBUG for backtests, INFO for live
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
                             f"[{self.context.id}] Death Cross (enter short): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
                         )
@@ -749,7 +768,9 @@ class EmaScalpingStrategy(Strategy):
                                 enabled=True,
                                 activation_pct=activation_pct
                             )
-                            logger.info(
+                            # Trailing stop initialization - use DEBUG for backtests, INFO for live
+                            log_level = logger.debug if self.context.id == "backtest" else logger.info
+                            log_level(
                                 f"[{self.context.id}] Trailing stop enabled for SHORT (initial): "
                                 f"TP={self.trailing_stop.current_tp:.8f}, SL={self.trailing_stop.current_sl:.8f}, "
                                 f"Activation={activation_pct*100:.2f}% (will sync with actual entry after fill)"
@@ -773,7 +794,9 @@ class EmaScalpingStrategy(Strategy):
                         and self.enable_ema_cross_exit
                         and self.entry_candle_time != last_closed_time  # Prevent exit on entry candle
                     ):
-                        logger.info(
+                        # Crossover detection - use DEBUG for backtests, INFO for live
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
                             f"[{self.context.id}] Golden Cross (exit short): fast {fast_ema:.8f} > slow {slow_ema:.8f}"
                         )
                         logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
@@ -804,13 +827,8 @@ class EmaScalpingStrategy(Strategy):
                     prev_fast_above_slow = prev_fast > prev_slow
                     same_side = fast_above_slow == prev_fast_above_slow
                     
-                    logger.warning(
-                        f"[{self.context.id}] HOLD: No crossover detected | "
-                        f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | "
-                        f"Prev Fast: {prev_fast:.8f} | Prev Slow: {prev_slow:.8f} | "
-                        f"Fast above slow: {fast_above_slow} | Prev fast above slow: {prev_fast_above_slow} | "
-                        f"Same side: {same_side} | Position: {self.position}"
-                    )
+                    # HOLD signals are normal - removed verbose logging for performance
+                    # Only log trade signals (BUY/SELL) at INFO level
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,

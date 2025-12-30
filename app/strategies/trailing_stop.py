@@ -118,14 +118,16 @@ class TrailingStopManager:
             if self.position_type == "LONG":
                 if current_price >= self.activation_price:
                     self.activated = True
-                    logger.info(
+                    # Trailing stop activation - use DEBUG to reduce backtest log noise
+                    logger.debug(
                         f"TrailingStop activated for LONG: price {current_price:.8f} >= "
                         f"activation {self.activation_price:.8f} ({self.activation_pct*100:.2f}% from entry)"
                     )
             else:  # SHORT
                 if current_price <= self.activation_price:
                     self.activated = True
-                    logger.info(
+                    # Trailing stop activation - use DEBUG to reduce backtest log noise
+                    logger.debug(
                         f"TrailingStop activated for SHORT: price {current_price:.8f} <= "
                         f"activation {self.activation_price:.8f} ({self.activation_pct*100:.2f}% from entry)"
                     )

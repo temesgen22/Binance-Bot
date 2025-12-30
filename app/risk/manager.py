@@ -74,7 +74,8 @@ class RiskManager:
         if use_fixed_amount:
             # Use FIXED AMOUNT - completely ignore risk_per_trade
             at_risk = fixed_amount
-            logger.info(
+            # Sizing details - use DEBUG to reduce backtest log noise
+            logger.debug(
                 f"Using FIXED AMOUNT sizing for {symbol}: {fixed_amount} USDT "
                 f"(risk_per_trade={risk_per_trade} is COMPLETELY IGNORED)"
             )
@@ -112,7 +113,8 @@ class RiskManager:
                     f"({fixed_amount} USDT) due to quantity rounding for {symbol}"
                 )
             
-            logger.info(
+            # Sizing result - use DEBUG to reduce backtest log noise
+            logger.debug(
                 f"Fixed amount sizing RESULT for {symbol}: "
                 f"requested={fixed_amount} USDT, actual={actual_notional:.2f} USDT, "
                 f"qty={rounded_quantity}"

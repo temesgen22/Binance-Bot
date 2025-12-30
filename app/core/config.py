@@ -38,6 +38,21 @@ class Settings(BaseSettings):
     default_leverage: int = Field(default=5, alias="DEFAULT_LEVERAGE")
     risk_per_trade: float = Field(default=0.01, alias="RISK_PER_TRADE")
     max_concurrent_strategies: int = Field(default=3, alias="MAX_CONCURRENT_STRATEGIES")
+    max_concurrent_walk_forward_analyses: int = Field(
+        default=5,
+        alias="MAX_CONCURRENT_WALK_FORWARD_ANALYSES",
+        description="Maximum number of concurrent walk-forward analyses across all users"
+    )
+    max_walk_forward_analyses_per_user: int = Field(
+        default=2,
+        alias="MAX_WALK_FORWARD_ANALYSES_PER_USER",
+        description="Maximum number of concurrent walk-forward analyses per user"
+    )
+    walk_forward_task_cleanup_age_hours: int = Field(
+        default=24,
+        alias="WALK_FORWARD_TASK_CLEANUP_AGE_HOURS",
+        description="Age in hours after which completed walk-forward tasks are cleaned up"
+    )
     api_port: int = Field(default=8000, alias="API_PORT")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")

@@ -160,10 +160,17 @@ class TestMockBinanceClient:
         assert price > 0
     
     def test_get_klines_returns_provided_klines(self, mock_binance_client):
-        """Test that get_klines returns the provided klines."""
+        """Test that get_klines returns klines up to current_index."""
+        # By default, current_index is 0, so it should return 1 kline
         klines = mock_binance_client.get_klines("BTCUSDT", "1m", limit=100)
-        assert len(klines) == 100
-        assert klines == mock_binance_client.klines
+        assert len(klines) == 1
+        assert klines == mock_binance_client.klines[:1]
+        
+        # Set current_index to last index to get all klines
+        mock_binance_client.current_index = len(mock_binance_client.klines) - 1
+        all_klines = mock_binance_client.get_klines("BTCUSDT", "1m", limit=100)
+        assert len(all_klines) == 100
+        assert all_klines == mock_binance_client.klines
 
 
 class TestBacktestingEndpoint:

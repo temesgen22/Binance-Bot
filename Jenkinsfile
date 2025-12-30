@@ -206,11 +206,13 @@ pipeline {
         echo "🔄 Running migrations..."
         # Run migrations and capture output
         # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
+        # This includes new migrations for walk-forward analysis features (fixed_amount, optimization_results)
         MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
                 echo "$MIGRATION_OUTPUT"
                 
                 if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
                   echo "✅ Migrations completed successfully"
+                  echo "   Includes: walk-forward analysis enhancements (fixed_amount, optimization_results)"
                 else
                   # Check if error is due to existing tables
                   if echo "$MIGRATION_OUTPUT" | grep -qE "(already exists|DuplicateTable)"; then

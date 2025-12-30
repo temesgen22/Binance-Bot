@@ -71,6 +71,7 @@ class User(Base):
     strategies = relationship("Strategy", back_populates="user", cascade="all, delete-orphan")
     # Positions are runtime state - stored in Redis only, derived from trade_pairs when needed
     backtests = relationship("Backtest", back_populates="user", cascade="all, delete-orphan")
+    walk_forward_analyses = relationship("WalkForwardAnalysis", back_populates="user", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
 
@@ -540,5 +541,162 @@ class SystemEvent(Base):
 
     __table_args__ = (
         CheckConstraint("event_level IN ('INFO', 'WARNING', 'ERROR', 'CRITICAL')", name="system_events_event_level_check"),
+    )
+
+
+# ============================================
+# WALK-FORWARD ANALYSIS (Per-User)
+# ============================================
+
+class WalkForwardAnalysis(Base):
+    """Walk-forward analysis execution and results (per-user)."""
+    __tablename__ = "walk_forward_analyses"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)  # CRITICAL: User isolation - all queries must filter by this
+    
+    # User-friendly identification
+    name = Column(String(255))  # e.g., "BTC EMA 8/21 WFA - Jan 2025"
+    label = Column(String(255))  # Optional label for UI organization
+    
+    # Configuration
+    symbol = Column(String(20), nullable=False, index=True)
+    strategy_type = Column(String(50), nullable=False, index=True)
+    overall_start_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    overall_end_time = Column(DateTime(timezone=True), nullable=False)
+    
+    # Walk-forward specific configuration
+    training_period_days = Column(Integer, nullable=False)
+    test_period_days = Column(Integer, nullable=False)
+    step_size_days = Column(Integer, nullable=False)
+    window_type = Column(String(20), nullable=False)  # "rolling" or "expanding"
+    total_windows = Column(Integer, nullable=False)
+    
+    # Risk management
+    leverage = Column(Integer, nullable=False)
+    risk_per_trade = Column(Numeric(10, 6), nullable=False)
+    fixed_amount = Column(Numeric(20, 8))  # Optional fixed amount per trade (if None, uses risk_per_trade)
+    initial_balance = Column(Numeric(20, 8), nullable=False)
+    
+    # Strategy Parameters (base parameters)
+    params = Column(JSONB, nullable=False, default=lambda: {})  # Use lambda to avoid shared mutable default
+    
+    # Optimization settings (if optimization was used)
+    optimization_enabled = Column(Boolean, nullable=False, default=False)
+    optimization_method = Column(String(50))  # "grid_search", "random_search"
+    optimization_metric = Column(String(50))  # "robust_score", "sharpe_ratio", etc.
+    optimize_params = Column(JSONB, default=lambda: {})  # Parameters to optimize with ranges
+    min_trades_guardrail = Column(Integer)  # Minimum trades required
+    max_drawdown_cap = Column(Numeric(5, 2))  # Max drawdown cap (%)
+    lottery_trade_threshold = Column(Numeric(5, 4))  # Lottery trade threshold (0.0-1.0)
+    
+    # Overall Results (aggregated across all windows)
+    total_return_pct = Column(Numeric(10, 4), nullable=False)
+    avg_window_return_pct = Column(Numeric(10, 4), nullable=False)
+    consistency_score = Column(Numeric(5, 2), nullable=False)  # % of windows with positive returns
+    sharpe_ratio = Column(Numeric(10, 4))
+    max_drawdown_pct = Column(Numeric(5, 2))
+    total_trades = Column(Integer, nullable=False, default=0)
+    avg_win_rate = Column(Numeric(5, 2), nullable=False, default=0)
+    return_std_dev = Column(Numeric(10, 4))  # Standard deviation of window returns
+    best_window = Column(Integer)  # Window number with best performance
+    worst_window = Column(Integer)  # Window number with worst performance
+    final_balance = Column(Numeric(20, 8))
+    
+    # Execution Metadata
+    execution_time_ms = Column(Integer)
+    candles_processed = Column(Integer)
+    
+    # Retention settings
+    keep_details = Column(Boolean, nullable=False, default=True)  # Whether to keep window details
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    completed_at = Column(DateTime(timezone=True))
+    
+    # Relationships
+    user = relationship("User", back_populates="walk_forward_analyses")
+    windows = relationship("WalkForwardWindow", back_populates="analysis", cascade="all, delete-orphan")
+    equity_points = relationship("WalkForwardEquityPoint", back_populates="analysis", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        CheckConstraint("leverage >= 1 AND leverage <= 50", name="wf_analyses_leverage_check"),
+        CheckConstraint("risk_per_trade > 0 AND risk_per_trade < 1", name="wf_analyses_risk_check"),
+        CheckConstraint("window_type IN ('rolling', 'expanding')", name="wf_analyses_window_type_check"),
+        Index("idx_wf_analyses_params", "params", postgresql_using="gin"),
+        Index("idx_wf_analyses_created_at", "created_at", postgresql_ops={"created_at": "DESC"}),
+    )
+
+
+class WalkForwardWindow(Base):
+    """Individual window within a walk-forward analysis."""
+    __tablename__ = "walk_forward_windows"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_id = Column(PGUUID(as_uuid=True), ForeignKey("walk_forward_analyses.id", ondelete="CASCADE"), nullable=False, index=True)  # CASCADE ensures user isolation via parent
+    
+    # Window identification
+    window_number = Column(Integer, nullable=False)  # 1, 2, 3, etc.
+    
+    # Time periods
+    training_start = Column(DateTime(timezone=True), nullable=False)
+    training_end = Column(DateTime(timezone=True), nullable=False)
+    test_start = Column(DateTime(timezone=True), nullable=False)
+    test_end = Column(DateTime(timezone=True), nullable=False)
+    
+    # Optimized parameters (if optimization was used)
+    optimized_params = Column(JSONB, default=lambda: {})  # Parameters found during training optimization
+    
+    # Training results (summary)
+    training_return_pct = Column(Numeric(10, 4))
+    training_sharpe = Column(Numeric(10, 4))
+    training_win_rate = Column(Numeric(5, 2))
+    training_trades = Column(Integer, default=0)
+    
+    # Test results (summary)
+    test_return_pct = Column(Numeric(10, 4))
+    test_sharpe = Column(Numeric(10, 4))
+    test_win_rate = Column(Numeric(5, 2))
+    test_trades = Column(Integer, default=0)
+    test_final_balance = Column(Numeric(20, 8))
+    
+    # Optimization results (if optimization was used)
+    # Store summary of all combinations tested during training
+    optimization_results = Column(JSONB, default=lambda: [])  # List of all tested combinations with scores
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    # Relationships
+    analysis = relationship("WalkForwardAnalysis", back_populates="windows")
+    
+    __table_args__ = (
+        Index("idx_wf_windows_analysis_window", "analysis_id", "window_number"),
+        CheckConstraint("window_number > 0", name="wf_windows_window_number_check"),
+    )
+
+
+class WalkForwardEquityPoint(Base):
+    """Equity curve data points for walk-forward analysis."""
+    __tablename__ = "walk_forward_equity_points"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_id = Column(PGUUID(as_uuid=True), ForeignKey("walk_forward_analyses.id", ondelete="CASCADE"), nullable=False, index=True)  # CASCADE ensures user isolation via parent
+    
+    # Time and balance
+    time = Column(DateTime(timezone=True), nullable=False, index=True)
+    balance = Column(Numeric(20, 8), nullable=False)
+    
+    # Optional: Window reference
+    window_number = Column(Integer)  # Which window this point belongs to
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    # Relationships
+    analysis = relationship("WalkForwardAnalysis", back_populates="equity_points")
+    
+    __table_args__ = (
+        Index("idx_wf_equity_analysis_time", "analysis_id", "time"),
     )
 
