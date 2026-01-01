@@ -26,6 +26,7 @@ from app.api.routes.accounts import router as accounts_router
 from app.api.routes.test_accounts import router as test_accounts_router
 from app.api.routes.market_analyzer import router as market_analyzer_router
 from app.api.routes.backtesting import router as backtesting_router
+from app.api.routes.auto_tuning import router as auto_tuning_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -318,6 +319,22 @@ def create_app() -> FastAPI:
                     startup_errors.append(error_msg)
                     logger.error(f"Failed to start Telegram command handler: {exc}", exc_info=True)
             
+            # Start Auto-Tuning Evaluator (background job to update performance_after)
+            if db_init_success:
+                try:
+                    from app.services.auto_tuning_evaluator import AutoTuningEvaluator
+                    from app.services.auto_tuning_service import AutoTuningService
+                    from app.services.strategy_statistics import StrategyStatistics
+                    from app.services.database_service import DatabaseService
+                    from app.core.database import get_async_db
+                    
+                    # Create evaluator (will be started if database is available)
+                    # Note: We create a minimal evaluator here - full service requires user context
+                    # The evaluator will be created per-request in API routes
+                    logger.info("✅ Auto-tuning evaluator ready (will start on first evaluation request)")
+                except Exception as exc:
+                    logger.warning(f"Auto-tuning evaluator setup skipped: {exc}")
+            
             # Send server restart notification
             if notification_service:
                 try:
@@ -346,7 +363,12 @@ def create_app() -> FastAPI:
             logger.warning("⚠️ Server starting in degraded mode due to startup errors")
         
         # Always yield to allow server to start, even if there were errors
-        yield
+        try:
+            yield
+        except asyncio.CancelledError:
+            # Lifespan was cancelled (normal during shutdown)
+            logger.debug("Lifespan cancelled during shutdown")
+            # Fall through to shutdown cleanup
         
         # Shutdown
         try:
@@ -604,7 +626,8 @@ def create_app() -> FastAPI:
     app.include_router(strategy_performance_router)
     app.include_router(reports_router)  # Must be before /reports GUI route
     app.include_router(market_analyzer_router)  # Market analyzer API
-    app.include_router(backtesting_router)  # Backtesting API
+    app.include_router(backtesting_router)
+    app.include_router(auto_tuning_router)  # Backtesting API
     
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)

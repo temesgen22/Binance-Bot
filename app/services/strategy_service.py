@@ -60,6 +60,7 @@ class StrategyService(BaseCacheService):
             "started_at": summary.started_at.isoformat() if summary.started_at else None,
             "stopped_at": summary.stopped_at.isoformat() if summary.stopped_at else None,
             "meta": summary.meta or {},
+            "auto_tuning_enabled": getattr(summary, 'auto_tuning_enabled', False),
         }
     
     def _dict_to_strategy_summary(self, data: dict) -> StrategySummary:
@@ -94,6 +95,7 @@ class StrategyService(BaseCacheService):
             started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
             stopped_at=datetime.fromisoformat(data["stopped_at"]) if data.get("stopped_at") else None,
             meta=data.get("meta", {}),
+            auto_tuning_enabled=data.get("auto_tuning_enabled", False),
         )
     
     def _db_strategy_to_summary(self, db_strategy: DBStrategy) -> StrategySummary:
@@ -108,19 +110,15 @@ class StrategyService(BaseCacheService):
         # The database stores account_id as UUID, but we need the string identifier
         account_id_str = "default"  # Default fallback
         if db_strategy.account_id:
-            # Look up the account to get its string identifier
-            # Use the relationship if available, otherwise query
+            # Use the eagerly-loaded relationship if available
+            # In async context, the account should be eagerly loaded via selectinload
             if hasattr(db_strategy, 'account') and db_strategy.account:
                 account_id_str = db_strategy.account.account_id  # This is the string identifier
             else:
-                # Fallback: query the account
-                from app.models.db_models import Account
-                account = self.db_service.db.query(Account).filter(Account.id == db_strategy.account_id).first()
-                if account:
-                    account_id_str = account.account_id
-                else:
-                    # Last fallback: use UUID as string if account not found
-                    account_id_str = str(db_strategy.account_id)
+                # Fallback: use UUID as string if account relationship not loaded
+                # Note: In async context, we can't do a sync query here
+                # The account should be eagerly loaded in the query
+                account_id_str = str(db_strategy.account_id)
         
         return StrategySummary(
             id=db_strategy.strategy_id,  # Use strategy_id (string identifier) not id (database UUID)
@@ -143,6 +141,7 @@ class StrategyService(BaseCacheService):
             started_at=db_strategy.started_at,
             stopped_at=db_strategy.stopped_at,
             meta=db_strategy.meta or {},
+            auto_tuning_enabled=db_strategy.auto_tuning_enabled if hasattr(db_strategy, 'auto_tuning_enabled') else False,
         )
     
     def get_strategy(

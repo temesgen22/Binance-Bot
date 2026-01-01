@@ -515,7 +515,7 @@ class TestStateSynchronization:
         )
         
         # Check consistency
-        result = await strategy_runner._check_state_consistency(strategy_summary.id)
+        result = await strategy_runner.state_manager.check_state_consistency(strategy_summary.id)
         
         assert result["consistent"] is True
         assert len(result["mismatches"]) == 0
@@ -542,7 +542,7 @@ class TestStateSynchronization:
         )
         
         # Check consistency
-        result = await strategy_runner._check_state_consistency(strategy_summary.id)
+        result = await strategy_runner.state_manager.check_state_consistency(strategy_summary.id)
         
         assert result["consistent"] is False
         assert len(result["mismatches"]) > 0
@@ -566,7 +566,7 @@ class TestStateSynchronization:
         # Mock state_manager.update_strategy_in_db
         with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Update position info
-            await strategy_runner._update_position_info(strategy_summary)
+            await strategy_runner.state_manager.update_position_info(strategy_summary)
             
             # Should update database first
             mock_update.assert_called_once()
@@ -594,7 +594,7 @@ class TestStateSynchronization:
         # Mock state_manager.update_strategy_in_db
         with patch.object(strategy_runner.state_manager, 'update_strategy_in_db', return_value=True) as mock_update:
             # Update position info
-            await strategy_runner._update_position_info(strategy_summary)
+            await strategy_runner.state_manager.update_position_info(strategy_summary)
             
             # Should update database to clear position
             mock_update.assert_called_once()
@@ -642,7 +642,7 @@ class TestStateSynchronization:
     async def test_check_state_consistency_handles_missing_strategy(self, strategy_runner):
         """Test that consistency check handles missing strategy gracefully."""
         # Strategy not in memory
-        result = await strategy_runner._check_state_consistency("non-existent-strategy")
+        result = await strategy_runner.state_manager.check_state_consistency("non-existent-strategy")
         
         # If strategy not in memory, we can't compare states, so it's considered consistent
         # (no mismatch detected, since we can't compare)
@@ -662,7 +662,7 @@ class TestStateSynchronization:
         strategy_runner.strategy_service.db_service.get_strategy.side_effect = Exception("Database error")
         
         # Should not raise exception
-        result = await strategy_runner._check_state_consistency(strategy_summary.id)
+        result = await strategy_runner.state_manager.check_state_consistency(strategy_summary.id)
         
         # If database error occurs, we can't compare states, so it's considered consistent
         # (no mismatch detected, since we can't compare)

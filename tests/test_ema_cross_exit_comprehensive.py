@@ -350,7 +350,7 @@ class TestEmaCrossExitBacktesting:
     async def test_backtest_no_ema_cross_exits_when_disabled(self, mock_binance_client, sample_klines):
         """Test that backtesting doesn't produce EMA cross exits when disabled."""
         rest_mock = Mock()
-        rest_mock.futures_historical_klines = Mock(return_value=sample_klines)
+        rest_mock.futures_klines = Mock(return_value=sample_klines)
         mock_binance_client._ensure.return_value = rest_mock
         
         start_time = datetime.now(timezone.utc) - timedelta(hours=2)
@@ -395,7 +395,7 @@ class TestEmaCrossExitBacktesting:
     async def test_backtest_allows_ema_cross_exits_when_enabled(self, mock_binance_client, sample_klines):
         """Test that backtesting allows EMA cross exits when enabled."""
         rest_mock = Mock()
-        rest_mock.futures_historical_klines = Mock(return_value=sample_klines)
+        rest_mock.futures_klines = Mock(return_value=sample_klines)
         mock_binance_client._ensure.return_value = rest_mock
         
         start_time = datetime.now(timezone.utc) - timedelta(hours=2)

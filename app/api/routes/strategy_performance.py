@@ -110,6 +110,7 @@ def get_strategy_performance(
                 last_signal=strategy.last_signal,
                 account_id=strategy.account_id,
                 account_info=account_info,
+                auto_tuning_enabled=getattr(strategy, 'auto_tuning_enabled', False),
             )
             performance_list.append(performance)
         except StrategyNotFoundError:
@@ -233,6 +234,7 @@ def get_strategy_performance_detail(
         stopped_at=strategy.stopped_at,
         last_trade_at=stats.last_trade_at,
         last_signal=strategy.last_signal,
+        auto_tuning_enabled=getattr(strategy, 'auto_tuning_enabled', False),
     )
     
     return performance

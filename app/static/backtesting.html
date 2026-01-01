@@ -394,6 +394,9 @@
                 <button class="tab-btn" onclick="switchTab('history')" id="tab-history" style="padding: 12px 24px; border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; font-size: 1em; font-weight: 600; color: #666; transition: all 0.3s;">
                     History
                 </button>
+                <button class="tab-btn" onclick="switchTab('sensitivity')" id="tab-sensitivity" style="padding: 12px 24px; border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; font-size: 1em; font-weight: 600; color: #666; transition: all 0.3s;">
+                    Sensitivity Analysis
+                </button>
                 <a href="/static/walk-forward-dashboard.html" style="padding: 12px 24px; border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; font-size: 1em; font-weight: 600; color: #667eea; text-decoration: none; transition: all 0.3s; margin-left: auto;">
                     📊 Dashboard
                 </a>
@@ -735,6 +738,150 @@
                         <button class="btn btn-secondary" onclick="loadHistoryPage('prev')" id="historyPrevBtn" disabled>Previous</button>
                         <span id="historyPageInfo" style="margin: 0 20px; color: #666;"></span>
                         <button class="btn btn-secondary" onclick="loadHistoryPage('next')" id="historyNextBtn" disabled>Next</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sensitivity Analysis Tab -->
+            <div id="tab-content-sensitivity" class="tab-content" style="display: none;">
+                <div class="form-section">
+                    <h2>Parameter Sensitivity Analysis</h2>
+                    <p style="color: #666; margin-bottom: 20px;">
+                        Test how individual parameter changes affect strategy performance. 
+                        This helps identify which parameters matter most before running walk-forward optimization.
+                    </p>
+                    
+                    <form id="sensitivityForm" onsubmit="runSensitivityAnalysis(event)">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="sensitivityName">Analysis Name</label>
+                                <input type="text" id="sensitivityName" placeholder="e.g., BTC EMA Sensitivity Jan 2025">
+                                <small>Optional name to identify this analysis</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivitySymbol">Symbol *</label>
+                                <input type="text" id="sensitivitySymbol" placeholder="BTCUSDT" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityStrategyType">Strategy Type *</label>
+                                <select id="sensitivityStrategyType" required onchange="updateSensitivityParams()">
+                                    <option value="">Select strategy...</option>
+                                    <option value="scalping">EMA Scalping</option>
+                                    <option value="range_mean_reversion">Range Mean Reversion</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityStartTime">Start Time *</label>
+                                <input type="datetime-local" id="sensitivityStartTime" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityEndTime">End Time *</label>
+                                <input type="datetime-local" id="sensitivityEndTime" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityMetric">Metric to Analyze *</label>
+                                <select id="sensitivityMetric" required>
+                                    <option value="total_return" selected>Total Return %</option>
+                                    <option value="sharpe_ratio">Sharpe Ratio</option>
+                                    <option value="win_rate">Win Rate</option>
+                                    <option value="profit_factor">Profit Factor</option>
+                                    <option value="max_drawdown">Max Drawdown</option>
+                                </select>
+                                <small>Metric used to measure parameter impact</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityKlineInterval">Kline Interval *</label>
+                                <select id="sensitivityKlineInterval" required>
+                                    <option value="1m">1m</option>
+                                    <option value="3m">3m</option>
+                                    <option value="5m" selected>5m</option>
+                                    <option value="15m">15m</option>
+                                    <option value="30m">30m</option>
+                                    <option value="1h">1h</option>
+                                    <option value="2h">2h</option>
+                                    <option value="4h">4h</option>
+                                    <option value="6h">6h</option>
+                                    <option value="8h">8h</option>
+                                    <option value="12h">12h</option>
+                                    <option value="1d">1d</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityLeverage">Leverage *</label>
+                                <input type="number" id="sensitivityLeverage" min="1" max="50" value="5" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityRiskPerTrade">Risk Per Trade *</label>
+                                <input type="number" id="sensitivityRiskPerTrade" min="0.001" max="0.99" step="0.001" value="0.01" required>
+                                <small>Risk percentage per trade (0.01 = 1%)</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityFixedAmount">Fixed Amount (Optional)</label>
+                                <input type="number" id="sensitivityFixedAmount" min="0" step="0.01" placeholder="e.g., 100">
+                                <small>Fixed USDT amount per trade (overrides risk_per_trade if set)</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="sensitivityInitialBalance">Initial Balance *</label>
+                                <input type="number" id="sensitivityInitialBalance" min="1" step="0.01" value="1000" required>
+                            </div>
+                        </div>
+                        
+                        <!-- Base Parameters Section -->
+                        <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                            <h3 style="margin-top: 0;">Base Parameters</h3>
+                            <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
+                                These are the starting parameter values. Each parameter you select for analysis will be varied while keeping others at these base values.
+                                <strong>Note:</strong> Kline Interval is set above and cannot be varied as a parameter (it requires fetching different data).
+                            </p>
+                            <div id="sensitivityBaseParams" class="params-grid">
+                                <!-- Dynamically populated based on strategy type -->
+                            </div>
+                        </div>
+                        
+                        <!-- Parameters to Analyze Section -->
+                        <div style="margin-top: 30px; padding: 20px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                            <h3 style="margin-top: 0;">Parameters to Analyze</h3>
+                            <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
+                                Select which parameters to test and specify the values to test for each. 
+                                Example: For ema_fast, enter "5,8,10,12,15" to test those values.
+                                <strong>Note:</strong> Kline Interval cannot be analyzed (it's set above and requires different data fetches).
+                            </p>
+                            <div id="sensitivityAnalyzeParams">
+                                <!-- Dynamically populated based on strategy type -->
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: 30px; text-align: center;">
+                            <button type="submit" class="btn btn-primary" style="padding: 12px 40px; font-size: 1.1em;">
+                                Run Sensitivity Analysis
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <!-- Progress Section -->
+                    <div id="sensitivityProgress" style="display: none; margin-top: 30px; padding: 20px; background: #e7f3ff; border-radius: 8px;">
+                        <h3>Analysis Progress</h3>
+                        <div id="sensitivityProgressBar" style="width: 100%; height: 20px; background: #ddd; border-radius: 10px; overflow: hidden; margin: 10px 0;">
+                            <div id="sensitivityProgressFill" style="height: 100%; background: #667eea; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <p id="sensitivityProgressText" style="text-align: center; margin: 10px 0; color: #666;"></p>
+                        <button class="btn btn-secondary" onclick="cancelSensitivityAnalysis()" style="margin-top: 10px;">Cancel Analysis</button>
+                    </div>
+                    
+                    <!-- Results Section -->
+                    <div id="sensitivityResults" style="display: none; margin-top: 30px;">
+                        <h3>Analysis Results</h3>
+                        <div id="sensitivityResultsContent"></div>
                     </div>
                 </div>
             </div>
@@ -1358,6 +1505,24 @@
                                     return response.json();
                                 })
                                 .then(result => {
+                                    // Debug: Log optimization data for first window
+                                    if (result && result.windows && result.windows.length > 0) {
+                                        const firstWindow = result.windows[0];
+                                        console.log('Walk-forward result received:', {
+                                            total_windows: result.windows.length,
+                                            first_window: {
+                                                window_number: firstWindow.window_number,
+                                                has_optimized_params: !!firstWindow.optimized_params,
+                                                optimized_params: firstWindow.optimized_params,
+                                                optimized_params_type: typeof firstWindow.optimized_params,
+                                                optimized_params_keys: firstWindow.optimized_params ? Object.keys(firstWindow.optimized_params) : [],
+                                                has_optimization_results: !!firstWindow.optimization_results,
+                                                optimization_results: firstWindow.optimization_results,
+                                                optimization_results_type: Array.isArray(firstWindow.optimization_results) ? 'array' : typeof firstWindow.optimization_results,
+                                                optimization_results_length: Array.isArray(firstWindow.optimization_results) ? firstWindow.optimization_results.length : 'not an array'
+                                            }
+                                        });
+                                    }
                                     resolve(result);
                                 })
                                 .catch(err => {
@@ -2193,13 +2358,17 @@
             
             // Display window breakdown
             if (result.windows && result.windows.length > 0) {
-                // Debug: Log window data to verify training returns
+                // Debug: Log window data to verify training returns and optimization data
                 console.log('Walk-Forward Windows Data:', result.windows.map(w => ({
                     window: w.window_number,
                     training_period: `${w.training_start} to ${w.training_end}`,
                     training_return: w.training_return_pct,
                     test_period: `${w.test_start} to ${w.test_end}`,
-                    test_return: w.test_return_pct
+                    test_return: w.test_return_pct,
+                    has_optimized_params: !!w.optimized_params && Object.keys(w.optimized_params || {}).length > 0,
+                    optimized_params: w.optimized_params,
+                    has_optimization_results: !!w.optimization_results && Array.isArray(w.optimization_results) && w.optimization_results.length > 0,
+                    optimization_results_count: w.optimization_results ? (Array.isArray(w.optimization_results) ? w.optimization_results.length : 'not an array') : 0
                 })));
                 displayWindowBreakdown(result.windows, result.best_window, result.worst_window);
             }
@@ -2256,6 +2425,15 @@
                 const drawdownData = [];
                 const equityData = [];
                 
+                // Get user's timezone preference for equity curve display
+                const useUTC = typeof UserSettings !== 'undefined' && UserSettings.get('timeFormat') === 'utc';
+                let timezoneOffsetSeconds = 0;
+                if (useUTC) {
+                    // Get browser's timezone offset in minutes, convert to seconds
+                    // We ADD the offset to timestamps so local display shows UTC
+                    timezoneOffsetSeconds = new Date().getTimezoneOffset() * 60; // Convert minutes to seconds
+                }
+                
                 sortedData.forEach(point => {
                     // Validate and filter out null/undefined values
                     if (!point || point.time === null || point.time === undefined) {
@@ -2289,21 +2467,22 @@
                         return;
                     }
                     
+                    // Adjust timestamp for UTC display if needed (same as kline data)
+                    const adjustedTime = useUTC ? timeValue + timezoneOffsetSeconds : timeValue;
+                    
                     equityData.push({
-                        time: timeValue,
+                        time: adjustedTime,
                         value: Number(balance)
                     });
                     
                     drawdownData.push({
-                        time: timeValue,
+                        time: adjustedTime,
                         value: -drawdownPct // Negative for visualization
                     });
                 });
                 
-                // Get user's timezone preference for chart time display
-                const userTimeFormat = (typeof UserSettings !== 'undefined') ? UserSettings.get('timeFormat') : 'utc';
-                const useUTC = userTimeFormat === 'utc';
-                
+                // Note: Timezone adjustment for equity chart is handled by adjusting timestamps in the data
+                // Lightweight Charts doesn't support custom timezone formatting via localization API
                 // Create chart with better configuration
                 equityChart = LightweightCharts.createChart(chartContainer, {
                     width: chartContainer.clientWidth,
@@ -2327,42 +2506,6 @@
                         timeVisible: true,
                         secondsVisible: false,
                         borderColor: '#d1d4dc',
-                    },
-                    localization: {
-                        timeFormatter: (businessDayOrTimestamp) => {
-                            // Convert Unix timestamp (seconds) to Date
-                            const timestamp = typeof businessDayOrTimestamp === 'number' 
-                                ? businessDayOrTimestamp * 1000 
-                                : businessDayOrTimestamp;
-                            const date = new Date(timestamp);
-                            
-                            if (isNaN(date.getTime())) {
-                                return '';
-                            }
-                            
-                            // Format according to user's timezone preference
-                            if (useUTC) {
-                                // Format as UTC
-                                const year = date.getUTCFullYear();
-                                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-                                const day = String(date.getUTCDate()).padStart(2, '0');
-                                const hours = String(date.getUTCHours()).padStart(2, '0');
-                                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-                                return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
-                            } else {
-                                // Format as local time
-                                const year = date.getFullYear();
-                                const month = String(date.getMonth() + 1).padStart(2, '0');
-                                const day = String(date.getDate()).padStart(2, '0');
-                                const hours = String(date.getHours()).padStart(2, '0');
-                                const minutes = String(date.getMinutes()).padStart(2, '0');
-                                const tzOffset = -date.getTimezoneOffset();
-                                const tzHours = Math.floor(Math.abs(tzOffset) / 60);
-                                const tzMinutes = Math.abs(tzOffset) % 60;
-                                const tzSign = tzOffset >= 0 ? '+' : '-';
-                                return `${year}-${month}-${day} ${hours}:${minutes} UTC${tzSign}${String(tzHours).padStart(2, '0')}:${String(tzMinutes).padStart(2, '0')}`;
-                            }
-                        },
                     },
                     rightPriceScale: {
                         borderColor: '#d1d4dc',
@@ -2478,6 +2621,19 @@
         }
 
         function displayWindowBreakdown(windows, bestWindow, worstWindow) {
+            // Debug: Log window data before processing
+            console.log('displayWindowBreakdown called with:', {
+                windows_count: windows ? windows.length : 0,
+                bestWindow,
+                worstWindow,
+                first_window_sample: windows && windows.length > 0 ? {
+                    window_number: windows[0].window_number,
+                    optimized_params: windows[0].optimized_params,
+                    optimization_results: windows[0].optimization_results,
+                    optimization_results_type: Array.isArray(windows[0].optimization_results) ? 'array' : typeof windows[0].optimization_results,
+                    optimization_results_length: Array.isArray(windows[0].optimization_results) ? windows[0].optimization_results.length : 'not an array'
+                } : null
+            });
             const container = document.getElementById('windowBreakdownTable');
             if (!container) return;
             
@@ -2534,7 +2690,21 @@
                 // Format optimized params better - show ALL parameters that were optimized
                 let optimizedParamsDisplay = '-';
                 let optimizedParamsTooltip = '';
-                if (window.optimized_params) {
+                
+                // Debug: Log optimized_params check
+                console.log(`Window ${window.window_number} optimized_params check:`, {
+                    optimized_params: window.optimized_params,
+                    optimized_params_type: typeof window.optimized_params,
+                    optimized_params_is_null: window.optimized_params === null,
+                    optimized_params_is_undefined: window.optimized_params === undefined,
+                    optimized_params_is_object: typeof window.optimized_params === 'object',
+                    optimized_params_keys: window.optimized_params ? Object.keys(window.optimized_params) : [],
+                    optimized_params_keys_length: window.optimized_params ? Object.keys(window.optimized_params).length : 0,
+                    check_result: window.optimized_params && typeof window.optimized_params === 'object' && Object.keys(window.optimized_params).length > 0
+                });
+                
+                // Check if optimized_params exists and is not empty (handle both null/undefined and empty objects)
+                if (window.optimized_params && typeof window.optimized_params === 'object' && Object.keys(window.optimized_params).length > 0) {
                     try {
                         const params = window.optimized_params;
                         // Sort parameters for consistent display
@@ -2590,7 +2760,18 @@
                 html += `<td class="optimized-params-cell" title="${optimizedParamsTooltip || optimizedParamsDisplay}">${optimizedParamsDisplay}</td>`;
                 
                 // Add button to view optimization results if available
-                if (window.optimization_results && window.optimization_results.length > 0) {
+                // Check if optimization_results exists, is an array, and has items
+                
+                // Debug: Log optimization_results check
+                console.log(`Window ${window.window_number} optimization_results check:`, {
+                    optimization_results: window.optimization_results,
+                    optimization_results_type: typeof window.optimization_results,
+                    optimization_results_is_array: Array.isArray(window.optimization_results),
+                    optimization_results_length: Array.isArray(window.optimization_results) ? window.optimization_results.length : 'not an array',
+                    check_result: window.optimization_results && Array.isArray(window.optimization_results) && window.optimization_results.length > 0
+                });
+                
+                if (window.optimization_results && Array.isArray(window.optimization_results) && window.optimization_results.length > 0) {
                     html += `<td><button onclick="showOptimizationResults(${window.window_number})" style="padding: 4px 8px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">View All Combinations (${window.optimization_results.length})</button></td>`;
                 } else {
                     html += '<td>-</td>';
@@ -2889,6 +3070,11 @@
             // Load history if switching to history tab
             if (tabName === 'history') {
                 loadHistory();
+            }
+            
+            // Initialize sensitivity tab if switching to it
+            if (tabName === 'sensitivity') {
+                initializeSensitivityTab();
             }
         }
         
@@ -3256,10 +3442,6 @@
             console.log('Last point:', equityCurve[equityCurve.length - 1]);
             
             try {
-                // Get user's timezone preference for chart time display
-                const userTimeFormat = (typeof UserSettings !== 'undefined') ? UserSettings.get('timeFormat') : 'utc';
-                const useUTC = userTimeFormat === 'utc';
-                
                 const chart = LightweightCharts.createChart(container, {
                     width: container.clientWidth,
                     height: 400,
@@ -3277,42 +3459,6 @@
                     },
                     crosshair: {
                         mode: 0, // Normal crosshair mode
-                    },
-                    localization: {
-                        timeFormatter: (businessDayOrTimestamp) => {
-                            // Convert Unix timestamp (seconds) to Date
-                            const timestamp = typeof businessDayOrTimestamp === 'number' 
-                                ? businessDayOrTimestamp * 1000 
-                                : businessDayOrTimestamp;
-                            const date = new Date(timestamp);
-                            
-                            if (isNaN(date.getTime())) {
-                                return '';
-                            }
-                            
-                            // Format according to user's timezone preference
-                            if (useUTC) {
-                                // Format as UTC
-                                const year = date.getUTCFullYear();
-                                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-                                const day = String(date.getUTCDate()).padStart(2, '0');
-                                const hours = String(date.getUTCHours()).padStart(2, '0');
-                                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-                                return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
-                            } else {
-                                // Format as local time
-                                const year = date.getFullYear();
-                                const month = String(date.getMonth() + 1).padStart(2, '0');
-                                const day = String(date.getDate()).padStart(2, '0');
-                                const hours = String(date.getHours()).padStart(2, '0');
-                                const minutes = String(date.getMinutes()).padStart(2, '0');
-                                const tzOffset = -date.getTimezoneOffset();
-                                const tzHours = Math.floor(Math.abs(tzOffset) / 60);
-                                const tzMinutes = Math.abs(tzOffset) % 60;
-                                const tzSign = tzOffset >= 0 ? '+' : '-';
-                                return `${year}-${month}-${day} ${hours}:${minutes} UTC${tzSign}${String(tzHours).padStart(2, '0')}:${String(tzMinutes).padStart(2, '0')}`;
-                            }
-                        },
                     },
                 });
                 
@@ -3862,6 +4008,947 @@
                 attachStrategyTypeHandler();
             }, 100);
         });
+        
+        // ============================================================================
+        // Sensitivity Analysis Functions
+        // ============================================================================
+        
+        let sensitivityTaskId = null;
+        let sensitivityEventSource = null;
+        let currentSensitivityResult = null; // Store current sensitivity result for WFA integration
+        
+        function initializeSensitivityTab() {
+            // Set default time (last 7 days)
+            const endTime = new Date();
+            const startTime = new Date();
+            startTime.setDate(startTime.getDate() - 7);
+            
+            const startInput = document.getElementById('sensitivityStartTime');
+            const endInput = document.getElementById('sensitivityEndTime');
+            
+            if (startInput && endInput) {
+                startInput.value = formatDateTimeLocal(startTime);
+                endInput.value = formatDateTimeLocal(endTime);
+            }
+            
+            // Update params if strategy type is already selected
+            const strategyType = document.getElementById('sensitivityStrategyType');
+            if (strategyType && strategyType.value) {
+                updateSensitivityParams();
+            }
+        }
+        
+        function formatDateTimeLocal(date) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day}T${hours}:${minutes}`;
+        }
+        
+        function updateSensitivityParams() {
+            const strategyType = document.getElementById('sensitivityStrategyType')?.value;
+            if (!strategyType) return;
+            
+            const baseParamsContainer = document.getElementById('sensitivityBaseParams');
+            const analyzeParamsContainer = document.getElementById('sensitivityAnalyzeParams');
+            
+            if (!baseParamsContainer || !analyzeParamsContainer) return;
+            
+            const params = strategyParams[strategyType];
+            if (!params) return;
+            
+            // Clear existing
+            baseParamsContainer.innerHTML = '';
+            analyzeParamsContainer.innerHTML = '';
+            
+            // Create base params inputs
+            Object.entries(params).forEach(([key, config]) => {
+                // Skip kline_interval - it's set at the top level (sensitivityKlineInterval)
+                // and cannot be varied as a parameter since it requires different data fetches
+                if (key === 'kline_interval') return;
+                
+                const baseGroup = document.createElement('div');
+                baseGroup.className = 'form-group';
+                
+                const label = document.createElement('label');
+                label.textContent = config.label || key;
+                label.setAttribute('for', `sensitivityBase_${key}`);
+                
+                let input;
+                if (config.type === 'select') {
+                    input = document.createElement('select');
+                    input.id = `sensitivityBase_${key}`;
+                    config.options.forEach(opt => {
+                        const option = document.createElement('option');
+                        option.value = opt;
+                        option.textContent = opt;
+                        if (opt === config.value) option.selected = true;
+                        input.appendChild(option);
+                    });
+                } else if (config.type === 'checkbox') {
+                    input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.id = `sensitivityBase_${key}`;
+                    input.checked = config.value || false;
+                } else {
+                    input = document.createElement('input');
+                    input.type = config.type || 'number';
+                    input.id = `sensitivityBase_${key}`;
+                    input.value = config.value || '';
+                    if (config.min !== undefined) input.min = config.min;
+                    if (config.max !== undefined) input.max = config.max;
+                    if (config.step !== undefined) input.step = config.step;
+                }
+                
+                baseGroup.appendChild(label);
+                baseGroup.appendChild(input);
+                if (config.help) {
+                    const small = document.createElement('small');
+                    small.textContent = config.help;
+                    baseGroup.appendChild(small);
+                }
+                baseParamsContainer.appendChild(baseGroup);
+                
+                // Create analyze param checkbox and value input
+                // Skip kline_interval - it cannot be analyzed as a parameter
+                if (key === 'kline_interval') return;
+                
+                const analyzeGroup = document.createElement('div');
+                analyzeGroup.style.cssText = 'display: flex; gap: 10px; align-items: center; margin-bottom: 15px; padding: 10px; background: white; border-radius: 4px;';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `sensitivityAnalyze_${key}`;
+                checkbox.name = `analyze_${key}`;
+                
+                const label2 = document.createElement('label');
+                label2.textContent = config.label || key;
+                label2.setAttribute('for', `sensitivityAnalyze_${key}`);
+                label2.style.cssText = 'min-width: 150px; font-weight: 600;';
+                
+                const valueInput = document.createElement('input');
+                valueInput.type = 'text';
+                valueInput.id = `sensitivityValues_${key}`;
+                valueInput.placeholder = 'e.g., 5,8,10,12,15';
+                valueInput.style.cssText = 'flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;';
+                valueInput.disabled = true;
+                
+                checkbox.addEventListener('change', () => {
+                    valueInput.disabled = !checkbox.checked;
+                });
+                
+                analyzeGroup.appendChild(checkbox);
+                analyzeGroup.appendChild(label2);
+                analyzeGroup.appendChild(valueInput);
+                analyzeParamsContainer.appendChild(analyzeGroup);
+            });
+        }
+        
+        async function runSensitivityAnalysis(event) {
+            event.preventDefault();
+            
+            const form = event.target;
+            const submitBtn = form.querySelector('button[type="submit"]');
+            
+            // Reset any previous state
+            if (sensitivityEventSource) {
+                sensitivityEventSource.close();
+                sensitivityEventSource = null;
+            }
+            sensitivityTaskId = null;
+            
+            // Hide previous results
+            document.getElementById('sensitivityResults').style.display = 'none';
+            
+            // Collect form data
+            const strategyType = document.getElementById('sensitivityStrategyType').value;
+            const baseParams = {};
+            const analyzeParams = {};
+            
+            // Collect base params (skip kline_interval - it's set at top level)
+            Object.keys(strategyParams[strategyType] || {}).forEach(key => {
+                if (key === 'kline_interval') return; // Skip - set at top level
+                
+                const input = document.getElementById(`sensitivityBase_${key}`);
+                if (input) {
+                    if (input.type === 'checkbox') {
+                        baseParams[key] = input.checked;
+                    } else if (input.type === 'number') {
+                        baseParams[key] = parseFloat(input.value) || input.value;
+                    } else {
+                        baseParams[key] = input.value;
+                    }
+                }
+            });
+            
+            // Add kline_interval from top-level dropdown
+            const klineIntervalSelect = document.getElementById('sensitivityKlineInterval');
+            if (klineIntervalSelect) {
+                baseParams['kline_interval'] = klineIntervalSelect.value;
+            }
+            
+            // Collect analyze params
+            Object.keys(strategyParams[strategyType] || {}).forEach(key => {
+                const checkbox = document.getElementById(`sensitivityAnalyze_${key}`);
+                const valueInput = document.getElementById(`sensitivityValues_${key}`);
+                if (checkbox && checkbox.checked && valueInput && valueInput.value.trim()) {
+                    // Parse comma-separated values
+                    const values = valueInput.value.split(',').map(v => {
+                        v = v.trim();
+                        // Try to parse as number, otherwise keep as string
+                        const num = parseFloat(v);
+                        return isNaN(num) ? v : num;
+                    });
+                    analyzeParams[key] = values;
+                }
+            });
+            
+            if (Object.keys(analyzeParams).length === 0) {
+                alert('Please select at least one parameter to analyze and provide test values.');
+                return;
+            }
+            
+            // Build request
+            const request = {
+                name: document.getElementById('sensitivityName').value || null,
+                symbol: document.getElementById('sensitivitySymbol').value,
+                strategy_type: strategyType,
+                start_time: new Date(document.getElementById('sensitivityStartTime').value).toISOString(),
+                end_time: new Date(document.getElementById('sensitivityEndTime').value).toISOString(),
+                base_params: baseParams,
+                analyze_params: analyzeParams,
+                metric: document.getElementById('sensitivityMetric').value,
+                kline_interval: document.getElementById('sensitivityKlineInterval').value,
+                leverage: parseInt(document.getElementById('sensitivityLeverage').value),
+                risk_per_trade: parseFloat(document.getElementById('sensitivityRiskPerTrade').value),
+                fixed_amount: document.getElementById('sensitivityFixedAmount').value ? parseFloat(document.getElementById('sensitivityFixedAmount').value) : null,
+                initial_balance: parseFloat(document.getElementById('sensitivityInitialBalance').value)
+            };
+            
+            try {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Starting...';
+                
+                const response = await authFetch('/backtesting/sensitivity-analysis/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(request)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start analysis');
+                }
+                
+                const data = await response.json();
+                sensitivityTaskId = data.task_id;
+                
+                // Show progress
+                document.getElementById('sensitivityProgress').style.display = 'block';
+                document.getElementById('sensitivityResults').style.display = 'none';
+                
+                // Start tracking progress
+                trackSensitivityProgress(sensitivityTaskId);
+                
+            } catch (error) {
+                console.error('Error starting sensitivity analysis:', error);
+                alert('Failed to start analysis: ' + error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Run Sensitivity Analysis';
+                sensitivityTaskId = null;
+                
+                // Hide progress section if it was shown
+                document.getElementById('sensitivityProgress').style.display = 'none';
+            }
+        }
+        
+        function trackSensitivityProgress(taskId) {
+            if (sensitivityEventSource) {
+                sensitivityEventSource.close();
+            }
+            
+            const progressBar = document.getElementById('sensitivityProgressFill');
+            const progressText = document.getElementById('sensitivityProgressText');
+            
+            sensitivityEventSource = new EventSource(`/backtesting/sensitivity-analysis/progress/${taskId}`);
+            
+            sensitivityEventSource.onmessage = (event) => {
+                try {
+                    const progress = JSON.parse(event.data);
+                    
+                    progressBar.style.width = `${progress.progress_percent || 0}%`;
+                    progressText.textContent = progress.message || `Progress: ${progress.progress_percent || 0}%`;
+                    
+                    if (progress.status === 'completed') {
+                        sensitivityEventSource.close();
+                        sensitivityEventSource = null;
+                        loadSensitivityResult(taskId);
+                    } else if (progress.status === 'error' || progress.status === 'cancelled') {
+                        sensitivityEventSource.close();
+                        sensitivityEventSource = null;
+                        progressText.textContent = `Analysis ${progress.status}: ${progress.error || 'Cancelled'}`;
+                        const cancelBtn = document.getElementById('sensitivityProgress')?.querySelector('button');
+                        if (cancelBtn) cancelBtn.disabled = true;
+                        
+                        // Reset form state on error/cancellation
+                        const submitBtn = document.getElementById('sensitivityForm')?.querySelector('button[type="submit"]');
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'Run Sensitivity Analysis';
+                        }
+                        sensitivityTaskId = null;
+                    }
+                } catch (e) {
+                    console.error('Error parsing progress:', e);
+                }
+            };
+            
+            sensitivityEventSource.onerror = (error) => {
+                console.error('EventSource error:', error);
+                sensitivityEventSource.close();
+                sensitivityEventSource = null;
+            };
+        }
+        
+        async function loadSensitivityResult(taskId) {
+            try {
+                const response = await authFetch(`/backtesting/sensitivity-analysis/result/${taskId}`);
+                if (!response.ok) throw new Error('Failed to load result');
+                
+                const result = await response.json();
+                displaySensitivityResults(result);
+                
+            } catch (error) {
+                console.error('Error loading result:', error);
+                alert('Failed to load results: ' + error.message);
+                
+                // Reset form state on error
+                const submitBtn = document.getElementById('sensitivityForm')?.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Run Sensitivity Analysis';
+                }
+                sensitivityTaskId = null;
+                document.getElementById('sensitivityProgress').style.display = 'none';
+            }
+        }
+        
+        function displaySensitivityResults(result) {
+            const resultsContainer = document.getElementById('sensitivityResultsContent');
+            const resultsSection = document.getElementById('sensitivityResults');
+            
+            // Store result globally for WFA integration
+            currentSensitivityResult = result;
+            
+            // Hide progress
+            document.getElementById('sensitivityProgress').style.display = 'none';
+            resultsSection.style.display = 'block';
+            
+            // Reset form state - enable submit button and reset text
+            const submitBtn = document.getElementById('sensitivityForm')?.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Run Sensitivity Analysis';
+            }
+            
+            // Clear task ID to allow new analysis
+            sensitivityTaskId = null;
+            
+            let html = `
+                <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                    <h3 style="margin-top: 0;">Summary</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                        <div>
+                            <strong>Most Sensitive:</strong> ${result.most_sensitive_param || 'N/A'}
+                        </div>
+                        <div>
+                            <strong>Least Sensitive:</strong> ${result.least_sensitive_param || 'N/A'}
+                        </div>
+                        <div>
+                            <strong>Symbol:</strong> ${result.symbol || 'N/A'}
+                        </div>
+                        <div>
+                            <strong>Strategy:</strong> ${result.strategy_type || 'N/A'}
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                    <h3 style="margin-top: 0;">Parameter Results</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #ddd;">
+                                <th style="padding: 12px; text-align: left;">Parameter</th>
+                                <th style="padding: 12px; text-align: left;">Sensitivity Score</th>
+                                <th style="padding: 12px; text-align: left;">Optimal Value</th>
+                                <th style="padding: 12px; text-align: left;">Worst Value</th>
+                                <th style="padding: 12px; text-align: left;">Impact Range</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            // Sort by sensitivity score (highest first)
+            const sortedResults = [...(result.parameter_results || [])].sort((a, b) => 
+                (b.sensitivity_score || 0) - (a.sensitivity_score || 0)
+            );
+            
+            sortedResults.forEach(paramResult => {
+                const score = paramResult.sensitivity_score || 0;
+                const scoreColor = score > 0.7 ? '#dc3545' : score > 0.4 ? '#ffc107' : '#28a745';
+                
+                html += `
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 12px;"><strong>${paramResult.parameter_name}</strong></td>
+                        <td style="padding: 12px;">
+                            <span style="color: ${scoreColor}; font-weight: bold;">${score.toFixed(4)}</span>
+                        </td>
+                        <td style="padding: 12px;">${formatValue(paramResult.optimal_value)}</td>
+                        <td style="padding: 12px;">${formatValue(paramResult.worst_value)}</td>
+                        <td style="padding: 12px;">
+                            ${paramResult.impact_range_display || (paramResult.impact_range ? paramResult.impact_range.toFixed(4) : 'N/A')}
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Sensitivity Score Chart -->
+                <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 20px;">
+                    <h3 style="margin-top: 0;">Sensitivity Score Visualization</h3>
+                    <div id="sensitivityScoreChart" style="width: 100%; height: 300px; margin-top: 15px;"></div>
+                </div>
+                
+                <!-- Parameter Impact Charts -->
+                <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 20px;">
+                    <h3 style="margin-top: 0;">Parameter Impact Analysis</h3>
+                    <p style="color: #666; margin-bottom: 15px;">Select a parameter to view how different values affect the metric:</p>
+                    <select id="paramChartSelector" style="width: 100%; max-width: 400px; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 4px;">
+                        <option value="">Select a parameter...</option>
+                        ${sortedResults.map((pr, idx) => 
+                            `<option value="${idx}">${pr.parameter_name}</option>`
+                        ).join('')}
+                    </select>
+                    <div id="paramImpactChart" style="width: 100%; height: 350px; margin-top: 15px; display: none;"></div>
+                </div>
+            `;
+            
+            if (result.recommended_params) {
+                html += `
+                    <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin-top: 20px; border-left: 4px solid #28a745;">
+                        <h3 style="margin-top: 0; color: #155724;">Recommended Parameters</h3>
+                        <p style="color: #155724; margin-bottom: 10px;">Based on sensitivity analysis, consider using these parameter values:</p>
+                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                            ${Object.entries(result.recommended_params).map(([key, value]) => 
+                                `<span style="padding: 5px 10px; background: white; border-radius: 4px;"><strong>${key}:</strong> ${formatValue(value)}</span>`
+                            ).join('')}
+                        </div>
+                        <button class="btn btn-primary" onclick="useSensitivityForWFA()" style="margin-top: 15px;">
+                            Use for Walk-Forward Analysis
+                        </button>
+                    </div>
+                `;
+            }
+            
+            resultsContainer.innerHTML = html;
+            
+            // Render sensitivity score bar chart
+            renderSensitivityScoreChart(sortedResults);
+            
+            // Setup parameter impact chart selector
+            const paramSelector = document.getElementById('paramChartSelector');
+            if (paramSelector) {
+                paramSelector.addEventListener('change', (e) => {
+                    const idx = parseInt(e.target.value);
+                    if (!isNaN(idx) && sortedResults[idx]) {
+                        renderParameterImpactChart(sortedResults[idx], result.metric);
+                    } else {
+                        const chartDiv = document.getElementById('paramImpactChart');
+                        if (chartDiv) {
+                            chartDiv.style.display = 'none';
+                        }
+                    }
+                });
+            }
+        }
+        
+        function renderSensitivityScoreChart(parameterResults) {
+            const chartDiv = document.getElementById('sensitivityScoreChart');
+            if (!chartDiv || !parameterResults || parameterResults.length === 0) return;
+            
+            // Sort by sensitivity score (descending)
+            const sorted = [...parameterResults].sort((a, b) => 
+                (b.sensitivity_score || 0) - (a.sensitivity_score || 0)
+            );
+            
+            // Create bar chart using Canvas API
+            const canvas = document.createElement('canvas');
+            chartDiv.innerHTML = '';
+            chartDiv.appendChild(canvas);
+            
+            const ctx = canvas.getContext('2d');
+            const width = chartDiv.offsetWidth || 800;
+            const height = 300;
+            canvas.width = width;
+            canvas.height = height;
+            
+            const barWidth = Math.max(30, (width - 100) / sorted.length - 10);
+            const maxScore = Math.max(...sorted.map(p => p.sensitivity_score || 0), 1);
+            const chartHeight = height - 80;
+            const barSpacing = 10;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+            
+            // Draw bars
+            sorted.forEach((param, idx) => {
+                const score = param.sensitivity_score || 0;
+                const barHeight = (score / maxScore) * chartHeight;
+                const x = 50 + idx * (barWidth + barSpacing);
+                const y = height - 50 - barHeight;
+                
+                // Color based on sensitivity
+                let color = '#28a745'; // Green (low)
+                if (score > 0.7) color = '#dc3545'; // Red (high)
+                else if (score > 0.4) color = '#ffc107'; // Yellow (medium)
+                
+                // Draw bar
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y, barWidth, barHeight);
+                
+                // Draw label (rotated)
+                ctx.save();
+                ctx.translate(x + barWidth / 2, height - 25);
+                ctx.rotate(-Math.PI / 4);
+                ctx.fillStyle = '#333';
+                ctx.font = '11px Arial';
+                ctx.textAlign = 'right';
+                const label = param.parameter_name.length > 15 
+                    ? param.parameter_name.substring(0, 12) + '...' 
+                    : param.parameter_name;
+                ctx.fillText(label, 0, 0);
+                ctx.restore();
+                
+                // Draw score on top of bar
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(score.toFixed(3), x + barWidth / 2, y - 5);
+            });
+            
+            // Draw Y-axis
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(40, 20);
+            ctx.lineTo(40, height - 50);
+            ctx.stroke();
+            
+            // Draw Y-axis labels
+            ctx.fillStyle = '#666';
+            ctx.font = '11px Arial';
+            ctx.textAlign = 'right';
+            for (let i = 0; i <= 5; i++) {
+                const value = (maxScore / 5) * i;
+                const y = height - 50 - (i / 5) * chartHeight;
+                ctx.fillText(value.toFixed(2), 38, y + 4);
+            }
+            
+            // Draw title
+            ctx.fillStyle = '#333';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Sensitivity Score', width / 2, 15);
+        }
+        
+        function renderParameterImpactChart(paramResult, metric) {
+            const chartDiv = document.getElementById('paramImpactChart');
+            if (!chartDiv || !paramResult || !paramResult.results || paramResult.results.length === 0) {
+                if (chartDiv) chartDiv.style.display = 'none';
+                return;
+            }
+            
+            chartDiv.style.display = 'block';
+            
+            // Extract data points
+            const dataPoints = paramResult.results
+                .filter(r => r.metric !== null && r.metric !== undefined && r.value !== null && r.value !== undefined)
+                .map(r => ({
+                    value: typeof r.value === 'number' ? r.value : parseFloat(r.value),
+                    metric: typeof r.metric === 'number' ? r.metric : parseFloat(r.metric)
+                }))
+                .sort((a, b) => a.value - b.value);
+            
+            if (dataPoints.length === 0) {
+                chartDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">No valid data points available for this parameter.</p>';
+                return;
+            }
+            
+            // Create line chart using Canvas API
+            const canvas = document.createElement('canvas');
+            chartDiv.innerHTML = '';
+            chartDiv.appendChild(canvas);
+            
+            const ctx = canvas.getContext('2d');
+            const width = chartDiv.offsetWidth || 800;
+            const height = 350;
+            canvas.width = width;
+            canvas.height = height;
+            
+            const padding = { top: 40, right: 40, bottom: 60, left: 60 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+            
+            const minValue = Math.min(...dataPoints.map(d => d.value));
+            const maxValue = Math.max(...dataPoints.map(d => d.value));
+            const minMetric = Math.min(...dataPoints.map(d => d.metric));
+            const maxMetric = Math.max(...dataPoints.map(d => d.metric));
+            const valueRange = maxValue - minValue || 1;
+            const metricRange = maxMetric - minMetric || 1;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+            
+            // Draw grid
+            ctx.strokeStyle = '#f0f0f0';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 5; i++) {
+                const y = padding.top + (i / 5) * chartHeight;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+            }
+            
+            // Draw axes
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(padding.left, padding.top);
+            ctx.lineTo(padding.left, height - padding.bottom);
+            ctx.lineTo(width - padding.right, height - padding.bottom);
+            ctx.stroke();
+            
+            // Draw line and points
+            ctx.strokeStyle = '#667eea';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            dataPoints.forEach((point, idx) => {
+                const x = padding.left + ((point.value - minValue) / valueRange) * chartWidth;
+                const y = padding.top + chartHeight - ((point.metric - minMetric) / metricRange) * chartHeight;
+                
+                if (idx === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+            
+            // Draw points
+            ctx.fillStyle = '#667eea';
+            dataPoints.forEach(point => {
+                const x = padding.left + ((point.value - minValue) / valueRange) * chartWidth;
+                const y = padding.top + chartHeight - ((point.metric - minMetric) / metricRange) * chartHeight;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+            
+            // Highlight optimal value
+            if (paramResult.optimal_value !== null && paramResult.optimal_value !== undefined) {
+                const optValue = typeof paramResult.optimal_value === 'number' 
+                    ? paramResult.optimal_value 
+                    : parseFloat(paramResult.optimal_value);
+                
+                if (!isNaN(optValue) && optValue >= minValue && optValue <= maxValue) {
+                    const optX = padding.left + ((optValue - minValue) / valueRange) * chartWidth;
+                    const optPoint = dataPoints.find(p => Math.abs(p.value - optValue) < (valueRange / 100));
+                    if (optPoint) {
+                        const optY = padding.top + chartHeight - ((optPoint.metric - minMetric) / metricRange) * chartHeight;
+                        
+                        // Draw marker
+                        ctx.fillStyle = '#28a745';
+                        ctx.beginPath();
+                        ctx.arc(optX, optY, 6, 0, 2 * Math.PI);
+                        ctx.fill();
+                        
+                        // Draw label
+                        ctx.fillStyle = '#28a745';
+                        ctx.font = 'bold 11px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('Optimal', optX, optY - 10);
+                    }
+                }
+            }
+            
+            // Draw labels
+            ctx.fillStyle = '#666';
+            ctx.font = '11px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Parameter Value (${paramResult.parameter_name})`, width / 2, height - 15);
+            
+            ctx.save();
+            ctx.translate(15, height / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText(`Metric (${metric || 'Performance'})`, 0, 0);
+            ctx.restore();
+            
+            // Draw Y-axis labels
+            ctx.textAlign = 'right';
+            for (let i = 0; i <= 5; i++) {
+                const value = minMetric + (metricRange / 5) * i;
+                const y = padding.top + chartHeight - (i / 5) * chartHeight;
+                ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
+            }
+            
+            // Draw X-axis labels
+            ctx.textAlign = 'center';
+            for (let i = 0; i <= 5; i++) {
+                const value = minValue + (valueRange / 5) * i;
+                const x = padding.left + (i / 5) * chartWidth;
+                ctx.fillText(value.toFixed(2), x, height - padding.bottom + 20);
+            }
+        }
+        
+        function formatValue(value) {
+            if (value === null || value === undefined) return 'N/A';
+            if (typeof value === 'number') {
+                return value % 1 === 0 ? value.toString() : value.toFixed(4);
+            }
+            return String(value);
+        }
+        
+        async function cancelSensitivityAnalysis() {
+            if (!sensitivityTaskId) return;
+            
+            if (!confirm('Are you sure you want to cancel this analysis?')) return;
+            
+            try {
+                const response = await authFetch(`/backtesting/sensitivity-analysis/cancel/${sensitivityTaskId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    if (sensitivityEventSource) {
+                        sensitivityEventSource.close();
+                        sensitivityEventSource = null;
+                    }
+                    document.getElementById('sensitivityProgress').style.display = 'none';
+                    
+                    // Reset form state
+                    const submitBtn = document.getElementById('sensitivityForm')?.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Run Sensitivity Analysis';
+                    }
+                    
+                    sensitivityTaskId = null;
+                    alert('Analysis cancelled');
+                } else {
+                    throw new Error('Failed to cancel');
+                }
+            } catch (error) {
+                console.error('Error cancelling analysis:', error);
+                alert('Failed to cancel analysis: ' + error.message);
+                
+                // Reset form state even on error
+                const submitBtn = document.getElementById('sensitivityForm')?.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Run Sensitivity Analysis';
+                }
+                sensitivityTaskId = null;
+            }
+        }
+        
+        function useSensitivityForWFA() {
+            if (!currentSensitivityResult || !currentSensitivityResult.recommended_params) {
+                alert('No recommended parameters available. Please run a sensitivity analysis first.');
+                return;
+            }
+            
+            // Switch to Run Analysis tab
+            switchTab('run');
+            
+            // Wait for tab switch animation
+            setTimeout(() => {
+                // Set analysis type to walk-forward
+                const walkForwardRadio = document.querySelector('input[name="analysisType"][value="walkforward"]');
+                if (walkForwardRadio) {
+                    walkForwardRadio.checked = true;
+                    handleAnalysisTypeChange();
+                }
+                
+                // Pre-fill basic fields
+                const symbolInput = document.getElementById('symbol');
+                if (symbolInput && currentSensitivityResult.symbol) {
+                    symbolInput.value = currentSensitivityResult.symbol;
+                }
+                
+                const strategyTypeSelect = document.getElementById('strategyType');
+                if (strategyTypeSelect && currentSensitivityResult.strategy_type) {
+                    strategyTypeSelect.value = currentSensitivityResult.strategy_type;
+                    updateStrategyParams(); // Trigger parameter builder update
+                }
+                
+                // Pre-fill time range (from sensitivity analysis)
+                if (currentSensitivityResult.start_time) {
+                    const startTimeInput = document.getElementById('startTime');
+                    if (startTimeInput) {
+                        const startDate = new Date(currentSensitivityResult.start_time);
+                        startTimeInput.value = startDate.toISOString().slice(0, 16);
+                    }
+                }
+                
+                if (currentSensitivityResult.end_time) {
+                    const endTimeInput = document.getElementById('endTime');
+                    if (endTimeInput) {
+                        const endDate = new Date(currentSensitivityResult.end_time);
+                        endTimeInput.value = endDate.toISOString().slice(0, 16);
+                    }
+                }
+                
+                // Pre-fill leverage, risk, balance if available
+                if (currentSensitivityResult.leverage) {
+                    const leverageInput = document.getElementById('leverage');
+                    if (leverageInput) leverageInput.value = currentSensitivityResult.leverage;
+                }
+                
+                if (currentSensitivityResult.risk_per_trade) {
+                    const riskInput = document.getElementById('riskPerTrade');
+                    if (riskInput) riskInput.value = currentSensitivityResult.risk_per_trade;
+                }
+                
+                if (currentSensitivityResult.initial_balance) {
+                    const balanceInput = document.getElementById('initialBalance');
+                    if (balanceInput) balanceInput.value = currentSensitivityResult.initial_balance;
+                }
+                
+                if (currentSensitivityResult.fixed_amount) {
+                    const fixedAmountInput = document.getElementById('fixedAmount');
+                    if (fixedAmountInput) fixedAmountInput.value = currentSensitivityResult.fixed_amount;
+                }
+                
+                // Pre-fill base strategy parameters from recommended_params
+                setTimeout(() => {
+                    const recommended = currentSensitivityResult.recommended_params;
+                    const strategyType = currentSensitivityResult.strategy_type;
+                    
+                    if (strategyType && strategyParams[strategyType]) {
+                        // Pre-fill base parameters
+                        for (const [key, value] of Object.entries(recommended)) {
+                            if (key === 'kline_interval') continue; // Skip kline_interval
+                            
+                            const paramConfig = strategyParams[strategyType][key];
+                            if (!paramConfig) continue;
+                            
+                            const baseInput = document.getElementById(`param_${key}`);
+                            if (baseInput) {
+                                if (paramConfig.type === 'checkbox') {
+                                    baseInput.checked = value === true || value === 'true';
+                                } else {
+                                    baseInput.value = value;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Enable optimization and pre-fill optimization parameters
+                    const enableOptimizationCheckbox = document.getElementById('enableOptimization');
+                    if (enableOptimizationCheckbox) {
+                        enableOptimizationCheckbox.checked = true;
+                        handleOptimizationToggle();
+                        
+                        // Wait for optimization builder to render
+                        setTimeout(() => {
+                            // Pre-fill optimization params with ranges around optimal values
+                            const paramResults = currentSensitivityResult.parameter_results || [];
+                            
+                            for (const paramResult of paramResults) {
+                                const paramName = paramResult.parameter_name;
+                                const optimalValue = paramResult.optimal_value;
+                                const testedValues = paramResult.tested_values || [];
+                                
+                                if (!optimalValue || testedValues.length === 0) continue;
+                                
+                                const paramConfig = strategyParams[strategyType]?.[paramName];
+                                if (!paramConfig || paramName === 'kline_interval') continue;
+                                
+                                const optInput = document.getElementById(`opt_param_${paramName}`);
+                                if (!optInput) continue;
+                                
+                                // Create a range around optimal value
+                                let optValues = [];
+                                
+                                if (paramConfig.type === 'checkbox') {
+                                    // For boolean, use both true and false
+                                    optValues = [true, false];
+                                    const select = optInput;
+                                    Array.from(select.options).forEach(opt => {
+                                        if (opt.value === 'true' || opt.value === 'false') {
+                                            opt.selected = true;
+                                        }
+                                    });
+                                } else if (paramConfig.type === 'select') {
+                                    // For select, use all tested values or a subset
+                                    optValues = testedValues.slice(0, 5); // Limit to 5 values
+                                    const select = optInput;
+                                    Array.from(select.options).forEach(opt => {
+                                        if (optValues.includes(opt.value)) {
+                                            opt.selected = true;
+                                        }
+                                    });
+                                } else {
+                                    // For numeric, create a range around optimal
+                                    const numOptimal = typeof optimalValue === 'number' ? optimalValue : parseFloat(optimalValue);
+                                    if (!isNaN(numOptimal)) {
+                                        // Use tested values if available, otherwise create range
+                                        if (testedValues.length > 0) {
+                                            optValues = testedValues;
+                                        } else {
+                                            // Create range: ±20% or ±2, whichever is larger
+                                            const range = Math.max(Math.abs(numOptimal * 0.2), 2);
+                                            const min = Math.max(numOptimal - range, paramConfig.min || 0);
+                                            const max = Math.min(numOptimal + range, paramConfig.max || Infinity);
+                                            // Generate 3-5 values
+                                            const step = (max - min) / 4;
+                                            optValues = [];
+                                            for (let i = 0; i <= 4; i++) {
+                                                const val = min + (step * i);
+                                                if (paramConfig.type === 'number' && paramConfig.step) {
+                                                    const rounded = Math.round(val / paramConfig.step) * paramConfig.step;
+                                                    optValues.push(parseFloat(rounded.toFixed(4)));
+                                                } else {
+                                                    optValues.push(parseFloat(val.toFixed(4)));
+                                                }
+                                            }
+                                        }
+                                        optInput.value = optValues.join(', ');
+                                    }
+                                }
+                            }
+                            
+                            // Scroll to optimization section
+                            const optimizationSection = document.getElementById('optimizationConfig');
+                            if (optimizationSection) {
+                                optimizationSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }
+                            
+                            alert('Form pre-filled with recommended parameters from sensitivity analysis!\n\nReview the optimization parameters and adjust as needed before running the walk-forward analysis.');
+                        }, 300);
+                    }
+                }, 200);
+            }, 100);
+        }
     </script>
 </body>
 </html>

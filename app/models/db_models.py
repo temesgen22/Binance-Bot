@@ -72,6 +72,7 @@ class User(Base):
     # Positions are runtime state - stored in Redis only, derived from trade_pairs when needed
     backtests = relationship("Backtest", back_populates="user", cascade="all, delete-orphan")
     walk_forward_analyses = relationship("WalkForwardAnalysis", back_populates="user", cascade="all, delete-orphan")
+    sensitivity_analyses = relationship("SensitivityAnalysis", back_populates="user", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
 
@@ -238,6 +239,10 @@ class Strategy(Base):
 
     # Metadata
     meta = Column(JSONB, default=lambda: {})  # Use lambda to avoid shared mutable default
+    
+    # Auto-Tuning Configuration
+    auto_tuning_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    auto_tuning_config = Column(JSONB, nullable=True)  # Per-strategy auto-tuning configuration
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
@@ -698,5 +703,134 @@ class WalkForwardEquityPoint(Base):
     
     __table_args__ = (
         Index("idx_wf_equity_analysis_time", "analysis_id", "time"),
+    )
+
+
+# ============================================
+# PARAMETER SENSITIVITY ANALYSIS
+# ============================================
+
+class SensitivityAnalysis(Base):
+    """Parameter sensitivity analysis execution and results (per-user)."""
+    __tablename__ = "sensitivity_analyses"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Identification
+    name = Column(String(255), nullable=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    strategy_type = Column(String(50), nullable=False, index=True)
+    
+    # Time period
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    
+    # Configuration
+    base_params = Column(JSONB, nullable=False, default=lambda: {})
+    analyze_params = Column(JSONB, nullable=False)  # Which parameters were analyzed
+    metric = Column(String(50), nullable=False)  # Which metric was used
+    kline_interval = Column(String(10), nullable=False)  # Kline interval used (e.g., '5m', '1h')
+    
+    # Risk settings
+    leverage = Column(Integer, nullable=False)
+    risk_per_trade = Column(Numeric(10, 6), nullable=False)
+    fixed_amount = Column(Numeric(20, 8), nullable=True)
+    initial_balance = Column(Numeric(20, 8), nullable=False)
+    
+    # Results summary
+    most_sensitive_param = Column(String(100), nullable=True)
+    least_sensitive_param = Column(String(100), nullable=True)
+    recommended_params = Column(JSONB, nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Relationships
+    user = relationship("User", back_populates="sensitivity_analyses")
+    parameter_results = relationship("SensitivityParameterResult", back_populates="analysis", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_sensitivity_analyses_user_id", "user_id"),
+        Index("idx_sensitivity_analyses_symbol", "symbol"),
+        Index("idx_sensitivity_analyses_strategy_type", "strategy_type"),
+        Index("idx_sensitivity_analyses_created_at", "created_at"),
+    )
+
+
+class SensitivityParameterResult(Base):
+    """Results for a single parameter in sensitivity analysis."""
+    __tablename__ = "sensitivity_parameter_results"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_id = Column(PGUUID(as_uuid=True), ForeignKey("sensitivity_analyses.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Parameter info
+    parameter_name = Column(String(100), nullable=False)
+    base_value = Column(JSONB, nullable=True)  # Original value
+    tested_values = Column(JSONB, nullable=False)  # Array of tested values
+    
+    # Sensitivity metrics
+    sensitivity_score = Column(Numeric(5, 4), nullable=False)  # 0.0 to 1.0
+    optimal_value = Column(JSONB, nullable=True)
+    worst_value = Column(JSONB, nullable=True)
+    impact_range = Column(Numeric(20, 8), nullable=True)  # Difference between best and worst
+    impact_range_display = Column(String(255), nullable=True)  # Formatted display string
+    
+    # Detailed results (stored as JSONB for flexibility)
+    results = Column(JSONB, nullable=False)  # Array of {value, metric, summary, is_invalid, is_capped}
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    # Relationships
+    analysis = relationship("SensitivityAnalysis", back_populates="parameter_results")
+    
+    __table_args__ = (
+        Index("idx_sensitivity_param_results_analysis_id", "analysis_id"),
+    )
+
+
+class StrategyParameterHistory(Base):
+    """History of strategy parameter changes for auto-tuning."""
+    __tablename__ = "strategy_parameter_history"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_uuid = Column(PGUUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False)
+    strategy_label = Column(String(100), nullable=True)  # Optional human-readable label (NOT used for joins)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    # Parameter changes
+    old_params = Column(JSONB, nullable=False)
+    new_params = Column(JSONB, nullable=False)
+    changed_params = Column(JSONB, nullable=False)  # Only changed params
+    reason = Column(String(255), nullable=True)  # "auto_tuning", "manual", "auto_tuning_failed_*", etc.
+    status = Column(String(20), nullable=False, default="applied")  # applied|rolled_back|aborted|failed
+    failure_reason = Column(Text, nullable=True)  # Error message if failed
+    
+    # Performance tracking
+    performance_before = Column(JSONB, nullable=True)  # Metrics before change
+    performance_after = Column(JSONB, nullable=True)  # Metrics after change (updated later)
+    performance_after_updated_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Tuning run tracking
+    tuning_run_id = Column(String(100), nullable=True)  # Link related tuning runs
+    rollback_of_history_id = Column(PGUUID(as_uuid=True), ForeignKey("strategy_parameter_history.id"), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    # Relationships
+    strategy = relationship("Strategy", foreign_keys=[strategy_uuid])
+    rollback_of = relationship("StrategyParameterHistory", remote_side=[id], foreign_keys=[rollback_of_history_id])
+    
+    __table_args__ = (
+        # Composite index for most common query pattern
+        Index('idx_param_history_user_strategy_created', 'user_id', 'strategy_uuid', 'created_at'),
+        # Separate index if querying by strategy only
+        Index('idx_param_history_strategy_uuid', 'strategy_uuid'),
+        Index('idx_param_history_status', 'status'),
+        Index('idx_param_history_reason', 'reason'),
     )
 

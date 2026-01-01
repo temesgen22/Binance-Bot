@@ -12,7 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
@@ -20,7 +20,9 @@ from app.core.database import get_db_session
 from app.models.db_models import (
     User, Role, Account, Strategy, Trade, TradePair,
     Backtest, BacktestTrade, StrategyMetric, SystemEvent,
-    WalkForwardAnalysis, WalkForwardWindow, WalkForwardEquityPoint
+    WalkForwardAnalysis, WalkForwardWindow, WalkForwardEquityPoint,
+    SensitivityAnalysis, SensitivityParameterResult,
+    StrategyParameterHistory
 )
 
 
@@ -395,11 +397,17 @@ class DatabaseService:
         ).all()
     
     async def async_get_user_strategies(self, user_id: UUID) -> List[Strategy]:
-        """Get all strategies for a user (async)."""
+        """Get all strategies for a user (async).
+        
+        Eagerly loads the account relationship to avoid lazy loading issues in async context.
+        """
         if not self._is_async:
             raise RuntimeError("Use get_user_strategies() with Session")
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
-            select(Strategy).filter(Strategy.user_id == user_id)
+            select(Strategy)
+            .options(selectinload(Strategy.account))
+            .filter(Strategy.user_id == user_id)
         )
         return list(result.scalars().all())
     
@@ -413,11 +421,17 @@ class DatabaseService:
         ).first()
     
     async def async_get_strategy(self, user_id: UUID, strategy_id: str) -> Optional[Strategy]:
-        """Get a specific strategy by user and strategy_id (async)."""
+        """Get a specific strategy by user and strategy_id (async).
+        
+        Eagerly loads the account relationship to avoid lazy loading issues in async context.
+        """
         if not self._is_async:
             raise RuntimeError("Use get_strategy() with Session")
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
-            select(Strategy).filter(
+            select(Strategy)
+            .options(selectinload(Strategy.account))
+            .filter(
                 Strategy.user_id == user_id,
                 Strategy.strategy_id == strategy_id
             )
@@ -486,15 +500,22 @@ class DatabaseService:
         self,
         user_id: UUID,
         strategy_id: Optional[UUID] = None,
-        limit: int = 100
+        limit: int = 100,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
     ) -> List[Trade]:
-        """Get trades for a user, optionally filtered by strategy (async)."""
+        """Get trades for a user, optionally filtered by strategy and date range (async)."""
         if not self._is_async:
             raise RuntimeError("Use get_user_trades() with Session")
         stmt = select(Trade).filter(Trade.user_id == user_id)
         
         if strategy_id:
             stmt = stmt.filter(Trade.strategy_id == strategy_id)
+        
+        if start_time:
+            stmt = stmt.filter(Trade.timestamp >= start_time)
+        if end_time:
+            stmt = stmt.filter(Trade.timestamp <= end_time)
         
         stmt = stmt.order_by(Trade.timestamp.desc()).limit(limit)
         result = await self.db.execute(stmt)
@@ -1107,4 +1128,565 @@ class DatabaseService:
         result = await self.db.execute(query)
         events = list(result.scalars().all())
         return events
+
+    # ============================================================================
+    # PARAMETER SENSITIVITY ANALYSIS METHODS
+    # ============================================================================
+    
+    async def save_sensitivity_analysis(
+        self,
+        user_id: UUID,
+        result: Any,  # SensitivityAnalysisResult from sensitivity_analysis.py
+        request: Any,  # SensitivityAnalysisRequest from sensitivity_analysis.py
+        name: Optional[str] = None
+    ) -> UUID:
+        """Save sensitivity analysis results to database.
+        
+        CRITICAL: Always sets user_id to ensure user isolation.
+        
+        Returns:
+            UUID of saved analysis
+        """
+        if self._is_async:
+            return await self._async_save_sensitivity_analysis(user_id, result, request, name)
+        else:
+            return self._sync_save_sensitivity_analysis(user_id, result, request, name)
+    
+    def _sync_save_sensitivity_analysis(
+        self,
+        user_id: UUID,
+        result: Any,
+        request: Any,
+        name: Optional[str]
+    ) -> UUID:
+        """Sync implementation of save_sensitivity_analysis."""
+        from datetime import datetime, timezone
+        
+        # Create main analysis record
+        analysis = SensitivityAnalysis(
+            user_id=user_id,  # CRITICAL: User isolation
+            name=name or request.name,
+            symbol=result.symbol,
+            strategy_type=result.strategy_type,
+            start_time=result.start_time,
+            end_time=result.end_time,
+            base_params=request.base_params,
+            analyze_params=request.analyze_params,
+            metric=request.metric,
+            kline_interval=result.kline_interval,
+            leverage=request.leverage,
+            risk_per_trade=request.risk_per_trade,
+            fixed_amount=request.fixed_amount,
+            initial_balance=request.initial_balance,
+            most_sensitive_param=result.most_sensitive_param,
+            least_sensitive_param=result.least_sensitive_param,
+            recommended_params=result.recommended_params,
+            completed_at=datetime.now(timezone.utc)
+        )
+        
+        self.db.add(analysis)
+        with self._transaction(analysis, error_message="Failed to save sensitivity analysis"):
+            logger.info(f"Created sensitivity analysis {analysis.id} for user {user_id}")
+        
+        # Create parameter result records
+        for param_result in result.parameter_results:
+            param_record = SensitivityParameterResult(
+                analysis_id=analysis.id,
+                parameter_name=param_result.parameter_name,
+                base_value=param_result.base_value,
+                tested_values=param_result.tested_values,
+                sensitivity_score=param_result.sensitivity_score,
+                optimal_value=param_result.optimal_value,
+                worst_value=param_result.worst_value,
+                impact_range=param_result.impact_range,
+                impact_range_display=param_result.impact_range_display,
+                results=param_result.results  # Store full results as JSONB
+            )
+            self.db.add(param_record)
+        
+        with self._transaction(error_message="Failed to save sensitivity parameter results"):
+            logger.info(f"Saved {len(result.parameter_results)} parameter results for analysis {analysis.id}")
+        
+        return analysis.id
+    
+    async def _async_save_sensitivity_analysis(
+        self,
+        user_id: UUID,
+        result: Any,
+        request: Any,
+        name: Optional[str]
+    ) -> UUID:
+        """Async implementation of save_sensitivity_analysis."""
+        from datetime import datetime, timezone
+        
+        # Create main analysis record
+        analysis = SensitivityAnalysis(
+            user_id=user_id,  # CRITICAL: User isolation
+            name=name or request.name,
+            symbol=result.symbol,
+            strategy_type=result.strategy_type,
+            start_time=result.start_time,
+            end_time=result.end_time,
+            base_params=request.base_params,
+            analyze_params=request.analyze_params,
+            metric=request.metric,
+            kline_interval=result.kline_interval,
+            leverage=request.leverage,
+            risk_per_trade=request.risk_per_trade,
+            fixed_amount=request.fixed_amount,
+            initial_balance=request.initial_balance,
+            most_sensitive_param=result.most_sensitive_param,
+            least_sensitive_param=result.least_sensitive_param,
+            recommended_params=result.recommended_params,
+            completed_at=datetime.now(timezone.utc)
+        )
+        
+        self.db.add(analysis)
+        await self.db.commit()
+        await self.db.refresh(analysis)
+        logger.info(f"Created sensitivity analysis {analysis.id} for user {user_id}")
+        
+        # Create parameter result records
+        for param_result in result.parameter_results:
+            param_record = SensitivityParameterResult(
+                analysis_id=analysis.id,
+                parameter_name=param_result.parameter_name,
+                base_value=param_result.base_value,
+                tested_values=param_result.tested_values,
+                sensitivity_score=param_result.sensitivity_score,
+                optimal_value=param_result.optimal_value,
+                worst_value=param_result.worst_value,
+                impact_range=param_result.impact_range,
+                impact_range_display=param_result.impact_range_display,
+                results=param_result.results  # Store full results as JSONB
+            )
+            self.db.add(param_record)
+        
+        await self.db.commit()
+        logger.info(f"Saved {len(result.parameter_results)} parameter results for analysis {analysis.id}")
+        
+        return analysis.id
+    
+    async def get_sensitivity_analysis(
+        self,
+        analysis_id: UUID,
+        user_id: UUID
+    ) -> Optional[SensitivityAnalysis]:
+        """Get sensitivity analysis by ID (with ownership check).
+        
+        CRITICAL: Only returns analysis if it belongs to the specified user.
+        Returns None if analysis doesn't exist or belongs to different user.
+        """
+        if self._is_async:
+            stmt = select(SensitivityAnalysis).filter(
+                SensitivityAnalysis.id == analysis_id,
+                SensitivityAnalysis.user_id == user_id  # CRITICAL: User isolation
+            )
+            result = await self.db.execute(stmt)
+            return result.scalar_one_or_none()
+        else:
+            return self.db.query(SensitivityAnalysis).filter(
+                SensitivityAnalysis.id == analysis_id,
+                SensitivityAnalysis.user_id == user_id  # CRITICAL: User isolation
+            ).first()
+    
+    async def list_sensitivity_analyses(
+        self,
+        user_id: UUID,  # CRITICAL: Always filter by user_id
+        limit: int = 50,
+        offset: int = 0,
+        symbol: Optional[str] = None,
+        strategy_type: Optional[str] = None
+    ) -> tuple[List[SensitivityAnalysis], int]:
+        """List sensitivity analyses for a user with pagination.
+        
+        CRITICAL: Always filters by user_id to ensure user isolation.
+        
+        Returns:
+            Tuple of (list of analyses, total count)
+        """
+        if self._is_async:
+            return await self._async_list_sensitivity_analyses(user_id, limit, offset, symbol, strategy_type)
+        else:
+            return self._sync_list_sensitivity_analyses(user_id, limit, offset, symbol, strategy_type)
+    
+    def _sync_list_sensitivity_analyses(
+        self,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+        symbol: Optional[str],
+        strategy_type: Optional[str]
+    ) -> tuple[List[SensitivityAnalysis], int]:
+        """Sync implementation of list_sensitivity_analyses."""
+        query = self.db.query(SensitivityAnalysis).filter(
+            SensitivityAnalysis.user_id == user_id  # CRITICAL: User isolation
+        )
+        
+        if symbol:
+            query = query.filter(SensitivityAnalysis.symbol == symbol)
+        if strategy_type:
+            query = query.filter(SensitivityAnalysis.strategy_type == strategy_type)
+        
+        total = query.count()
+        analyses = query.order_by(SensitivityAnalysis.created_at.desc()).offset(offset).limit(limit).all()
+        
+        return list(analyses), total
+    
+    async def _async_list_sensitivity_analyses(
+        self,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+        symbol: Optional[str],
+        strategy_type: Optional[str]
+    ) -> tuple[List[SensitivityAnalysis], int]:
+        """Async implementation of list_sensitivity_analyses."""
+        query = select(SensitivityAnalysis).filter(
+            SensitivityAnalysis.user_id == user_id  # CRITICAL: User isolation
+        )
+        
+        if symbol:
+            query = query.filter(SensitivityAnalysis.symbol == symbol)
+        if strategy_type:
+            query = query.filter(SensitivityAnalysis.strategy_type == strategy_type)
+        
+        # Get total count
+        count_query = select(func.count()).select_from(SensitivityAnalysis).filter(
+            SensitivityAnalysis.user_id == user_id
+        )
+        if symbol:
+            count_query = count_query.filter(SensitivityAnalysis.symbol == symbol)
+        if strategy_type:
+            count_query = count_query.filter(SensitivityAnalysis.strategy_type == strategy_type)
+        
+        total_result = await self.db.execute(count_query)
+        total = total_result.scalar()
+        
+        # Get paginated results
+        query = query.order_by(SensitivityAnalysis.created_at.desc()).offset(offset).limit(limit)
+        result = await self.db.execute(query)
+        analyses = list(result.scalars().all())
+        
+        return analyses, total
+    
+    async def delete_sensitivity_analysis(
+        self,
+        analysis_id: UUID,
+        user_id: UUID
+    ) -> bool:
+        """Delete sensitivity analysis (with ownership check).
+        
+        CRITICAL: Only deletes if analysis belongs to the specified user.
+        Returns True if deleted, False if not found or doesn't belong to user.
+        """
+        analysis = await self.get_sensitivity_analysis(analysis_id, user_id)
+        if not analysis:
+            return False
+        
+        if self._is_async:
+            await self.db.delete(analysis)
+            await self.db.commit()
+        else:
+            self.db.delete(analysis)
+            with self._transaction(error_message=f"Failed to delete sensitivity analysis {analysis_id}"):
+                pass
+        
+        logger.info(f"Deleted sensitivity analysis {analysis_id} for user {user_id}")
+        return True
+    
+    # ============================================
+    # STRATEGY PARAMETER HISTORY OPERATIONS
+    # ============================================
+    
+    def create_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        old_params: dict,
+        new_params: dict,
+        changed_params: dict,
+        reason: str,
+        status: str = "applied",
+        failure_reason: Optional[str] = None,
+        performance_before: Optional[dict] = None,
+        tuning_run_id: Optional[str] = None,
+        strategy_label: Optional[str] = None
+    ) -> StrategyParameterHistory:
+        """Create a parameter history record.
+        
+        Args:
+            strategy_uuid: Strategy UUID
+            user_id: User ID
+            old_params: Old parameter dictionary
+            new_params: New parameter dictionary
+            changed_params: Only changed parameters
+            reason: Reason for change (e.g., "auto_tuning", "manual")
+            status: Status (applied|rolled_back|aborted|failed)
+            failure_reason: Error message if failed
+            performance_before: Performance metrics before change
+            tuning_run_id: Tuning run identifier
+            strategy_label: Optional human-readable strategy label
+            
+        Returns:
+            StrategyParameterHistory instance
+        """
+        history = StrategyParameterHistory(
+            strategy_uuid=strategy_uuid,
+            user_id=user_id,
+            strategy_label=strategy_label,
+            old_params=old_params,
+            new_params=new_params,
+            changed_params=changed_params,
+            reason=reason,
+            status=status,
+            failure_reason=failure_reason,
+            performance_before=performance_before,
+            tuning_run_id=tuning_run_id
+        )
+        self.db.add(history)
+        with self._transaction(history, error_message=f"Failed to create parameter history for {strategy_uuid}"):
+            logger.info(f"Created parameter history record {history.id} for strategy {strategy_uuid}")
+        return history
+    
+    async def async_create_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        old_params: dict,
+        new_params: dict,
+        changed_params: dict,
+        reason: str,
+        status: str = "applied",
+        failure_reason: Optional[str] = None,
+        performance_before: Optional[dict] = None,
+        tuning_run_id: Optional[str] = None,
+        strategy_label: Optional[str] = None
+    ) -> StrategyParameterHistory:
+        """Async version of create_parameter_history."""
+        history = StrategyParameterHistory(
+            strategy_uuid=strategy_uuid,
+            user_id=user_id,
+            strategy_label=strategy_label,
+            old_params=old_params,
+            new_params=new_params,
+            changed_params=changed_params,
+            reason=reason,
+            status=status,
+            failure_reason=failure_reason,
+            performance_before=performance_before,
+            tuning_run_id=tuning_run_id
+        )
+        self.db.add(history)
+        await self.db.commit()
+        await self.db.refresh(history)
+        logger.info(f"Created parameter history record {history.id} for strategy {strategy_uuid}")
+        return history
+    
+    def get_last_parameter_change(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        reason: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> Optional[StrategyParameterHistory]:
+        """Get last parameter change for a strategy.
+        
+        Args:
+            strategy_uuid: Strategy UUID
+            user_id: User ID
+            reason: Optional reason filter (e.g., "auto_tuning")
+            status: Optional status filter (e.g., "applied")
+            
+        Returns:
+            Last StrategyParameterHistory record, or None
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_get_last_parameter_change() with AsyncSession")
+        
+        query = self.db.query(StrategyParameterHistory).filter(
+            StrategyParameterHistory.strategy_uuid == strategy_uuid,
+            StrategyParameterHistory.user_id == user_id
+        )
+        
+        if reason:
+            query = query.filter(StrategyParameterHistory.reason == reason)
+        if status:
+            query = query.filter(StrategyParameterHistory.status == status)
+        
+        return query.order_by(StrategyParameterHistory.created_at.desc()).first()
+    
+    async def async_get_last_parameter_change(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        reason: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> Optional[StrategyParameterHistory]:
+        """Async version of get_last_parameter_change."""
+        stmt = select(StrategyParameterHistory).filter(
+            StrategyParameterHistory.strategy_uuid == strategy_uuid,
+            StrategyParameterHistory.user_id == user_id
+        )
+        
+        if reason:
+            stmt = stmt.filter(StrategyParameterHistory.reason == reason)
+        if status:
+            stmt = stmt.filter(StrategyParameterHistory.status == status)
+        
+        stmt = stmt.order_by(StrategyParameterHistory.created_at.desc()).limit(1)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    def list_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0
+    ) -> tuple[List[StrategyParameterHistory], int]:
+        """List parameter history for a strategy with pagination.
+        
+        Args:
+            strategy_uuid: Strategy UUID
+            user_id: User ID
+            limit: Maximum number of records
+            offset: Number of records to skip
+            
+        Returns:
+            Tuple of (list of history records, total count)
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_list_parameter_history() with AsyncSession")
+        else:
+            return self._sync_list_parameter_history(strategy_uuid, user_id, limit, offset)
+    
+    async def async_list_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0
+    ) -> tuple[List[StrategyParameterHistory], int]:
+        """Async version of list_parameter_history."""
+        if not self._is_async:
+            raise RuntimeError("Use list_parameter_history() with Session")
+        return await self._async_list_parameter_history(strategy_uuid, user_id, limit, offset)
+    
+    def _sync_list_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        limit: int,
+        offset: int
+    ) -> tuple[List[StrategyParameterHistory], int]:
+        """Sync version of list_parameter_history."""
+        query = self.db.query(StrategyParameterHistory).filter(
+            StrategyParameterHistory.strategy_uuid == strategy_uuid,
+            StrategyParameterHistory.user_id == user_id
+        )
+        
+        total = query.count()
+        records = query.order_by(
+            StrategyParameterHistory.created_at.desc()
+        ).offset(offset).limit(limit).all()
+        
+        return records, total
+    
+    async def _async_list_parameter_history(
+        self,
+        strategy_uuid: UUID,
+        user_id: UUID,
+        limit: int,
+        offset: int
+    ) -> tuple[List[StrategyParameterHistory], int]:
+        """Async version of list_parameter_history."""
+        # Count query
+        count_stmt = select(func.count()).select_from(StrategyParameterHistory).filter(
+            StrategyParameterHistory.strategy_uuid == strategy_uuid,
+            StrategyParameterHistory.user_id == user_id
+        )
+        count_result = await self.db.execute(count_stmt)
+        total = count_result.scalar()
+        
+        # Data query
+        stmt = select(StrategyParameterHistory).filter(
+            StrategyParameterHistory.strategy_uuid == strategy_uuid,
+            StrategyParameterHistory.user_id == user_id
+        ).order_by(
+            StrategyParameterHistory.created_at.desc()
+        ).offset(offset).limit(limit)
+        
+        result = await self.db.execute(stmt)
+        records = list(result.scalars().all())
+        
+        return records, total
+    
+    def update_parameter_history(
+        self,
+        history_id: UUID,
+        performance_after: Optional[dict] = None,
+        status: Optional[str] = None
+    ) -> Optional[StrategyParameterHistory]:
+        """Update parameter history record.
+        
+        Args:
+            history_id: History record ID
+            performance_after: Performance metrics after change
+            status: Updated status
+            
+        Returns:
+            Updated StrategyParameterHistory, or None if not found
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_update_parameter_history() with AsyncSession")
+        
+        history = self.db.query(StrategyParameterHistory).filter(
+            StrategyParameterHistory.id == history_id
+        ).first()
+        
+        if not history:
+            return None
+        
+        if performance_after is not None:
+            history.performance_after = performance_after
+            from datetime import datetime, timezone
+            history.performance_after_updated_at = datetime.now(timezone.utc)
+        
+        if status is not None:
+            history.status = status
+        
+        with self._transaction(history, error_message=f"Failed to update parameter history {history_id}"):
+            pass
+        
+        return history
+    
+    async def async_update_parameter_history(
+        self,
+        history_id: UUID,
+        performance_after: Optional[dict] = None,
+        status: Optional[str] = None
+    ) -> Optional[StrategyParameterHistory]:
+        """Async version of update_parameter_history."""
+        stmt = select(StrategyParameterHistory).filter(
+            StrategyParameterHistory.id == history_id
+        )
+        result = await self.db.execute(stmt)
+        history = result.scalar_one_or_none()
+        
+        if not history:
+            return None
+        
+        if performance_after is not None:
+            history.performance_after = performance_after
+            from datetime import datetime, timezone
+            history.performance_after_updated_at = datetime.now(timezone.utc)
+        
+        if status is not None:
+            history.status = status
+        
+        await self.db.commit()
+        await self.db.refresh(history)
+        
+        return history
 

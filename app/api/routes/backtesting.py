@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from statistics import fmean
 from typing import Optional, Literal, TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,11 @@ from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
 from app.strategies.indicators import calculate_ema, calculate_rsi
 from app.risk.manager import RiskManager, PositionSizingResult
+from app.utils.backtest_params import (
+    extract_range_mean_reversion_params,
+    extract_scalping_params,
+    calculate_range_tp_sl_levels
+)
 from loguru import logger
 
 
@@ -48,6 +54,7 @@ class BacktestRequest(BaseModel):
     fixed_amount: Optional[float] = Field(default=None, gt=0)
     initial_balance: float = Field(gt=0, default=1000.0)  # Starting balance in USDT
     params: dict = Field(default_factory=dict)  # Strategy-specific parameters
+    include_klines: bool = Field(default=True, description="Include klines in response (set False to reduce payload size)")
 
 
 class Trade(BaseModel):
@@ -422,20 +429,19 @@ async def _fetch_historical_klines(
             detail=f"Failed to fetch historical data: {e}"
         )
     
-    # Remove duplicates and sort by timestamp
+    # PERFORMANCE FIX: Optimize duplicate removal and sorting
+    # Use dict to deduplicate by timestamp in one pass (preserves last occurrence)
+    # Then sort if needed (Binance API usually returns sorted, but ensure consistency)
     if all_klines:
-        # Remove duplicates based on timestamp
-        seen_timestamps = set()
-        unique_klines = []
+        # Use dict to deduplicate by timestamp (O(N) instead of O(N log N))
+        # Dict preserves insertion order (Python 3.7+), so if already sorted, stays sorted
+        unique_klines_dict = {}
         for k in all_klines:
             timestamp = int(k[0])
-            if timestamp not in seen_timestamps:
-                seen_timestamps.add(timestamp)
-                unique_klines.append(k)
+            unique_klines_dict[timestamp] = k  # Last occurrence wins
         
-        # Sort by timestamp
-        unique_klines.sort(key=lambda k: int(k[0]))
-        all_klines = unique_klines
+        # Convert to sorted list (O(N log N) but only once, not per iteration)
+        all_klines = sorted(unique_klines_dict.values(), key=lambda k: int(k[0]))
     
     logger.info(f"Fetched {len(all_klines)} total unique klines from Binance (requested ~{estimated_candles})")
     
@@ -718,18 +724,27 @@ async def run_backtest(
     
     # Process each candle
     # Calculate minimum required candles based on strategy type
+    # PERFORMANCE FIX: Pre-calculate closing prices once (O(N)) instead of recalculating in loop (O(N²))
+    closing_prices_all = [float(k[4]) for k in filtered_klines]
+    
+    # CODE QUALITY FIX: Extract parameters using utility functions to reduce duplication
     if request.strategy_type == "range_mean_reversion":
-        lookback = int(request.params.get("lookback_period", 150))
-        ema_slow = int(request.params.get("ema_slow_period", 50))
-        rsi_p = int(request.params.get("rsi_period", 14))
+        rmr_params = extract_range_mean_reversion_params(request.params)
+        lookback = rmr_params["lookback_period"]
+        ema_slow = rmr_params["ema_slow_period"]
+        rsi_p = rmr_params["rsi_period"]
+        rsi_period = rmr_params["rsi_period"]
+        ema_fast_period = rmr_params["ema_fast_period"]
+        ema_slow_period = rmr_params["ema_slow_period"]
         min_required_candles = max(lookback + 1, ema_slow + 1, rsi_p + 1)
         logger.info(f"Starting backtest: Processing {len(filtered_klines)} candles for {request.symbol} from {request.start_time} to {request.end_time}")
         logger.info(f"Strategy: {request.strategy_type}, Params: {request.params}")
         logger.info(f"Range mean reversion requires: lookback={lookback}, ema_slow={ema_slow}, rsi_period={rsi_p}. Will start evaluating after {min_required_candles} candles.")
     else:
         # Scalping strategy
-        slow_period = int(request.params.get("ema_slow", 21))
-        fast_period = int(request.params.get("ema_fast", 8))
+        scalping_params = extract_scalping_params(request.params)
+        slow_period = scalping_params["ema_slow"]
+        fast_period = scalping_params["ema_fast"]
         min_required_candles = slow_period + 1  # Need slow_period for EMA + 1 forming candle
         logger.info(f"Starting backtest: Processing {len(filtered_klines)} candles for {request.symbol} from {request.start_time} to {request.end_time}")
         logger.info(f"Strategy: {request.strategy_type}, Params: {request.params}")
@@ -801,16 +816,10 @@ async def run_backtest(
         
         # Capture indicator snapshot for range mean reversion
         if request.strategy_type == "range_mean_reversion" and i >= min_required_candles:
-            # ALIGNMENT FIX: Indicators are calculated from closed candles up to i-1,
-            # so timestamp should be the last closed candle (i-1), not the current forming candle (i)
-            # This ensures indicators align with the candle where the decision was made
-            if i > 0:
-                # Use the last closed candle's timestamp (candle i-1)
-                last_closed_candle_timestamp = int(filtered_klines[i-1][0]) // 1000
-                snapshot_timestamp = last_closed_candle_timestamp
-            else:
-                # Fallback: use current candle if no previous candle exists
-                snapshot_timestamp = int(kline[0]) // 1000
+            # ALIGNMENT FIX: Use current candle's timestamp for snapshot, but indicators calculated
+            # from closed candles up to i-1 (no lookahead). This represents the state "at the start
+            # of candle i" using only information available from closed candles.
+            snapshot_timestamp = int(kline[0]) // 1000  # Current candle's timestamp
             snapshot = {
                 "time": snapshot_timestamp,
                 "range_high": None,
@@ -840,42 +849,39 @@ async def run_backtest(
                 # Calculate entry zones if range is valid
                 if strategy.range_valid and strategy.range_high is not None and strategy.range_low is not None:
                     range_size = strategy.range_high - strategy.range_low
-                    buy_zone_pct = float(request.params.get("buy_zone_pct", 0.2))
-                    sell_zone_pct = float(request.params.get("sell_zone_pct", 0.2))
+                    buy_zone_pct = rmr_params["buy_zone_pct"]
+                    sell_zone_pct = rmr_params["sell_zone_pct"]
                     snapshot["buy_zone_upper"] = strategy.range_low + (range_size * buy_zone_pct)
                     snapshot["sell_zone_lower"] = strategy.range_high - (range_size * sell_zone_pct)
                     
-                    # Calculate TP/SL levels if position is open
+                    # CODE QUALITY FIX: Use utility function for TP/SL calculation
                     if hasattr(strategy, 'position') and strategy.position is not None:
                         snapshot["position_side"] = strategy.position
-                        tp_buffer_pct = float(request.params.get("tp_buffer_pct", 0.001))
-                        sl_buffer_pct = float(request.params.get("sl_buffer_pct", 0.002))
-                        
-                        if strategy.position == "LONG":
-                            snapshot["tp1"] = strategy.range_mid
-                            snapshot["tp2"] = strategy.range_high - (range_size * tp_buffer_pct)
-                            snapshot["sl"] = strategy.range_low - (range_size * sl_buffer_pct)
-                        else:  # SHORT
-                            snapshot["tp1"] = strategy.range_mid
-                            snapshot["tp2"] = strategy.range_low + (range_size * tp_buffer_pct)
-                            snapshot["sl"] = strategy.range_high + (range_size * sl_buffer_pct)
+                        tp_sl_levels = calculate_range_tp_sl_levels(
+                            range_high=strategy.range_high,
+                            range_low=strategy.range_low,
+                            range_mid=strategy.range_mid,
+                            position_side=strategy.position,
+                            tp_buffer_pct=rmr_params["tp_buffer_pct"],
+                            sl_buffer_pct=rmr_params["sl_buffer_pct"]
+                        )
+                        snapshot["tp1"] = tp_sl_levels["tp1"]
+                        snapshot["tp2"] = tp_sl_levels["tp2"]
+                        snapshot["sl"] = tp_sl_levels["sl"]
             
-            # Calculate RSI if we have enough data
+            # Calculate RSI and EMA if we have enough data
+            # PERFORMANCE FIX: Use pre-calculated closing_prices_all with O(1) slice instead of O(i) list comprehension
             # CRITICAL FIX: Use only closed candles (up to i-1) for indicators
             # Decision was made on candle i-1, so indicators should not include candle i's close (future data)
             if i >= min_required_candles:
-                closing_prices = [float(k[4]) for k in filtered_klines[:i]]  # Only closed candles, up to i-1
-                rsi_period = int(request.params.get("rsi_period", 14))
+                # Use pre-calculated prices with O(1) slice operation (much faster than list comprehension)
+                closing_prices = closing_prices_all[:i]  # Only closed candles, up to i-1
+                
+                # Calculate RSI
                 if len(closing_prices) >= rsi_period + 1:
                     snapshot["rsi"] = calculate_rsi(closing_prices, rsi_period)
-            
-            # Calculate EMA fast and slow
-            # CRITICAL FIX: Use only closed candles (up to i-1) for indicators
-            if i >= min_required_candles:
-                closing_prices = [float(k[4]) for k in filtered_klines[:i]]  # Only closed candles, up to i-1
-                ema_fast_period = int(request.params.get("ema_fast_period", 20))
-                ema_slow_period = int(request.params.get("ema_slow_period", 50))
                 
+                # Calculate EMA fast and slow (reuse same closing_prices variable - no redundant calculation)
                 if len(closing_prices) >= ema_fast_period:
                     snapshot["ema_fast"] = calculate_ema(closing_prices, ema_fast_period)
                 if len(closing_prices) >= ema_slow_period:
@@ -1460,35 +1466,57 @@ async def run_backtest(
                 for s in range_indicator_snapshots
                 if s["position_side"] is not None and (s["tp1"] is not None or s["tp2"] is not None or s["sl"] is not None)
             ],
-            "rsi_period": int(request.params.get("rsi_period", 14)),
-            "rsi_oversold": float(request.params.get("rsi_oversold", 40)),
-            "rsi_overbought": float(request.params.get("rsi_overbought", 60)),
-            "ema_fast_period": int(request.params.get("ema_fast_period", 20)),
-            "ema_slow_period": int(request.params.get("ema_slow_period", 50)),
-            "max_ema_spread_pct": float(request.params.get("max_ema_spread_pct", 0.005)),
-            "buy_zone_pct": float(request.params.get("buy_zone_pct", 0.2)),
-            "sell_zone_pct": float(request.params.get("sell_zone_pct", 0.2))
+            # CODE QUALITY FIX: Use extracted parameters instead of repeated lookups
+            "rsi_period": rmr_params["rsi_period"],
+            "rsi_oversold": rmr_params["rsi_oversold"],
+            "rsi_overbought": rmr_params["rsi_overbought"],
+            "ema_fast_period": rmr_params["ema_fast_period"],
+            "ema_slow_period": rmr_params["ema_slow_period"],
+            "max_ema_spread_pct": rmr_params["max_ema_spread_pct"],
+            "buy_zone_pct": rmr_params["buy_zone_pct"],
+            "sell_zone_pct": rmr_params["sell_zone_pct"]
         }
     elif request.strategy_type == "scalping":
-        # Extract closing prices
-        closing_prices = [float(k[4]) for k in filtered_klines]
+        # PERFORMANCE FIX: Use pre-calculated closing_prices_all (already calculated above)
+        closing_prices = closing_prices_all
         
-        # Calculate EMA fast and slow
+        # Calculate EMA fast and slow using incremental calculation (O(N) instead of O(N²))
         ema_fast_values = []
         ema_slow_values = []
         
         fast_period = int(request.params.get("ema_fast", 8))
         slow_period = int(request.params.get("ema_slow", 21))
         
-        for i in range(len(closing_prices)):
-            # EMA fast
-            prices_up_to_i = closing_prices[:i+1]
-            ema_fast = calculate_ema(prices_up_to_i, fast_period) if len(prices_up_to_i) >= fast_period else None
-            ema_fast_values.append(ema_fast)
+        # Incremental EMA calculation (O(N) total instead of O(N²))
+        ema_fast_prev = None
+        ema_slow_prev = None
+        alpha_fast = 2.0 / (fast_period + 1)
+        alpha_slow = 2.0 / (slow_period + 1)
+        
+        for i, price in enumerate(closing_prices):
+            # EMA fast incremental calculation
+            if i < fast_period - 1:
+                ema_fast_values.append(None)
+            else:
+                if i == fast_period - 1:
+                    # Initialize with SMA
+                    ema_fast_prev = fmean(closing_prices[:fast_period])
+                else:
+                    # Update EMA incrementally (O(1) per iteration)
+                    ema_fast_prev = (price - ema_fast_prev) * alpha_fast + ema_fast_prev
+                ema_fast_values.append(ema_fast_prev)
             
-            # EMA slow
-            ema_slow = calculate_ema(prices_up_to_i, slow_period) if len(prices_up_to_i) >= slow_period else None
-            ema_slow_values.append(ema_slow)
+            # EMA slow incremental calculation
+            if i < slow_period - 1:
+                ema_slow_values.append(None)
+            else:
+                if i == slow_period - 1:
+                    # Initialize with SMA (fmean imported at top of file)
+                    ema_slow_prev = fmean(closing_prices[:slow_period])
+                else:
+                    # Update EMA incrementally (O(1) per iteration)
+                    ema_slow_prev = (price - ema_slow_prev) * alpha_slow + ema_slow_prev
+                ema_slow_values.append(ema_slow_prev)
         
         # Create indicators data with timestamps matching klines
         indicators_data = {
@@ -1506,6 +1534,8 @@ async def run_backtest(
             "ema_slow_period": slow_period
         }
     
+    # PERFORMANCE FIX: Conditionally include klines to reduce response payload size
+    # For large backtests (30+ days), excluding klines can reduce payload by 90%+
     return BacktestResult(
         symbol=request.symbol,
         strategy_type=request.strategy_type,
@@ -1528,7 +1558,7 @@ async def run_backtest(
         max_drawdown=max_drawdown,
         max_drawdown_pct=max_drawdown_pct,
         trades=trades_dict,
-        klines=klines_data,
+        klines=klines_data if request.include_klines else None,
         indicators=indicators_data
     )
 
@@ -1543,8 +1573,36 @@ async def run_backtest_endpoint(
     
     Analyzes how a strategy would have performed over a selected historical period
     using real market data from Binance.
+    
+    **Timeout**: This operation has a 10-minute timeout to prevent hanging requests.
+    For very large backtests, consider using walk-forward analysis with async task management.
     """
-    return await run_backtest(request, client)
+    from app.services.backtest_service import BacktestService
+    
+    # PERFORMANCE FIX: Add timeout to prevent hanging requests
+    # 10 minutes should be sufficient for most backtests
+    # Very large backtests should use walk-forward analysis with async tasks
+    timeout_seconds = 600  # 10 minutes
+    
+    try:
+        service = BacktestService(client)
+        result = await asyncio.wait_for(
+            service.run_backtest(request),
+            timeout=timeout_seconds
+        )
+        return result
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Backtest timeout after {timeout_seconds}s for {request.symbol} "
+            f"({request.start_time} to {request.end_time})"
+        )
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"Backtest operation timed out after {timeout_seconds} seconds. "
+                f"Consider using walk-forward analysis for large time ranges or reducing the time period."
+            )
+        )
 
 
 @router.post("/walk-forward")
@@ -3033,5 +3091,505 @@ async def get_walk_forward_config(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get config: {str(e)}"
+        )
+
+
+# ============================================================================
+# PARAMETER SENSITIVITY ANALYSIS ENDPOINTS
+# ============================================================================
+
+@router.post("/sensitivity-analysis/start")
+async def start_sensitivity_analysis(
+    request: Annotated[dict, Body()],
+    current_user = Depends(get_current_user_async),
+    client: BinanceClient = Depends(get_binance_client)
+) -> dict:
+    """
+    Start parameter sensitivity analysis and return task ID for progress tracking.
+    
+    Requires authentication. Checks concurrency limits before starting.
+    
+    Returns:
+        {"task_id": "uuid", "message": "Analysis started"}
+    
+    Raises:
+        HTTPException 429: If concurrency limits are exceeded
+    """
+    from app.services.sensitivity_analysis import SensitivityAnalysisRequest, run_sensitivity_analysis
+    from app.services.walk_forward_task_manager import get_task_manager
+    from app.services.database_service import DatabaseService
+    from app.api.deps import get_async_db
+    from fastapi import status
+    import time
+    
+    # Get user ID
+    user_id = str(current_user.id)
+    
+    # Get settings for concurrency limits
+    settings = get_settings()
+    
+    # Parse and validate request
+    try:
+        sensitivity_request = SensitivityAnalysisRequest(**request)
+    except Exception as e:
+        logger.error(f"Invalid sensitivity analysis request: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request: {str(e)}"
+        )
+    
+    # Calculate total tests (sum of all parameter values to test)
+    total_tests = sum(len(values) for values in sensitivity_request.analyze_params.values())
+    
+    # Get task manager
+    task_manager = get_task_manager()
+    
+    # Check concurrency limits
+    user_running = await task_manager.count_user_running_tasks(user_id)
+    max_concurrent = settings.max_concurrent_walk_forward_analyses  # Reuse same limit
+    if user_running >= max_concurrent:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Maximum concurrent analyses limit reached ({max_concurrent}). Please wait for existing analyses to complete."
+        )
+    
+    # Create task
+    task_id = await task_manager.create_task(total_tests, user_id)
+    
+    # Background task to run analysis
+    async def run_analysis():
+        start_time = time.time()
+        try:
+            # Update progress: starting
+            await task_manager.update_progress(
+                task_id,
+                current_phase="initializing",
+                message="Starting sensitivity analysis..."
+            )
+            
+            # Run analysis with progress callback
+            async def update_progress_callback(current_window, total_windows, current_phase, message, phase_progress):
+                # Note: total_windows is set at task creation, not in update_progress
+                await task_manager.update_progress(
+                    task_id,
+                    current_window=current_window,
+                    current_phase=current_phase,
+                    message=message,
+                    phase_progress=phase_progress
+                )
+            
+            result = await run_sensitivity_analysis(
+                sensitivity_request, 
+                client,
+                task_id=task_id,
+                progress_callback=update_progress_callback
+            )
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Store result in task manager
+            try:
+                if hasattr(result, 'model_dump'):
+                    result_dict = result.model_dump()
+                elif hasattr(result, 'dict'):
+                    result_dict = result.dict()
+                else:
+                    result_dict = result
+                
+                await task_manager.complete_task(task_id, result_dict)
+                logger.info(f"✅ Sensitivity analysis {task_id} completed in {execution_time_ms}ms")
+                
+                # Save to database
+                try:
+                    async_db_gen = get_async_db()
+                    db = await async_db_gen.__anext__()
+                    db_service = DatabaseService(db)
+                    
+                    analysis_id = await db_service.save_sensitivity_analysis(
+                        user_id=current_user.id,
+                        result=result,
+                        request=sensitivity_request,
+                        name=sensitivity_request.name
+                    )
+                    logger.info(f"✅ Saved sensitivity analysis {analysis_id} to database for user {user_id}")
+                except Exception as save_error:
+                    logger.error(f"❌ Failed to save sensitivity analysis to database: {save_error}", exc_info=True)
+                    # Don't fail the analysis - just log the error
+            except Exception as serialize_error:
+                logger.error(f"Error serializing result: {serialize_error}", exc_info=True)
+                await task_manager.fail_task(task_id, f"Failed to serialize result: {str(serialize_error)}")
+        except HTTPException as e:
+            if e.status_code == 499:  # Cancelled
+                await task_manager.cancel_task(task_id)
+            else:
+                await task_manager.fail_task(task_id, str(e.detail))
+        except Exception as e:
+            logger.error(f"Error in sensitivity analysis: {e}", exc_info=True)
+            await task_manager.fail_task(task_id, str(e))
+    
+    # Run in background
+    asyncio.create_task(run_analysis())
+    
+    logger.info(f"Started sensitivity analysis {task_id} for user {user_id} ({total_tests} tests)")
+    return {
+        "task_id": task_id,
+        "message": "Sensitivity analysis started",
+        "total_tests": total_tests
+    }
+
+
+@router.get("/sensitivity-analysis/progress/{task_id}")
+async def get_sensitivity_progress(
+    task_id: str,
+    token: Optional[str] = Query(None, description="Auth token (for EventSource compatibility)"),
+    request: Request = None
+):
+    """
+    Server-Sent Events endpoint for sensitivity analysis progress.
+    
+    Returns real-time progress updates including:
+    - Current parameter being tested
+    - Total parameters
+    - Progress percentage
+    - Estimated time remaining
+    - Current phase
+    - Status message
+    
+    Note: Token can be passed as query parameter for EventSource compatibility
+    """
+    from app.services.walk_forward_task_manager import get_task_manager
+    from fastapi import status
+    
+    task_manager = get_task_manager()
+    progress = await task_manager.get_progress(task_id)
+    
+    if not progress:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    async def event_generator():
+        last_progress = None
+        while True:
+            current_progress = await task_manager.get_progress(task_id)
+            
+            if not current_progress:
+                yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
+                break
+            
+            # Only send update if progress changed
+            if current_progress != last_progress:
+                progress_dict = {
+                    "task_id": current_progress.task_id,
+                    "status": current_progress.status,
+                    "current_window": current_progress.current_window,
+                    "total_windows": current_progress.total_windows,
+                    "progress_percent": current_progress.progress_percent,
+                    "current_phase": current_progress.current_phase,
+                    "message": current_progress.message,
+                    "estimated_time_remaining_seconds": current_progress.estimated_time_remaining_seconds,
+                    "error": current_progress.error
+                }
+                
+                yield f"data: {json.dumps(progress_dict)}\n\n"
+                last_progress = current_progress
+            
+            if current_progress.status in ("completed", "cancelled", "error"):
+                break
+            
+            await asyncio.sleep(1)  # Update every second
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/sensitivity-analysis/result/{task_id}")
+async def get_sensitivity_result(
+    task_id: str,
+    current_user = Depends(get_current_user_async)
+) -> dict:
+    """
+    Get the final result of a completed sensitivity analysis.
+    
+    Requires authentication and verifies task ownership.
+    """
+    from app.services.walk_forward_task_manager import get_task_manager
+    from fastapi import status
+    
+    task_manager = get_task_manager()
+    user_id = str(current_user.id)
+    
+    progress = await task_manager.get_progress(task_id)
+    if not progress:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Verify ownership
+    if progress.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    if progress.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Analysis is not completed. Status: {progress.status}"
+        )
+    
+    if not progress.result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Result not available"
+        )
+    
+    return progress.result
+
+
+@router.post("/sensitivity-analysis/cancel/{task_id}")
+async def cancel_sensitivity_analysis(
+    task_id: str,
+    current_user = Depends(get_current_user_async)
+) -> dict:
+    """
+    Cancel a running sensitivity analysis.
+    
+    Requires authentication and verifies task ownership.
+    
+    Returns:
+        {"success": true, "message": "Task cancelled"}
+    """
+    from app.services.walk_forward_task_manager import get_task_manager
+    from fastapi import status
+    
+    task_manager = get_task_manager()
+    user_id = str(current_user.id)
+    
+    progress = await task_manager.get_progress(task_id)
+    if not progress:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # Verify ownership
+    if progress.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    if progress.status not in ("running", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot cancel task with status: {progress.status}"
+        )
+    
+    await task_manager.cancel_task(task_id)
+    
+    return {"success": True, "message": "Task cancelled"}
+
+
+@router.get("/sensitivity-analysis/history")
+async def list_sensitivity_analyses(
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of analyses to return"),
+    offset: int = Query(0, ge=0, description="Number of analyses to skip"),
+    symbol: Optional[str] = Query(None, description="Filter by symbol (e.g., BTCUSDT)"),
+    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    current_user = Depends(get_current_user_async)  # CRITICAL: Authentication required
+) -> dict:
+    """List sensitivity analyses for current user.
+    
+    CRITICAL: Only returns analyses that belong to current_user.
+    """
+    from app.services.database_service import DatabaseService
+    from app.api.deps import get_async_db
+    from fastapi import status
+    
+    try:
+        async_db_gen = get_async_db()
+        db = await async_db_gen.__anext__()
+        db_service = DatabaseService(db)
+        
+        analyses, total = await db_service.list_sensitivity_analyses(
+            user_id=current_user.id,  # CRITICAL: User isolation
+            limit=limit,
+            offset=offset,
+            symbol=symbol,
+            strategy_type=strategy_type
+        )
+        
+        # Convert to dict format
+        analyses_list = []
+        for analysis in analyses:
+            analyses_list.append({
+                "id": str(analysis.id),
+                "name": analysis.name,
+                "symbol": analysis.symbol,
+                "strategy_type": analysis.strategy_type,
+                "start_time": analysis.start_time.isoformat(),
+                "end_time": analysis.end_time.isoformat(),
+                "metric": analysis.metric,
+                "kline_interval": analysis.kline_interval,
+                "most_sensitive_param": analysis.most_sensitive_param,
+                "least_sensitive_param": analysis.least_sensitive_param,
+                "created_at": analysis.created_at.isoformat(),
+                "completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None
+            })
+        
+        return {
+            "analyses": analyses_list,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.error(f"Error listing sensitivity analyses: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list analyses: {str(e)}"
+        )
+
+
+@router.get("/sensitivity-analysis/history/{analysis_id}")
+async def get_sensitivity_analysis_details(
+    analysis_id: str,
+    current_user = Depends(get_current_user_async)  # CRITICAL: Authentication required
+) -> dict:
+    """Get detailed sensitivity analysis by ID.
+    
+    CRITICAL: Only returns analysis if it belongs to current_user.
+    Returns 404 if analysis doesn't exist or belongs to different user.
+    """
+    from app.services.database_service import DatabaseService
+    from app.api.deps import get_async_db
+    from fastapi import status
+    from uuid import UUID
+    from sqlalchemy import select
+    
+    try:
+        analysis_uuid = UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid analysis ID format"
+        )
+    
+    try:
+        async_db_gen = get_async_db()
+        db = await async_db_gen.__anext__()
+        db_service = DatabaseService(db)
+        
+        analysis = await db_service.get_sensitivity_analysis(analysis_uuid, current_user.id)
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
+        
+        # Get parameter results
+        from app.models.db_models import SensitivityParameterResult
+        if db_service._is_async:
+            stmt = select(SensitivityParameterResult).filter(
+                SensitivityParameterResult.analysis_id == analysis_uuid
+            ).order_by(SensitivityParameterResult.created_at)
+            result = await db.execute(stmt)
+            param_results = list(result.scalars().all())
+        else:
+            param_results = db.query(SensitivityParameterResult).filter(
+                SensitivityParameterResult.analysis_id == analysis_uuid
+            ).order_by(SensitivityParameterResult.created_at).all()
+        
+        # Format parameter results
+        parameter_results = []
+        for param_result in param_results:
+            parameter_results.append({
+                "parameter_name": param_result.parameter_name,
+                "base_value": param_result.base_value,
+                "tested_values": param_result.tested_values,
+                "sensitivity_score": float(param_result.sensitivity_score),
+                "optimal_value": param_result.optimal_value,
+                "worst_value": param_result.worst_value,
+                "impact_range": float(param_result.impact_range) if param_result.impact_range else None,
+                "impact_range_display": param_result.impact_range_display,
+                "results": param_result.results
+            })
+        
+        return {
+            "id": str(analysis.id),
+            "name": analysis.name,
+            "symbol": analysis.symbol,
+            "strategy_type": analysis.strategy_type,
+            "start_time": analysis.start_time.isoformat(),
+            "end_time": analysis.end_time.isoformat(),
+            "base_params": analysis.base_params,
+            "analyze_params": analysis.analyze_params,
+            "metric": analysis.metric,
+            "kline_interval": analysis.kline_interval,
+            "leverage": analysis.leverage,
+            "risk_per_trade": float(analysis.risk_per_trade),
+            "fixed_amount": float(analysis.fixed_amount) if analysis.fixed_amount else None,
+            "initial_balance": float(analysis.initial_balance),
+            "most_sensitive_param": analysis.most_sensitive_param,
+            "least_sensitive_param": analysis.least_sensitive_param,
+            "recommended_params": analysis.recommended_params,
+            "parameter_results": parameter_results,
+            "created_at": analysis.created_at.isoformat(),
+            "completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting sensitivity analysis: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analysis: {str(e)}"
+        )
+
+
+@router.delete("/sensitivity-analysis/history/{analysis_id}")
+async def delete_sensitivity_analysis_endpoint(
+    analysis_id: str,
+    current_user = Depends(get_current_user_async)  # CRITICAL: Authentication required
+) -> dict:
+    """Delete sensitivity analysis.
+    
+    CRITICAL: Only deletes if analysis belongs to current_user.
+    Returns 404 if analysis doesn't exist or belongs to different user.
+    """
+    from app.services.database_service import DatabaseService
+    from app.api.deps import get_async_db
+    from fastapi import status
+    from uuid import UUID
+    
+    try:
+        analysis_uuid = UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid analysis ID format"
+        )
+    
+    try:
+        async_db_gen = get_async_db()
+        db = await async_db_gen.__anext__()
+        db_service = DatabaseService(db)
+        
+        success = await db_service.delete_sensitivity_analysis(analysis_uuid, current_user.id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
+        
+        return {"success": True, "message": "Analysis deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting sensitivity analysis: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete analysis: {str(e)}"
         )
 

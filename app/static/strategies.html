@@ -629,7 +629,6 @@
     </div>
 
     <script src="/static/auth.js"></script>
-    <script src="/static/settings.js"></script>
     <script src="/static/utils.js"></script>
     <script>
         // Check authentication IMMEDIATELY - before any other code runs
@@ -741,6 +740,7 @@
             html += '<th style="width: 100px;">Win Rate</th>';
             html += '<th style="width: 100px;">Completed</th>';
             html += '<th style="width: 100px;">Percentile</th>';
+            html += '<th style="width: 120px;">Auto-Tuning</th>';
             html += '<th style="width: 100px;">Action</th>';
             html += '<th style="width: 100px;">Delete</th>';
             html += '<th style="width: 50px;"></th>';
@@ -783,6 +783,19 @@
                 const percentileClass = strategy.percentile >= 75 ? 'top' : strategy.percentile >= 50 ? 'mid' : 'low';
                 html += `<td><span class="percentile-badge ${percentileClass}">${strategy.percentile?.toFixed(0) || 0}%</span></td>`;
                 
+                // Auto-Tuning status
+                const autoTuningEnabled = strategy.auto_tuning_enabled || false;
+                const autoTuningBadgeClass = autoTuningEnabled ? 'success' : 'info';
+                const autoTuningText = autoTuningEnabled ? 'Enabled' : 'Disabled';
+                html += `<td>
+                    <span class="badge ${autoTuningBadgeClass}" id="autotune-badge-${strategy.strategy_id}">${autoTuningText}</span>
+                    <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.8em; margin-top: 4px;" 
+                            onclick="toggleAutoTuning('${strategy.strategy_id}', ${!autoTuningEnabled})" 
+                            id="autotune-btn-${strategy.strategy_id}">
+                        ${autoTuningEnabled ? 'Disable' : 'Enable'}
+                    </button>
+                </td>`;
+                
                 // Action button (Start/Stop)
                 const isRunning = strategy.status === 'running';
                 const actionButtonText = isRunning ? 'Stop' : 'Start';
@@ -799,7 +812,7 @@
                 html += '</tr>';
                 
                 // Details row
-                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="13">`;
+                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="14">`;
                 html += `<div class="strategy-details ${isExpanded ? 'show' : ''}" id="details-${strategy.strategy_id}">`;
                 html += generateStrategyDetails(strategy);
                 html += '</div></td></tr>';
@@ -919,6 +932,12 @@
             }
             html += '</div>';
             
+            // Auto-Tuning section
+            html += '<div class="detail-section"><h4>Auto-Tuning</h4>';
+            html += `<div id="autotune-section-${strategy.strategy_id}">`;
+            html += '<div class="autotune-loading">Loading auto-tuning status...</div>';
+            html += '</div></div>';
+            
             // Activity History
             html += '<div class="detail-section"><h4>Activity History</h4>';
             html += `<div id="activity-${strategy.strategy_id}" class="activity-history">`;
@@ -978,9 +997,12 @@
                 expandedStrategies.add(strategyId);
             }
             loadData().then(() => {
-                // Load activity history after details are expanded
+                // Load activity history and auto-tuning status after details are expanded
                 if (!wasExpanded) {
-                    setTimeout(() => loadActivityHistory(strategyId), 200);
+                    setTimeout(() => {
+                        loadActivityHistory(strategyId);
+                        loadAutoTuningStatus(strategyId);
+                    }, 200);
                 }
             });
         }
@@ -1168,6 +1190,391 @@
 
         // Logout function is now global from auth.js
         // loadUserInfo is now in common.js
+
+        // Auto-Tuning Functions
+        async function loadAutoTuningStatus(strategyId) {
+            try {
+                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/status`);
+                if (!response.ok) throw new Error('Failed to load auto-tuning status');
+                const status = await response.json();
+                
+                const container = document.getElementById(`autotune-section-${strategyId}`);
+                if (!container) return;
+                
+                let html = '<div class="autotune-status">';
+                html += `<div class="detail-item"><label>Status:</label><value><span class="badge ${status.enabled ? 'success' : 'info'}">${status.enabled ? 'Enabled' : 'Disabled'}</span></value></div>`;
+                
+                if (status.enabled && status.config) {
+                    const config = status.config;
+                    html += `<div class="detail-item"><label>Min Trades:</label><value>${config.min_trades || 20}</value></div>`;
+                    html += `<div class="detail-item"><label>Evaluation Period:</label><value>${config.evaluation_period_days || 7} days</value></div>`;
+                    html += `<div class="detail-item"><label>Cooldown:</label><value>${config.min_time_between_tuning_hours || 24} hours</value></div>`;
+                    html += `<div class="detail-item"><label>Min Improvement:</label><value>${config.min_improvement_abs_pct || 1.0}%</value></div>`;
+                }
+                
+                if (status.last_tuning_time) {
+                    html += `<div class="detail-item"><label>Last Tuning:</label><value>${formatDateTime(status.last_tuning_time)}</value></div>`;
+                }
+                
+                html += '<div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">';
+                html += `<button class="btn btn-primary autotune-config-btn" data-strategy-id="${strategyId}" style="padding: 8px 16px; font-size: 0.9em;">Configure</button>`;
+                html += `<button class="btn btn-secondary autotune-tune-btn" data-strategy-id="${strategyId}" style="padding: 8px 16px; font-size: 0.9em;">Tune Now</button>`;
+                html += `<button class="btn btn-secondary autotune-history-btn" data-strategy-id="${strategyId}" style="padding: 8px 16px; font-size: 0.9em;">View History</button>`;
+                html += '</div>';
+                html += '</div>';
+                
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error loading auto-tuning status:', error);
+                const container = document.getElementById(`autotune-section-${strategyId}`);
+                if (container) {
+                    container.innerHTML = '<div class="autotune-error">Failed to load auto-tuning status</div>';
+                }
+            }
+        }
+
+        async function toggleAutoTuning(strategyId, enable) {
+            const button = document.getElementById(`autotune-btn-${strategyId}`);
+            const badge = document.getElementById(`autotune-badge-${strategyId}`);
+            
+            if (!button || !badge) return;
+            
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = enable ? 'Enabling...' : 'Disabling...';
+            
+            try {
+                const endpoint = enable 
+                    ? `/auto-tuning/strategies/${strategyId}/enable`
+                    : `/auto-tuning/strategies/${strategyId}/disable`;
+                
+                const response = await authFetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        config: enable ? {
+                            enabled: true,
+                            min_trades: 20,
+                            evaluation_period_days: 7,
+                            min_time_between_tuning_hours: 24,
+                            min_improvement_abs_pct: 1.0
+                        } : null
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || `Failed to ${enable ? 'enable' : 'disable'} auto-tuning`);
+                }
+                
+                // Update UI
+                badge.textContent = enable ? 'Enabled' : 'Disabled';
+                badge.className = `badge ${enable ? 'success' : 'info'}`;
+                button.textContent = enable ? 'Disable' : 'Enable';
+                
+                // Reload auto-tuning status in details if expanded
+                if (expandedStrategies.has(strategyId)) {
+                    loadAutoTuningStatus(strategyId);
+                }
+                
+                showNotification(`Auto-tuning ${enable ? 'enabled' : 'disabled'} successfully`, 'success');
+            } catch (error) {
+                console.error(`Error ${enable ? 'enabling' : 'disabling'} auto-tuning:`, error);
+                showNotification(`Failed to ${enable ? 'enable' : 'disable'} auto-tuning: ${error.message}`, 'error');
+                button.textContent = originalText;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function showAutoTuningConfig(strategyId) {
+            // Create modal immediately with default values (show UI fast)
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+            
+            // Use default config initially
+            const defaultConfig = {
+                min_trades: 20,
+                evaluation_period_days: 7,
+                min_time_between_tuning_hours: 24,
+                min_improvement_abs_pct: 1.0,
+                win_rate_threshold_frac: 0.45,
+                sharpe_threshold: 0.5,
+                drawdown_threshold_frac: 0.15
+            };
+            
+            modal.innerHTML = `
+                    <div class="modal-content" style="background: white; padding: 30px; border-radius: 8px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                        <h2 style="margin-top: 0;">Auto-Tuning Configuration</h2>
+                        <form id="autotune-config-form">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Min Trades *</label>
+                                <input type="number" id="min_trades" value="${defaultConfig.min_trades}" min="1" required>
+                                <small>Minimum trades before tuning is considered</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Evaluation Period (Days) *</label>
+                                <input type="number" id="evaluation_period_days" value="${defaultConfig.evaluation_period_days}" min="1" required>
+                                <small>Number of days to evaluate performance</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Cooldown (Hours) *</label>
+                                <input type="number" id="min_time_between_tuning_hours" value="${defaultConfig.min_time_between_tuning_hours}" min="1" required>
+                                <small>Minimum hours between tuning attempts</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Min Improvement (%) *</label>
+                                <input type="number" id="min_improvement_abs_pct" value="${defaultConfig.min_improvement_abs_pct}" min="0" step="0.1" required>
+                                <small>Minimum absolute improvement required (e.g., 1.0 = 1%)</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Win Rate Threshold (0-1)</label>
+                                <input type="number" id="win_rate_threshold_frac" value="${defaultConfig.win_rate_threshold_frac}" min="0" max="1" step="0.01">
+                                <small>Win rate below this triggers tuning (0.45 = 45%)</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Sharpe Threshold</label>
+                                <input type="number" id="sharpe_threshold" value="${defaultConfig.sharpe_threshold}" min="0" step="0.1">
+                                <small>Sharpe ratio below this triggers tuning</small>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Drawdown Threshold (0-1)</label>
+                                <input type="number" id="drawdown_threshold_frac" value="${defaultConfig.drawdown_threshold_frac}" min="0" max="1" step="0.01">
+                                <small>Max drawdown above this triggers tuning (0.15 = 15%)</small>
+                            </div>
+                            
+                            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                                <button type="submit" class="btn btn-primary">Save Configuration</button>
+                                <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                
+            document.body.appendChild(modal);
+            
+            // Handle form submission
+            document.getElementById('autotune-config-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const configData = {
+                    enabled: true,
+                    min_trades: parseInt(document.getElementById('min_trades').value),
+                    evaluation_period_days: parseInt(document.getElementById('evaluation_period_days').value),
+                    min_time_between_tuning_hours: parseInt(document.getElementById('min_time_between_tuning_hours').value),
+                    min_improvement_abs_pct: parseFloat(document.getElementById('min_improvement_abs_pct').value),
+                    win_rate_threshold_frac: parseFloat(document.getElementById('win_rate_threshold_frac').value),
+                    sharpe_threshold: parseFloat(document.getElementById('sharpe_threshold').value),
+                    drawdown_threshold_frac: parseFloat(document.getElementById('drawdown_threshold_frac').value)
+                };
+                
+                try {
+                    const response = await authFetch(`/auto-tuning/strategies/${strategyId}/enable`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ config: configData })
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                        throw new Error(errorData.detail || 'Failed to save configuration');
+                    }
+                    
+                    modal.remove();
+                    showNotification('Auto-tuning configuration saved successfully', 'success');
+                    
+                    // Reload status
+                    if (expandedStrategies.has(strategyId)) {
+                        loadAutoTuningStatus(strategyId);
+                    }
+                    loadData(); // Refresh table
+                } catch (error) {
+                    showNotification(`Failed to save configuration: ${error.message}`, 'error');
+                }
+            });
+            
+            // Close on overlay click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+            
+            // Load actual config in background and update fields
+            (async () => {
+                try {
+                    const response = await authFetch(`/auto-tuning/strategies/${strategyId}/status`);
+                    if (response.ok) {
+                        const status = await response.json();
+                        const config = status.config || {};
+                        
+                        // Update form fields with actual values
+                        if (config.min_trades) document.getElementById('min_trades').value = config.min_trades;
+                        if (config.evaluation_period_days) document.getElementById('evaluation_period_days').value = config.evaluation_period_days;
+                        if (config.min_time_between_tuning_hours) document.getElementById('min_time_between_tuning_hours').value = config.min_time_between_tuning_hours;
+                        if (config.min_improvement_abs_pct !== undefined) document.getElementById('min_improvement_abs_pct').value = config.min_improvement_abs_pct;
+                        if (config.win_rate_threshold_frac !== undefined) document.getElementById('win_rate_threshold_frac').value = config.win_rate_threshold_frac;
+                        if (config.sharpe_threshold !== undefined) document.getElementById('sharpe_threshold').value = config.sharpe_threshold;
+                        if (config.drawdown_threshold_frac !== undefined) document.getElementById('drawdown_threshold_frac').value = config.drawdown_threshold_frac;
+                    }
+                } catch (error) {
+                    console.warn('Failed to load current config, using defaults:', error);
+                }
+            })();
+        }
+
+        async function triggerManualTuning(strategyId) {
+            if (!confirm('This will immediately trigger a tuning cycle for this strategy. Continue?')) {
+                return;
+            }
+            
+            try {
+                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/tune-now`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || 'Failed to trigger tuning');
+                }
+                
+                const result = await response.json();
+                showNotification(`Tuning triggered. ${result.message || 'Check history for results.'}`, 'success');
+                
+                // Reload status after a delay
+                setTimeout(() => {
+                    if (expandedStrategies.has(strategyId)) {
+                        loadAutoTuningStatus(strategyId);
+                    }
+                }, 2000);
+            } catch (error) {
+                console.error('Error triggering tuning:', error);
+                showNotification(`Failed to trigger tuning: ${error.message}`, 'error');
+            }
+        }
+
+        async function viewTuningHistory(strategyId) {
+            // Create modal immediately (show UI fast)
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+            
+            // Show loading state immediately
+            modal.innerHTML = `
+                <div class="modal-content" style="background: white; padding: 30px; border-radius: 8px; max-width: 900px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                    <h2 style="margin-top: 0;">Auto-Tuning History</h2>
+                    <p>Loading history...</p>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Load history in background
+            try {
+                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/history?limit=50`);
+                if (!response.ok) throw new Error('Failed to load tuning history');
+                const data = await response.json();
+                
+                let historyHtml = '<div class="modal-content" style="background: white; padding: 30px; border-radius: 8px; max-width: 900px; width: 90%; max-height: 90vh; overflow-y: auto;">';
+                historyHtml += '<h2 style="margin-top: 0;">Auto-Tuning History</h2>';
+                
+                if (!data.history || data.history.length === 0) {
+                    historyHtml += '<p>No tuning history available.</p>';
+                } else {
+                    historyHtml += '<table style="width: 100%; border-collapse: collapse; margin-top: 20px;">';
+                    historyHtml += '<thead><tr style="background: #f8f9fa;"><th style="padding: 10px; text-align: left;">Date</th><th style="padding: 10px; text-align: left;">Status</th><th style="padding: 10px; text-align: left;">Changes</th><th style="padding: 10px; text-align: left;">Performance</th></tr></thead>';
+                    historyHtml += '<tbody>';
+                    
+                    data.history.forEach(item => {
+                        const changes = Object.keys(item.changed_params || {}).join(', ') || 'None';
+                        const statusClass = item.status === 'applied' ? 'success' : item.status === 'failed' ? 'danger' : 'info';
+                        historyHtml += `<tr style="border-bottom: 1px solid #e9ecef;">`;
+                        historyHtml += `<td style="padding: 10px;">${formatDateTime(item.created_at)}</td>`;
+                        historyHtml += `<td style="padding: 10px;"><span class="badge ${statusClass}">${item.status}</span></td>`;
+                        historyHtml += `<td style="padding: 10px;">${changes}</td>`;
+                        historyHtml += `<td style="padding: 10px;">`;
+                        if (item.performance_after) {
+                            historyHtml += `After: ${item.performance_after.validation_return_pct_30d?.toFixed(2) || 'N/A'}%`;
+                        } else {
+                            historyHtml += 'Evaluating...';
+                        }
+                        historyHtml += `</td></tr>`;
+                    });
+                    
+                    historyHtml += '</tbody></table>';
+                }
+                
+                historyHtml += '<div style="margin-top: 20px;"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button></div>';
+                historyHtml += '</div>';
+                
+                modal.innerHTML = historyHtml;
+                
+                // Close on overlay click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+            } catch (error) {
+                console.error('Error loading history:', error);
+                showNotification('Failed to load tuning history', 'error');
+            }
+        }
+
+        // Event delegation for auto-tuning buttons (since they're created dynamically)
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('autotune-config-btn')) {
+                const strategyId = e.target.getAttribute('data-strategy-id');
+                if (strategyId) {
+                    showAutoTuningConfig(strategyId);
+                }
+            } else if (e.target.classList.contains('autotune-tune-btn')) {
+                const strategyId = e.target.getAttribute('data-strategy-id');
+                if (strategyId) {
+                    triggerManualTuning(strategyId);
+                }
+            } else if (e.target.classList.contains('autotune-history-btn')) {
+                const strategyId = e.target.getAttribute('data-strategy-id');
+                if (strategyId) {
+                    viewTuningHistory(strategyId);
+                }
+            }
+        });
 
         // Initialize on page load
         window.addEventListener('load', async () => {

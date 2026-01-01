@@ -383,7 +383,7 @@ class TestBinanceNativeTPSL:
         )
         
         # Place TP/SL orders
-        await runner._place_tp_sl_orders(summary, order_response)
+        await runner.order_manager.place_tp_sl_orders(summary, order_response)
         
         # Verify TP order was placed
         mock_client.place_take_profit_order.assert_called_once()
@@ -451,7 +451,7 @@ class TestBinanceNativeTPSL:
             status="FILLED"
         )
         
-        await runner._place_tp_sl_orders(summary, order_response)
+        await runner.order_manager.place_tp_sl_orders(summary, order_response)
         
         # Verify TP order for SHORT (inverted)
         tp_call = mock_client.place_take_profit_order.call_args
@@ -496,7 +496,7 @@ class TestBinanceNativeTPSL:
             max_concurrent=5
         )
         
-        await runner._cancel_tp_sl_orders(summary)
+        await runner.order_manager.cancel_tp_sl_orders(summary)
         
         # Verify both orders were cancelled
         assert mock_client.cancel_order.call_count == 2
@@ -550,7 +550,7 @@ class TestBinanceNativeTPSL:
             status="FILLED"
         )
         
-        await runner._place_tp_sl_orders(summary, order_response)
+        await runner.order_manager.place_tp_sl_orders(summary, order_response)
         
         # Verify NO TP/SL orders were placed
         mock_client.place_take_profit_order.assert_not_called()
@@ -745,7 +745,7 @@ class TestTPSLMetaCleanup:
         )
         
         # Simulate position close detection
-        await runner._update_position_info(summary)
+        await runner.state_manager.update_position_info(summary)
         
         # Verify meta was cleared (handled in _update_position_info when position closes)
         assert summary.meta.get("tp_sl_orders", {}) == {}

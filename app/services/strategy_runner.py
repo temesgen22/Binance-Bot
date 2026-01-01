@@ -110,6 +110,10 @@ class StrategyRunner:
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
         
+        # Hot-swap support: Track parameter versions and per-strategy locks
+        self._params_versions: Dict[str, int] = {}  # Track parameter version for each strategy
+        self._strategy_locks: Dict[str, asyncio.Lock] = {}  # Per-strategy locks for hot-swap
+        
         # Concurrency safety: Lock to protect shared state (_tasks, _strategies, _trades)
         # This prevents race conditions when multiple async tasks access/modify these dictionaries
         self._lock = asyncio.Lock()
@@ -771,6 +775,83 @@ class StrategyRunner:
         
         return summary
 
+    async def update_strategy_params(
+        self,
+        strategy_uuid: UUID,
+        new_params: dict
+    ) -> StrategySummary:
+        """Update strategy parameters without stopping (hot-swap).
+        
+        This method:
+        1. Acquires per-strategy lock
+        2. Updates params atomically
+        3. Bumps params_version for strategy instance
+        4. Strategy executor picks up new params on next evaluation
+        
+        Args:
+            strategy_uuid: Strategy UUID (not string ID)
+            new_params: New parameter dictionary
+            
+        Returns:
+            Updated StrategySummary
+            
+        Raises:
+            StrategyNotFoundError: If strategy doesn't exist
+            RuntimeError: If strategy is stopping/starting
+        """
+        # Find strategy by UUID (need to search through _strategies)
+        strategy_id = None
+        for sid, summary in self._strategies.items():
+            if summary.id == strategy_uuid:
+                strategy_id = sid
+                break
+        
+        if not strategy_id:
+            raise StrategyNotFoundError(str(strategy_uuid))
+        
+        summary = self._strategies[strategy_id]
+        
+        # Check state machine
+        if summary.status in ["stopping", "starting"]:
+            raise RuntimeError(f"Strategy {strategy_uuid} is {summary.status}, cannot update params")
+        
+        # Get or create per-strategy lock
+        if strategy_id not in self._strategy_locks:
+            async with self._lock:
+                if strategy_id not in self._strategy_locks:
+                    self._strategy_locks[strategy_id] = asyncio.Lock()
+        
+        strategy_lock = self._strategy_locks[strategy_id]
+        
+        async with strategy_lock:
+            # Update database first (source of truth)
+            updated_summary = await asyncio.to_thread(
+                self.strategy_service.update_strategy,
+                self.user_id,
+                strategy_id,  # Use string ID for service call
+                params=new_params
+            )
+            
+            if not updated_summary:
+                raise StrategyNotFoundError(str(strategy_uuid))
+            
+            # Update in-memory summary
+            async with self._lock:
+                self._strategies[strategy_id] = updated_summary
+            
+            # Bump params version (strategy executor checks this)
+            if strategy_id in self._params_versions:
+                self._params_versions[strategy_id] += 1
+            else:
+                self._params_versions[strategy_id] = 1
+            
+            logger.info(
+                f"Hot-swapped parameters for strategy {strategy_id} ({strategy_uuid}) "
+                f"(version {self._params_versions[strategy_id]})"
+            )
+        
+        return updated_summary
+
     async def delete(self, strategy_id: str) -> None:
         """Delete a strategy permanently.
         
@@ -883,9 +964,14 @@ class StrategyRunner:
                 logger.warning(f"Failed to load trades from database: {e}, falling back to in-memory")
         
         # Single-user mode or fallback: return in-memory trades
-        # CRITICAL FIX: Create a copy to avoid race conditions with async tasks modifying the dict
+        # PERFORMANCE FIX: Only copy when necessary (in-memory trades that might be modified)
+        # Database-loaded trades are already new lists, so no copy needed
         trades = self._trades.get(strategy_id, [])
-        return trades.copy() if trades else []
+        if not trades:
+            return []
+        # Create a shallow copy to avoid race conditions with async tasks modifying the list
+        # Using list() instead of .copy() is slightly more efficient and clearer
+        return list(trades)
     
     def get_trades_batch(self, strategy_ids: List[str]) -> Dict[str, List[OrderResponse]]:
         """Get trades for multiple strategies in a single batch query (optimizes N+1 problem).

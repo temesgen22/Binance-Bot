@@ -20,7 +20,12 @@ from app.core.my_binance_client import BinanceClient
 def mock_binance_client():
     """Create a mock Binance client for backtesting."""
     client = Mock(spec=BinanceClient)
-    client._ensure = Mock(return_value=Mock())
+    # Create a single mock rest object that will be returned by _ensure()
+    # This ensures _ensure() always returns the same mock object
+    mock_rest = Mock()
+    client._ensure = Mock(return_value=mock_rest)
+    # Store reference for tests to access
+    client._mock_rest = mock_rest
     return client
 
 
@@ -84,9 +89,9 @@ class TestCooldownCandles:
     @pytest.mark.asyncio
     async def test_cooldown_prevents_immediate_reentry(self, mock_binance_client, sample_klines):
         """Test that after exiting a position, cooldown prevents immediate reentry."""
-        # Mock futures_historical_klines to return sample klines
-        mock_rest = mock_binance_client._ensure.return_value
-        mock_rest.futures_historical_klines = Mock(return_value=sample_klines)
+        # Mock futures_klines to return sample klines (code uses futures_klines, not futures_historical_klines)
+        # Use the mock_rest from the fixture (already set up)
+        mock_binance_client._mock_rest.futures_klines = Mock(return_value=sample_klines)
         
         start_time = datetime(2025, 12, 8, 19, 35, tzinfo=timezone.utc)
         end_time = datetime(2025, 12, 8, 20, 35, tzinfo=timezone.utc)
@@ -158,8 +163,8 @@ class TestMinEMASeparation:
     @pytest.mark.asyncio
     async def test_min_ema_separation_prevents_noisy_signals(self, mock_binance_client, sample_klines):
         """Test that min_ema_separation prevents trades when EMAs are too close."""
-        mock_rest = mock_binance_client._ensure.return_value
-        mock_rest.futures_historical_klines = Mock(return_value=sample_klines)
+        # Use the mock_rest from the fixture
+        mock_binance_client._mock_rest.futures_klines = Mock(return_value=sample_klines)
         
         start_time = datetime(2025, 12, 8, 19, 35, tzinfo=timezone.utc)
         end_time = datetime(2025, 12, 8, 20, 35, tzinfo=timezone.utc)
@@ -207,8 +212,8 @@ class TestTPSLPercentages:
     @pytest.mark.asyncio
     async def test_tp_sl_percentages_are_respected(self, mock_binance_client, sample_klines):
         """Test that trades exit at correct TP/SL percentages."""
-        mock_rest = mock_binance_client._ensure.return_value
-        mock_rest.futures_historical_klines = Mock(return_value=sample_klines)
+        # Use the mock_rest from the fixture
+        mock_binance_client._mock_rest.futures_klines = Mock(return_value=sample_klines)
         
         start_time = datetime(2025, 12, 8, 19, 35, tzinfo=timezone.utc)
         end_time = datetime(2025, 12, 8, 20, 35, tzinfo=timezone.utc)
@@ -290,8 +295,8 @@ class TestEnableShort:
     @pytest.mark.asyncio
     async def test_disable_short_prevents_short_trades(self, mock_binance_client, sample_klines):
         """Test that disabling short trading prevents SHORT positions."""
-        mock_rest = mock_binance_client._ensure.return_value
-        mock_rest.futures_historical_klines = Mock(return_value=sample_klines)
+        # Use the mock_rest from the fixture
+        mock_binance_client._mock_rest.futures_klines = Mock(return_value=sample_klines)
         
         start_time = datetime(2025, 12, 8, 19, 35, tzinfo=timezone.utc)
         end_time = datetime(2025, 12, 8, 20, 35, tzinfo=timezone.utc)
@@ -335,8 +340,8 @@ class TestStrategyStateSync:
     @pytest.mark.asyncio
     async def test_strategy_state_synced_on_trade_close(self, mock_binance_client, sample_klines):
         """Test that strategy's internal state is synced when trades are closed."""
-        mock_rest = mock_binance_client._ensure.return_value
-        mock_rest.futures_historical_klines = Mock(return_value=sample_klines)
+        # Use the mock_rest from the fixture
+        mock_binance_client._mock_rest.futures_klines = Mock(return_value=sample_klines)
         
         start_time = datetime(2025, 12, 8, 19, 35, tzinfo=timezone.utc)
         end_time = datetime(2025, 12, 8, 20, 35, tzinfo=timezone.utc)

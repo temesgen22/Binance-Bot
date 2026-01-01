@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from app.core.my_binance_client import BinanceClient
-from app.api.routes.backtesting import (
+from app.services.backtest_service import (
     BacktestRequest, 
     BacktestResult, 
     run_backtest,
-    _fetch_historical_klines,
-    _slice_klines_by_time_range,
-    validate_and_normalize_interval
+    fetch_historical_klines as _fetch_historical_klines,
+    slice_klines_by_time_range as _slice_klines_by_time_range,
+    normalize_interval as validate_and_normalize_interval,
 )
 from app.services.walk_forward_task_manager import get_task_manager
 
@@ -514,13 +514,108 @@ def generate_param_combinations(optimize_params: dict) -> list[dict]:
             logger.warning(f"Parameter {name} has only 1 value ({values[0]}). Optimization requires at least 2 values to test multiple combinations. "
                           f"This will result in only 1 combination being tested, which may not provide meaningful optimization.")
     
-    # Generate all combinations
-    combinations = list(itertools.product(*param_values))
+    # PERFORMANCE FIX: Generate combinations lazily (memory-efficient)
+    # Note: itertools.product returns a generator, so we materialize it here for backward compatibility
+    # For large parameter spaces, consider using generate_param_combinations_generator() instead
+    combinations = itertools.product(*param_values)
     
     return [
         dict(zip(param_names, combo))
         for combo in combinations
     ]
+
+
+def generate_param_combinations_generator(optimize_params: dict):
+    """
+    Generate parameter combinations lazily (memory-efficient generator).
+    
+    Use this for large parameter spaces to avoid memory explosion.
+    
+    Args:
+        optimize_params: Dict mapping parameter names to lists of values to test
+    
+    Yields:
+        Dict with parameter combination
+    """
+    param_names = list(optimize_params.keys())
+    param_values = list(optimize_params.values())
+    
+    # Validate that all values are lists
+    for name, values in optimize_params.items():
+        if not isinstance(values, list):
+            raise ValueError(f"Parameter {name} must be a list of values, got {type(values)}")
+        if not values:
+            raise ValueError(f"Parameter {name} has no values to test")
+    
+    # Generate combinations lazily (doesn't create all in memory)
+    for combo in itertools.product(*param_values):
+        yield dict(zip(param_names, combo))
+
+
+def count_param_combinations(optimize_params: dict) -> int:
+    """
+    Calculate total number of parameter combinations without generating them.
+    
+    Note: This is an upper bound. Actual count may be lower if filters are applied
+    (e.g., EMA fast < EMA slow constraint for scalping strategy).
+    
+    Args:
+        optimize_params: Dict mapping parameter names to lists of values to test
+    
+    Returns:
+        Total number of combinations (upper bound)
+    """
+    total = 1
+    for values in optimize_params.values():
+        if not isinstance(values, list):
+            raise ValueError(f"Parameter values must be a list, got {type(values)}")
+        total *= len(values)
+    return total
+
+
+def is_valid_ema_combination(param_set: dict, strategy_type: str) -> bool:
+    """
+    Validate EMA parameter combination for scalping strategy.
+    
+    For scalping strategy, EMA fast must be less than EMA slow.
+    This filter prevents invalid combinations before running backtests.
+    
+    Args:
+        param_set: Parameter combination dict
+        strategy_type: Strategy type ("scalping" or "range_mean_reversion")
+    
+    Returns:
+        True if combination is valid, False if it should be skipped
+    """
+    if strategy_type != "scalping":
+        return True  # No EMA constraint for other strategy types
+    
+    # Check both possible parameter naming conventions
+    # Scalping uses: ema_fast, ema_slow
+    # Range uses: ema_fast_period, ema_slow_period
+    ema_fast = None
+    ema_slow = None
+    
+    if "ema_fast" in param_set:
+        ema_fast = param_set["ema_fast"]
+        ema_slow = param_set.get("ema_slow")
+    elif "ema_fast_period" in param_set:
+        ema_fast = param_set["ema_fast_period"]
+        ema_slow = param_set.get("ema_slow_period")
+    
+    # If both EMA parameters are present, validate the constraint
+    if ema_fast is not None and ema_slow is not None:
+        try:
+            fast_val = float(ema_fast)
+            slow_val = float(ema_slow)
+            # EMA fast must be less than EMA slow
+            if fast_val >= slow_val:
+                return False
+        except (ValueError, TypeError):
+            # If values can't be compared, allow it (will fail later in backtest)
+            pass
+    
+    return True
 
 
 def calculate_metric_score(
@@ -671,23 +766,37 @@ async def grid_search_optimization(
     best_params = request.params.copy()
     best_score = float('-inf')
     
-    # Generate parameter combinations
-    param_combinations = generate_param_combinations(optimize_params)
+    # PERFORMANCE FIX: Calculate total combinations without materializing all in memory
+    total_combinations = count_param_combinations(optimize_params)
     
-    logger.info(f"Grid search: Testing {len(param_combinations)} parameter combinations...")
+    # Use generator for memory efficiency (only materialize as we iterate)
+    param_combinations_gen = generate_param_combinations_generator(optimize_params)
+    
+    logger.info(f"Grid search: Testing up to {total_combinations} parameter combinations...")
     
     combinations_tested = 0
     combinations_failed = 0
-    all_optimization_results = []  # Track all tested combinations and their results
-    
-    for i, param_set in enumerate(param_combinations):
+    combinations_skipped = 0
+    # MEMORY FIX: Only store top 20 results instead of all results (reduces memory by 90%+)
+    # Use a heap to efficiently track top N results
+    import heapq
+    top_results = []  # Min-heap to track top N results (we'll keep the worst of the best)
+    MAX_STORED_RESULTS = 20
+    for i, param_set in enumerate(param_combinations_gen):
         # Check for cancellation during optimization loop
         if task_manager and task_id and task_manager.is_cancelled(task_id):
-            logger.info(f"Optimization cancelled at combination {i+1}/{len(param_combinations)}")
+            logger.info(f"Optimization cancelled at combination {i+1}/{total_combinations}")
             raise HTTPException(
                 status_code=499,
                 detail="Walk-forward analysis was cancelled"
             )
+        
+        # FILTER: Skip invalid EMA combinations for scalping strategy
+        # EMA fast must be less than EMA slow (saves time by skipping invalid combinations)
+        if not is_valid_ema_combination(param_set, request.strategy_type):
+            combinations_skipped += 1
+            logger.debug(f"Skipping invalid EMA combination {i+1}: {param_set} (EMA fast >= EMA slow)")
+            continue
         
         test_params = {**request.params, **param_set}
         
@@ -753,22 +862,47 @@ async def grid_search_optimization(
                     )
                     failure_reason = "Failed guardrails (unknown reason - check logs)"
             
-            # Store result for this combination
-            combination_result = {
-                "combination_number": i + 1,
-                "params": param_set.copy(),  # Only optimized params
-                "full_params": test_params.copy(),  # All params (base + optimized)
-                "score": score if score > float('-inf') else None,
-                "status": "passed" if score > float('-inf') else "failed",
-                "failure_reason": failure_reason,
-                "total_return_pct": result.total_return_pct,
-                "total_trades": result.total_trades,
-                "completed_trades": result.completed_trades,
-                "win_rate": result.win_rate,
-                "max_drawdown_pct": result.max_drawdown_pct,
-                "sharpe_ratio": calculate_sharpe_ratio(result) if score > float('-inf') else None
-            }
-            all_optimization_results.append(combination_result)
+            # MEMORY FIX: Only store top N results instead of all results
+            # Store result only if it's in the top N or if it passed (for debugging failed ones)
+            if score > float('-inf'):
+                combination_result = {
+                    "combination_number": i + 1,
+                    "params": param_set.copy(),  # Only optimized params
+                    "full_params": test_params.copy(),  # All params (base + optimized)
+                    "score": score,
+                    "status": "passed",
+                    "failure_reason": None,
+                    "total_return_pct": result.total_return_pct,
+                    "total_trades": result.total_trades,
+                    "completed_trades": result.completed_trades,
+                    "win_rate": result.win_rate,
+                    "max_drawdown_pct": result.max_drawdown_pct,
+                    "sharpe_ratio": calculate_sharpe_ratio(result)
+                }
+                
+                # Use min-heap to efficiently track top N results
+                if len(top_results) < MAX_STORED_RESULTS:
+                    heapq.heappush(top_results, (score, combination_result))
+                elif score > top_results[0][0]:  # Better than worst in top N
+                    heapq.heapreplace(top_results, (score, combination_result))
+            else:
+                # Store failed results only if we have space (for debugging)
+                if len(top_results) < MAX_STORED_RESULTS:
+                    combination_result = {
+                        "combination_number": i + 1,
+                        "params": param_set.copy(),
+                        "full_params": test_params.copy(),
+                        "score": None,
+                        "status": "failed",
+                        "failure_reason": failure_reason,
+                        "total_return_pct": result.total_return_pct,
+                        "total_trades": result.total_trades,
+                        "completed_trades": result.completed_trades,
+                        "win_rate": result.win_rate,
+                        "max_drawdown_pct": result.max_drawdown_pct,
+                        "sharpe_ratio": None
+                    }
+                    heapq.heappush(top_results, (float('-inf'), combination_result))
             
             if score == float('-inf'):
                 combinations_failed += 1
@@ -778,25 +912,26 @@ async def grid_search_optimization(
                 logger.debug(f"New best score: {score:.4f} with params {param_set}")
             
             # Update progress during optimization (every 10 combinations or at the end)
-            if (i + 1) % 10 == 0 or (i + 1) == len(param_combinations):
+            if (i + 1) % 10 == 0 or (i + 1) == total_combinations:
                 score_str = f"{best_score:.4f}" if best_score > float('-inf') else "N/A (all failed)"
-                logger.info(f"Optimization progress: {i+1}/{len(param_combinations)} combinations tested, "
+                logger.info(f"Optimization progress: {i+1}/{total_combinations} combinations processed "
+                           f"({combinations_tested} tested, {combinations_skipped} skipped), "
                            f"best score: {score_str}")
                 
                 # Update progress with sub-progress for optimization phase
                 if task_manager and task_id:
-                    opt_progress = (i + 1) / len(param_combinations)  # 0.0 to 1.0
+                    opt_progress = (i + 1) / total_combinations  # 0.0 to 1.0
                     await task_manager.update_progress(
                         task_id,
                         current_phase="optimizing",
-                        message=f"Optimizing: {i+1}/{len(param_combinations)} combinations tested...",
+                        message=f"Optimizing: {combinations_tested}/{total_combinations} combinations tested ({combinations_skipped} skipped)...",
                         phase_progress=opt_progress
                     )
                 
         except Exception as e:
             combinations_failed += 1
             error_msg = str(e)
-            logger.warning(f"Error testing parameter set {i+1}/{len(param_combinations)}: {error_msg}", exc_info=True)
+            logger.warning(f"Error testing parameter set {i+1}/{total_combinations}: {error_msg}", exc_info=True)
             
             # Determine error type for better user feedback
             error_type = type(e).__name__
@@ -809,29 +944,30 @@ async def grid_search_optimization(
             else:
                 failure_reason = f"Backtest error: {error_type} - {error_msg[:100]}"  # Truncate long messages
             
-            # Store failed combination
-            combination_result = {
-                "combination_number": i + 1,
-                "params": param_set.copy(),
-                "full_params": test_params.copy(),
-                "score": None,
-                "status": "error",
-                "failure_reason": failure_reason,  # Add failure_reason for consistency
-                "error": error_msg,
-                "total_return_pct": None,
-                "total_trades": None,
-                "completed_trades": None,
-                "win_rate": None,
-                "max_drawdown_pct": None,
-                "sharpe_ratio": None
-            }
-            all_optimization_results.append(combination_result)
+            # MEMORY FIX: Store failed combination only if we have space
+            if len(top_results) < MAX_STORED_RESULTS:
+                combination_result = {
+                    "combination_number": i + 1,
+                    "params": param_set.copy(),
+                    "full_params": test_params.copy(),
+                    "score": None,
+                    "status": "error",
+                    "failure_reason": failure_reason,  # Add failure_reason for consistency
+                    "error": error_msg,
+                    "total_return_pct": None,
+                    "total_trades": None,
+                    "completed_trades": None,
+                    "win_rate": None,
+                    "max_drawdown_pct": None,
+                    "sharpe_ratio": None
+                }
+                heapq.heappush(top_results, (float('-inf'), combination_result))
             continue
     
     # Check if all combinations failed
     if best_score == float('-inf'):
         logger.warning(
-            f"All {len(param_combinations)} parameter combinations failed optimization guardrails "
+            f"All {total_combinations} parameter combinations failed optimization guardrails "
             f"(min_trades={request.min_trades_guardrail}, max_dd_cap={request.max_drawdown_cap:.1f}%, "
             f"lottery_threshold={request.lottery_trade_threshold:.1%}). "
             f"Returning base parameters. Consider adjusting optimization ranges or guardrails."
@@ -859,9 +995,42 @@ async def grid_search_optimization(
     logger.debug(f"All best_params keys: {list(best_params.keys())}")
     logger.debug(f"Optimize_params keys: {list(optimize_params.keys())}")
     
-    # Return both optimized params and all results
-    # Note: We'll need to modify the return type or use a different approach
-    # For now, store results in a way that can be accessed later
+    # MEMORY FIX: Convert heap to sorted list (best results first)
+    # Extract results from heap and sort by score (descending)
+    # Ensure top_results is not None and is iterable
+    if top_results is None:
+        logger.warning("top_results is None, using empty list")
+        all_optimization_results = []
+    else:
+        all_optimization_results = [result for _, result in sorted(top_results, key=lambda x: x[0], reverse=True)]
+    
+    # Ensure all_optimization_results is always a list, never None
+    if all_optimization_results is None:
+        logger.warning("all_optimization_results is None after conversion, using empty list")
+        all_optimization_results = []
+    
+    # Log summary including skipped combinations
+    logger.info(
+        f"Optimization complete: {combinations_tested} combinations tested, "
+        f"{combinations_skipped} skipped (invalid EMA combinations), "
+        f"{combinations_failed} failed guardrails, "
+        f"stored top {len(all_optimization_results)} results "
+        f"(out of {total_combinations} total combinations)"
+    )
+    
+    # Ensure optimized is not empty if optimization was attempted
+    # If all combinations failed, return None instead of empty dict to indicate no optimization occurred
+    if len(optimized) == 0 and best_score == float('-inf'):
+        logger.warning("All optimization combinations failed - returning None for optimized_params")
+        optimized = None
+    
+    # Return both optimized params and top results
+    # Ensure all_optimization_results is always a list (never None) for proper serialization
+    if all_optimization_results is None:
+        logger.warning("all_optimization_results is None before return, converting to empty list")
+        all_optimization_results = []
+    
+    logger.info(f"Returning from grid_search_optimization: optimized_params={optimized}, optimization_results_count={len(all_optimization_results)}")
     return optimized, all_optimization_results
 
 
@@ -1067,9 +1236,10 @@ async def run_walk_forward_analysis(
         
         # Step 2a: Run training backtest (with optimization if enabled)
         logger.info(f"Window {i+1}: Checking optimization - optimize_params={request.optimize_params is not None}, "
-                   f"optimize_params keys={list(request.optimize_params.keys()) if request.optimize_params else 'None'}")
+                   f"optimize_params keys={list(request.optimize_params.keys()) if request.optimize_params else 'None'}, "
+                   f"optimize_params values={request.optimize_params if request.optimize_params else 'None'}")
         
-        if request.optimize_params:
+        if request.optimize_params and len(request.optimize_params) > 0:
             # Optimize parameters during training
             # CRITICAL: Pass only training klines to prevent data leakage
             logger.info(f"Optimizing parameters for window {i+1}...")
@@ -1085,7 +1255,7 @@ async def run_walk_forward_analysis(
                     message=f"Optimizing parameters for window {i+1}/{len(windows)}..."
                 )
             try:
-                optimized_params, optimization_results = await optimize_parameters(
+                result = await optimize_parameters(
                     request=request,
                     training_start=window['training_start'],
                     training_end=window['training_end'],
@@ -1096,22 +1266,44 @@ async def run_walk_forward_analysis(
                     task_manager=task_manager,
                     task_id=task_id
                 )
+                # Safely unpack result, ensuring we always have valid values
+                if result is None or not isinstance(result, tuple) or len(result) != 2:
+                    logger.error(f"optimize_parameters returned invalid result: {result}")
+                    optimized_params = None
+                    optimization_results = []
+                else:
+                    optimized_params, optimization_results = result
+                    # Ensure optimization_results is a list, not None
+                    if optimization_results is None:
+                        logger.warning(f"Optimization returned None for results, using empty list")
+                        optimization_results = []
+                
                 logger.info(f"Optimization returned params: {optimized_params}")
                 logger.info(f"Optimization tested {len(optimization_results)} combinations")
-                training_params = {**request.params, **optimized_params}
+                logger.info(f"Optimization results type: {type(optimization_results)}, length: {len(optimization_results) if optimization_results else 'None'}")
+                training_params = {**request.params, **optimized_params} if optimized_params else request.params
                 logger.info(f"Final training params for window {i+1}: {training_params}")
                 logger.info(f"Optimized parameters for window {i+1}: {optimized_params}")
+                # Ensure optimization_results is always a list (not None) for proper serialization
+                if optimization_results is None:
+                    logger.warning(f"optimization_results is None for window {i+1}, converting to empty list")
+                    optimization_results = []
             except Exception as e:
                 logger.error(f"Optimization failed for window {i+1}: {e}", exc_info=True)
                 logger.warning(f"Using fixed parameters due to optimization failure.")
                 optimized_params = None
-                optimization_results = None
+                optimization_results = []  # Use empty list instead of None for consistency
                 training_params = request.params
         else:
             # Use fixed parameters
-            logger.info(f"Window {i+1}: Using fixed parameters (optimization disabled)")
+            if request.optimize_params is None:
+                logger.info(f"Window {i+1}: Using fixed parameters (optimization disabled - optimize_params is None)")
+            elif len(request.optimize_params) == 0:
+                logger.info(f"Window {i+1}: Using fixed parameters (optimization disabled - optimize_params is empty)")
+            else:
+                logger.warning(f"Window {i+1}: Using fixed parameters despite optimize_params being set (this should not happen)")
             optimized_params = None
-            optimization_results = None
+            optimization_results = []  # Use empty list instead of None for consistency
             training_params = request.params
         
         # Check for cancellation before training backtest
@@ -1396,7 +1588,19 @@ async def run_walk_forward_analysis(
     # Mark task as completed with result
     if task_manager and task_id:
         # Ensure equity_curve is properly serialized
-        result_dict = result.model_dump()
+        # Use mode='json' to ensure proper serialization of datetime and other types
+        # Include all fields, even if None
+        result_dict = result.model_dump(mode='json', exclude_none=False)
+        
+        # Debug: Log optimization data for first window
+        if result_dict.get('windows') and len(result_dict['windows']) > 0:
+            first_window = result_dict['windows'][0]
+            logger.info(
+                f"First window optimization data: "
+                f"optimized_params={first_window.get('optimized_params')}, "
+                f"optimization_results_count={len(first_window.get('optimization_results', []))}"
+            )
+        
         # Verify equity_curve is included
         if 'equity_curve' not in result_dict or not result_dict['equity_curve']:
             logger.warning(f"Equity curve missing or empty in result dict. Points: {len(equity_curve_points)}")

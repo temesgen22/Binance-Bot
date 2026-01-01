@@ -56,7 +56,8 @@ async def test_backtesting_with_ema_cross_exit_disabled(mock_binance_client, sam
     """Test that backtesting respects enable_ema_cross_exit=False parameter."""
     # Mock the Binance client to return sample klines
     rest_mock = Mock()
-    rest_mock.futures_historical_klines = Mock(return_value=sample_klines)
+    # Fix: Mock futures_klines (not futures_historical_klines) as that's what the code uses
+    rest_mock.futures_klines = Mock(return_value=sample_klines)
     mock_binance_client._ensure.return_value = rest_mock
     
     # Create backtest request with EMA cross exit disabled
@@ -112,7 +113,8 @@ async def test_backtesting_with_ema_cross_exit_enabled(mock_binance_client, samp
     """Test that backtesting respects enable_ema_cross_exit=True parameter (default)."""
     # Mock the Binance client to return sample klines
     rest_mock = Mock()
-    rest_mock.futures_historical_klines = Mock(return_value=sample_klines)
+    # Fix: Mock futures_klines (not futures_historical_klines) as that's what the code uses
+    rest_mock.futures_klines = Mock(return_value=sample_klines)
     mock_binance_client._ensure.return_value = rest_mock
     
     # Create backtest request with EMA cross exit enabled
@@ -160,7 +162,8 @@ async def test_backtesting_ema_cross_exit_defaults_to_enabled(mock_binance_clien
     """Test that enable_ema_cross_exit defaults to True when not specified."""
     # Mock the Binance client to return sample klines
     rest_mock = Mock()
-    rest_mock.futures_historical_klines = Mock(return_value=sample_klines)
+    # Fix: Mock futures_klines (not futures_historical_klines) as that's what the code uses
+    rest_mock.futures_klines = Mock(return_value=sample_klines)
     mock_binance_client._ensure.return_value = rest_mock
     
     # Create backtest request without enable_ema_cross_exit parameter

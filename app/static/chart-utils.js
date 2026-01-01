@@ -18,6 +18,8 @@ class ChartRenderer {
             throw new Error('TradingView Lightweight Charts library not loaded');
         }
         
+        // Note: Lightweight Charts doesn't support custom timezone formatting via localization API
+        // Timezone adjustment is handled in processKlineData() and createTradeMarkers() by adjusting timestamps
         return LightweightCharts.createChart(container, {
             width: container.clientWidth,
             height: height || this.defaultHeight,
@@ -65,10 +67,25 @@ class ChartRenderer {
      * Process klines data from Binance format to chart format
      * Input: Array of [timestamp_ms, open, high, low, close, volume, ...]
      * Output: Array of {time, open, high, low, close}
+     * 
+     * Note: If user wants UTC display, we adjust timestamps so chart's local-time display shows UTC
      */
     processKlineData(klines) {
         if (!klines || !Array.isArray(klines)) {
             return [];
+        }
+        
+        // Get user's timezone preference
+        const useUTC = typeof UserSettings !== 'undefined' && UserSettings.get('timeFormat') === 'utc';
+        
+        // Calculate timezone offset in seconds (if UTC is requested)
+        // We need to adjust timestamps so that when chart displays them in local time, they appear as UTC
+        let timezoneOffsetSeconds = 0;
+        if (useUTC) {
+            // Get browser's timezone offset in minutes, convert to seconds
+            // Offset is negative for timezones ahead of UTC (e.g., UTC+5 = -300 minutes)
+            // We ADD the offset to timestamps so local display shows UTC
+            timezoneOffsetSeconds = new Date().getTimezoneOffset() * 60; // Convert minutes to seconds
         }
         
         return klines
@@ -91,8 +108,12 @@ class ChartRenderer {
                 }
                 
                 // TradingView Lightweight Charts expects Unix timestamp in seconds
+                // If UTC is requested, adjust timestamp so chart's local display shows UTC
+                const baseTimestamp = Math.floor(timestampMs / 1000);
+                const adjustedTimestamp = useUTC ? baseTimestamp + timezoneOffsetSeconds : baseTimestamp;
+                
                 return {
-                    time: Math.floor(timestampMs / 1000),
+                    time: adjustedTimestamp,
                     open: open,
                     high: high,
                     low: low,
@@ -283,6 +304,15 @@ class ChartRenderer {
             return [];
         }
         
+        // Get user's timezone preference and calculate offset (same as processKlineData)
+        const useUTC = typeof UserSettings !== 'undefined' && UserSettings.get('timeFormat') === 'utc';
+        let timezoneOffsetSeconds = 0;
+        if (useUTC) {
+            // Get browser's timezone offset in minutes, convert to seconds
+            // We ADD the offset to timestamps so local display shows UTC
+            timezoneOffsetSeconds = new Date().getTimezoneOffset() * 60; // Convert minutes to seconds
+        }
+        
         const markers = [];
         const {
             entryTimeField = 'entry_time',
@@ -306,7 +336,8 @@ class ChartRenderer {
                         return;
                     }
                     
-                    const entryTime = Math.floor(entryDate.getTime() / 1000);
+                    const baseEntryTime = Math.floor(entryDate.getTime() / 1000);
+                    const entryTime = useUTC ? baseEntryTime + timezoneOffsetSeconds : baseEntryTime;
                     const positionSide = trade[positionSideField] || trade[sideField] || 'LONG';
                     const entryPrice = (trade[entryPriceField] !== undefined && trade[entryPriceField] !== null) 
                         ? `$${parseFloat(trade[entryPriceField]).toFixed(4)}` 
@@ -335,7 +366,8 @@ class ChartRenderer {
                         return;
                     }
                     
-                    const exitTime = Math.floor(exitDate.getTime() / 1000);
+                    const baseExitTime = Math.floor(exitDate.getTime() / 1000);
+                    const exitTime = useUTC ? baseExitTime + timezoneOffsetSeconds : baseExitTime;
                     const positionSide = trade[positionSideField] || trade[sideField] || 'LONG';
                     
                     // Determine exit color based on PnL and exit reason

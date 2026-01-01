@@ -110,6 +110,7 @@ class StrategySummary(BaseModel):
     started_at: Optional[datetime] = None  # When strategy was last started
     stopped_at: Optional[datetime] = None  # When strategy was last stopped
     meta: Dict[str, Any] = Field(default_factory=dict)
+    auto_tuning_enabled: bool = Field(default=False, description="Whether auto-tuning is enabled for this strategy")
 
 
 class StrategyStats(BaseModel):

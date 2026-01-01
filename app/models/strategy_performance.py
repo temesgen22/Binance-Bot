@@ -61,6 +61,9 @@ class StrategyPerformance(BaseModel):
     # Ranking
     rank: Optional[int] = Field(default=None, description="Rank based on total PnL (1 = best)")
     percentile: Optional[float] = Field(default=None, description="Performance percentile (0-100)")
+    
+    # Auto-tuning
+    auto_tuning_enabled: bool = Field(default=False, description="Whether auto-tuning is enabled for this strategy")
 
 
 class StrategyPerformanceList(BaseModel):

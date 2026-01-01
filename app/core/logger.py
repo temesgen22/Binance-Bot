@@ -78,7 +78,7 @@ def configure_logging(use_json: Optional[bool] = None) -> None:
         backtrace=False,
         diagnose=False,
         colorize=True,
-        enqueue=False,  # Disable queue for immediate output
+        enqueue=True,  # Enable queue for process-safe logging (multiprocessing support)
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level:<8}</level> | <level>{message}</level>",
     )
     
@@ -93,7 +93,7 @@ def configure_logging(use_json: Optional[bool] = None) -> None:
             compression="zip",  # Compress old logs
             backtrace=True,
             diagnose=True,
-            enqueue=False,  # Disable queue for immediate write
+            enqueue=True,  # Enable queue for process-safe logging (prevents file lock errors in multiprocessing)
             format=serialize_record,
             serialize=True,  # Enable serialization
         )
@@ -107,7 +107,7 @@ def configure_logging(use_json: Optional[bool] = None) -> None:
             compression="zip",  # Compress old logs
             backtrace=True,
             diagnose=True,
-            enqueue=False,  # Disable queue for immediate write
+            enqueue=True,  # Enable queue for process-safe logging (prevents file lock errors in multiprocessing)
             format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{function}:{line} | {message}",
         )
 
