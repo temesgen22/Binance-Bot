@@ -867,8 +867,33 @@ class StrategyRunner:
         Raises:
             StrategyNotFoundError: If strategy does not exist
         """
+        # Check if strategy exists in memory first
         if strategy_id not in self._strategies:
-            raise StrategyNotFoundError(strategy_id)
+            # Strategy not in memory - try to load from database
+            logger.debug(f"Strategy {strategy_id} not in memory, checking database...")
+            if self.strategy_service and self.user_id:
+                try:
+                    # Try to load from database - use appropriate method based on service type
+                    if self.strategy_service._is_async:
+                        summary = await self.strategy_service.async_get_strategy(self.user_id, strategy_id)
+                    else:
+                        # Use sync method if service is sync
+                        summary = self.strategy_service.get_strategy(self.user_id, strategy_id)
+                    
+                    if summary:
+                        # Load into memory for deletion
+                        async with self._lock:
+                            self._strategies[strategy_id] = summary
+                        logger.info(f"Loaded strategy {strategy_id} from database for deletion")
+                    else:
+                        # Strategy doesn't exist in database either
+                        raise StrategyNotFoundError(strategy_id)
+                except Exception as exc:
+                    logger.warning(f"Failed to load strategy {strategy_id} from database: {exc}")
+                    raise StrategyNotFoundError(strategy_id) from exc
+            else:
+                # No database access - strategy doesn't exist
+                raise StrategyNotFoundError(strategy_id)
         
         summary = self._strategies[strategy_id]
         

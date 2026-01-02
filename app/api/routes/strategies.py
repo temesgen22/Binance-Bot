@@ -238,4 +238,16 @@ async def delete_strategy(
     Raises:
         StrategyNotFoundError: If strategy does not exist
     """
-    await runner.delete(strategy_id)
+    logger.info(f"DELETE /strategies/{strategy_id} - User: {current_user.id}, Strategy ID: {strategy_id}")
+    try:
+        await runner.delete(strategy_id)
+        logger.info(f"Successfully deleted strategy {strategy_id}")
+    except StrategyNotFoundError as e:
+        logger.warning(f"Strategy {strategy_id} not found for deletion: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting strategy {strategy_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete strategy: {str(e)}"
+        )
