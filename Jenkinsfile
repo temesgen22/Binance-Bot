@@ -53,7 +53,7 @@ pipeline {
               pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              # Run all tests except slow ones (default)
+              # Run all tests except slow and database ones (default)
               # Set TEST_MODE=ci to run only CI-marked tests, or TEST_MODE=all to run all tests including slow
               if [ "${TEST_MODE:-standard}" = "ci" ]; then
                 echo "Running CI-marked tests only..."
@@ -62,8 +62,8 @@ pipeline {
                 echo "Running all tests including slow ones..."
                 pytest -q
               else
-                echo "Running all tests except slow ones (default)..."
-                pytest -q -m "not slow"
+                echo "Running all tests except slow and database ones (default)..."
+                pytest -q -m "not slow and not database"
               fi
             '''
           } else {
@@ -75,7 +75,7 @@ pipeline {
               python -m pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              # Run all tests except slow ones (default)
+              # Run all tests except slow and database ones (default)
               # Set TEST_MODE=ci to run only CI-marked tests, or TEST_MODE=all to run all tests including slow
               $testMode = if ($env:TEST_MODE) { $env:TEST_MODE } else { "standard" }
               if ($testMode -eq "ci") {
@@ -85,8 +85,8 @@ pipeline {
                 Write-Host "Running all tests including slow ones..."
                 pytest -q
               } else {
-                Write-Host "Running all tests except slow ones (default)..."
-                pytest -q -m "not slow"
+                Write-Host "Running all tests except slow and database ones (default)..."
+                pytest -q -m "not slow and not database"
               }
             '''
           }

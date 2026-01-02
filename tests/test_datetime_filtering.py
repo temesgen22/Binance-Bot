@@ -264,8 +264,13 @@ class TestTradesDatetimeFiltering:
         runner.get_trades = get_trades
         return runner
     
+    @pytest.mark.database
     def test_trades_api_accepts_datetime_params(self, client, mock_runner):
-        """Test that trades API accepts datetime parameters."""
+        """Test that trades API accepts datetime parameters.
+        
+        This test requires a database connection and is marked with @pytest.mark.database.
+        It will be skipped in CI unless TEST_MODE=all is set.
+        """
         from uuid import uuid4
         from app.models.db_models import User
         from app.api.deps import get_current_user, get_db_session_dependency
@@ -316,9 +321,16 @@ class TestTradesDatetimeFiltering:
             if response.status_code == 200:
                 data = response.json()
                 assert isinstance(data, list)
-        except RuntimeError as e:
+        except (RuntimeError, Exception) as e:
             # If database is not available, skip the test
-            if "Database is not available" in str(e) or "DATABASE_URL" in str(e):
+            error_msg = str(e)
+            if any(keyword in error_msg for keyword in [
+                "Database connection lost",
+                "connection to server",
+                "Connection refused",
+                "Database is not available",
+                "DATABASE_URL"
+            ]):
                 pytest.skip(f"Database not available: {e}")
             raise
         finally:

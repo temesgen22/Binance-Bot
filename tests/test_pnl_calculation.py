@@ -15,11 +15,30 @@ class DummyRedis:
 
 def make_runner():
     """Create a mock StrategyRunner for testing."""
+    from app.core.binance_client_manager import BinanceClientManager
+    from app.core.config import get_settings, BinanceAccountConfig
+    
     client = MagicMock()
     risk = MagicMock()
     executor = MagicMock()
+    
+    # Create a minimal client manager for backward compatibility
+    settings = get_settings()
+    manager = BinanceClientManager(settings)
+    
+    # Manually add default account (simulating database-loaded account)
+    default_account = BinanceAccountConfig(
+        account_id="default",
+        api_key="test_key",
+        api_secret="test_secret",
+        testnet=True
+    )
+    manager._clients = {'default': client}
+    manager._accounts = {'default': default_account}
+    
     return StrategyRunner(
         client=client,
+        client_manager=manager,
         risk=risk,
         executor=executor,
         max_concurrent=2,
@@ -270,7 +289,10 @@ class TestPositionInfoUpdate:
             "unRealizedProfit": "100.0",
         }
         
-        runner.client.get_open_position = MagicMock(return_value=mock_position)
+        # update_position_info uses account_manager.get_account_client(), not runner.client
+        # So we need to mock the account manager's client
+        account_client = runner.client_manager.get_account_client("default")
+        account_client.get_open_position = MagicMock(return_value=mock_position)
         
         # Create strategy summary
         summary = StrategySummary(
@@ -290,9 +312,9 @@ class TestPositionInfoUpdate:
         )
         runner._strategies["test-pos-update"] = summary
         
-        # Call _update_position_info
+        # Call update_position_info via state_manager
         import asyncio
-        asyncio.run(runner._update_position_info(summary))
+        asyncio.run(runner.state_manager.update_position_info(summary))
         
         # Verify current_price was set from markPrice
         assert summary.current_price is not None, "current_price should be set"

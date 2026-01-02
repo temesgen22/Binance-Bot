@@ -8,6 +8,7 @@ import pytest
 
 from app.models.strategy import CreateStrategyRequest, StrategyParams, StrategyType, StrategyState
 from app.services.strategy_runner import StrategyRunner
+from app.services.strategy_executor import StrategyExecutor
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import get_settings
 
@@ -120,10 +121,10 @@ async def test_start_sets_started_at_timestamp():
     strategy_service._db_strategy_to_summary = lambda x: summary
     
     # Mock the run loop to avoid actual execution
-    async def short_run_loop(strategy, summary_obj, risk, executor):
+    async def short_run_loop(strategy, summary_obj, risk=None, executor=None):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # Capture the timestamp before starting
         before_start = datetime.now(timezone.utc)
         

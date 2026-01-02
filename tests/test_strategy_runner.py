@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.models.strategy import CreateStrategyRequest, StrategyParams, StrategyType, StrategyState
 from app.services.strategy_runner import StrategyRunner
+from app.services.strategy_executor import StrategyExecutor
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import get_settings
 
@@ -67,10 +68,10 @@ async def test_register_auto_start_does_not_double_start(monkeypatch):
     assert summary.status == StrategyState.stopped
     assert runner._tasks == {}
 
-    async def short_run_loop(strategy, summary_obj):
+    async def short_run_loop(strategy, summary_obj, risk=None, executor=None):
         summary_obj.status = StrategyState.running
 
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         started = await runner.start(summary.id)
         assert started.status == StrategyState.running
         # cancel created task to avoid leak
