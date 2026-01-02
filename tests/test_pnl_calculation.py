@@ -291,8 +291,10 @@ class TestPositionInfoUpdate:
         
         # update_position_info uses account_manager.get_account_client(), not runner.client
         # So we need to mock the account manager's client
-        account_client = runner.client_manager.get_account_client("default")
+        account_client = runner.client
         account_client.get_open_position = MagicMock(return_value=mock_position)
+        # Mock account_manager.get_account_client to return our mocked client
+        runner.state_manager.account_manager.get_account_client = MagicMock(return_value=account_client)
         
         # Create strategy summary
         summary = StrategySummary(

@@ -183,7 +183,7 @@ async def test_stop_sets_stopped_at_timestamp():
     async def short_run_loop(strategy, summary_obj, risk, executor):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # Start the strategy
         started = await runner.start(strategy_id)
         started.started_at = datetime.now(timezone.utc)
@@ -238,7 +238,7 @@ async def test_multiple_start_stop_cycles_update_timestamps():
     async def short_run_loop(strategy, summary_obj, risk, executor):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # First start
         started1 = await runner.start(strategy_id)
         first_started_at = started1.started_at
@@ -295,7 +295,7 @@ async def test_started_at_persists_in_database():
     async def short_run_loop(strategy, summary_obj, risk, executor):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         started = await runner.start(strategy_id)
         
         # Verify database update was called
@@ -347,7 +347,7 @@ async def test_stopped_at_persists_in_database():
     async def short_run_loop(strategy, summary_obj, risk, executor):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # Start first
         await runner.start(strategy_id)
         
@@ -465,7 +465,7 @@ async def test_backward_compatibility_no_database():
     async def short_run_loop(strategy, summary_obj, risk, executor):
         summary_obj.status = StrategyState.running
     
-    with patch.object(StrategyRunner, "_run_loop", side_effect=short_run_loop):
+    with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # Start should work even without database
         started = await runner.start(strategy_id)
         # Without database, started_at might not be set, but should not crash
