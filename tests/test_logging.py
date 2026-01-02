@@ -14,6 +14,9 @@ def test_configure_logging_creates_file_and_writes(tmp_path, monkeypatch):
 
     test_message = "Log file integration smoke-test"
     logger.info(test_message)
+    
+    # Wait for queued messages to be written (enqueue=True means async writing)
+    logger.complete()
 
     contents = log_file.read_text()
     assert test_message in contents
