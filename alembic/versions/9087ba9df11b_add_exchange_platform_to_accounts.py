@@ -19,9 +19,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    pass
+    # Add exchange_platform column to accounts table
+    op.add_column('accounts', sa.Column('exchange_platform', sa.String(length=50), nullable=False, server_default='binance'))
+    # Create index for faster queries
+    op.create_index(op.f('ix_accounts_exchange_platform'), 'accounts', ['exchange_platform'], unique=False)
 
 
 def downgrade() -> None:
-    pass
+    # Remove index
+    op.drop_index(op.f('ix_accounts_exchange_platform'), table_name='accounts')
+    # Remove column
+    op.drop_column('accounts', 'exchange_platform')
 

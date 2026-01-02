@@ -9,6 +9,7 @@ pipeline {
     DEPLOY_PATH = '/home/jenkins-deploy/binance-bot'
     DEPLOY_BRANCH = 'main'
     DEPLOY_COMPOSE_FILE = 'docker-compose.prod.yml'
+    RUN_TESTS = 'true'  // Enable tests by default
   }
 
   options { timestamps() }
@@ -34,12 +35,11 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Run Tests (optional)') {
-      // Tests are skipped during deployment to save CPU resources
-      // Set RUN_TESTS=true in Jenkins environment to enable tests
+    stage('Run Tests') {
+      // Tests run by default. Set RUN_TESTS=false to skip tests
       when { 
         expression { 
-          return fileExists('requirements.txt') && env.RUN_TESTS == 'true' 
+          return fileExists('requirements.txt') && env.RUN_TESTS != 'false' 
         } 
       }
       steps {
@@ -53,8 +53,18 @@ pipeline {
               pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              # Run only CI-marked tests (fast, essential tests)
-              pytest -q -m ci
+              # Run all tests except slow ones (default)
+              # Set TEST_MODE=ci to run only CI-marked tests, or TEST_MODE=all to run all tests including slow
+              if [ "${TEST_MODE:-standard}" = "ci" ]; then
+                echo "Running CI-marked tests only..."
+                pytest -q -m ci
+              elif [ "${TEST_MODE:-standard}" = "all" ]; then
+                echo "Running all tests including slow ones..."
+                pytest -q
+              else
+                echo "Running all tests except slow ones (default)..."
+                pytest -q -m "not slow"
+              fi
             '''
           } else {
             powershell '''
@@ -65,8 +75,19 @@ pipeline {
               python -m pip install -U pip
               pip install -r requirements.txt
               pip install pytest pytest-asyncio
-              # Run only CI-marked tests (fast, essential tests)
-              pytest -q -m ci
+              # Run all tests except slow ones (default)
+              # Set TEST_MODE=ci to run only CI-marked tests, or TEST_MODE=all to run all tests including slow
+              $testMode = if ($env:TEST_MODE) { $env:TEST_MODE } else { "standard" }
+              if ($testMode -eq "ci") {
+                Write-Host "Running CI-marked tests only..."
+                pytest -q -m ci
+              } elseif ($testMode -eq "all") {
+                Write-Host "Running all tests including slow ones..."
+                pytest -q
+              } else {
+                Write-Host "Running all tests except slow ones (default)..."
+                pytest -q -m "not slow"
+              }
             '''
           }
         }
