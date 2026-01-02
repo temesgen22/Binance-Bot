@@ -1696,6 +1696,9 @@ async def start_walk_forward_analysis(
                f"optimization_method={walk_forward_request.optimization_method}")
     
     # Generate windows to get total count
+    # Note: This is synchronous but should be fast (< 1 second for reasonable ranges)
+    # If this becomes a bottleneck, consider making it async or caching
+    logger.debug(f"Generating walk-forward windows for range {walk_forward_request.start_time} to {walk_forward_request.end_time}")
     windows = generate_walk_forward_windows(
         start_time=walk_forward_request.start_time,
         end_time=walk_forward_request.end_time,
@@ -1704,6 +1707,7 @@ async def start_walk_forward_analysis(
         step_days=walk_forward_request.step_size_days,
         window_type=walk_forward_request.window_type
     )
+    logger.debug(f"Generated {len(windows)} walk-forward windows")
     
     # Get task manager
     task_manager = get_task_manager()

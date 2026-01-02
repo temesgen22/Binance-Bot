@@ -1275,8 +1275,21 @@ class BinanceClient:
             return None
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
+            # Handle API key format invalid error (-2014)
+            if error_code == -2014:
+                api_key_preview = self._rest.api_key[:10] + "..." if self._rest and self._rest.api_key else "None"
+                logger.error(
+                    f"❌ API key format invalid (code -2014) for {symbol}. "
+                    f"API key preview: {api_key_preview}. "
+                    f"This usually means:\n"
+                    f"  1. The API key is invalid or corrupted\n"
+                    f"  2. The account is using 'demo' placeholder keys\n"
+                    f"  3. The API keys were not properly loaded from the database\n"
+                    f"  Please check your account configuration and ensure valid Binance API keys are set."
+                )
+                return None
             # Handle timestamp synchronization error (-1021)
-            if error_code == -1021:
+            elif error_code == -1021:
                 logger.warning(
                     f"Timestamp synchronization error for {symbol}: {exc}. "
                     f"Your system clock is ahead of Binance server time. "

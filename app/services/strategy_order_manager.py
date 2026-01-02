@@ -270,16 +270,9 @@ class StrategyOrderManager:
                         self._trades[summary.id] = []
                     self._trades[summary.id].append(order_with_exit_reason)
                 
-                # Save to Redis if enabled (via persistence if available)
-                if self.redis and self.redis.enabled:
-                    try:
-                        trades = self._trades.get(summary.id, [])
-                        trades_data = [trade.model_dump(mode='json') for trade in trades]
-                        self.redis.save_trades(summary.id, trades_data)
-                    except Exception as exc:
-                        logger.warning(f"Failed to save trades for {summary.id} to Redis: {exc}")
-                
                 # CRITICAL: Save to database immediately after order execution
+                # Note: trade_service.save_trade() also handles Redis caching automatically,
+                # so we don't need to manually save to Redis here (avoids duplicate Redis writes)
                 # This ensures orders are persisted even if system restarts
                 if self.trade_service and self.user_id and self.strategy_service:
                     try:
@@ -314,8 +307,8 @@ class StrategyOrderManager:
                             try:
                                 from app.models.db_models import Trade as DBTrade
                                 existing_trade = self.strategy_service.db_service.db.query(DBTrade).filter(
-                                    Trade.strategy_id == db_strategy.id,
-                                    Trade.order_id == order_response.order_id
+                                    DBTrade.strategy_id == db_strategy.id,
+                                    DBTrade.order_id == order_response.order_id
                                 ).first()
                                 
                                 if existing_trade:
@@ -441,6 +434,9 @@ class StrategyOrderManager:
             self._trades[strategy_id].append(order_with_exit_reason)
         
         # Save to database if TradeService is available
+        # Note: This method is primarily for in-memory tracking.
+        # Database save should be handled by the caller using trade_service.save_trade()
+        # which also handles Redis caching automatically.
         if self.trade_service and self.user_id:
             try:
                 # Get strategy UUID from database
@@ -450,14 +446,8 @@ class StrategyOrderManager:
             except Exception as e:
                 logger.warning(f"Failed to save trade to database: {e}")
         
-        # Optionally save to Redis if enabled
-        if self.redis and self.redis.enabled:
-            try:
-                trades = self._trades.get(strategy_id, [])
-                trades_data = [trade.model_dump(mode='json') for trade in trades]
-                self.redis.save_trades(strategy_id, trades_data)
-            except Exception as exc:
-                logger.warning(f"Failed to save trades for {strategy_id} to Redis: {exc}")
+        # Note: Redis save is handled by trade_service.save_trade() when called by the caller.
+        # We don't save to Redis here to avoid duplicate writes and ensure consistent key format.
     
     async def place_tp_sl_orders(self, summary: StrategySummary, entry_order: OrderResponse) -> None:
         """Place Binance native TP/SL orders when opening a position.

@@ -1400,8 +1400,21 @@
                 }
                 
             } catch (err) {
-                console.error('Backtest error:', err);
-                error.textContent = `Error: ${err.message}`;
+                console.error('Walk-forward error:', err);
+                // Provide more helpful error messages
+                let errorMsg = err.message;
+                if (err.message.includes('504') || err.message.includes('Gateway Timeout')) {
+                    errorMsg = 'Gateway Timeout: The server took too long to respond. ' +
+                        'This usually means:\n' +
+                        '1. The request is too large (too many windows)\n' +
+                        '2. Nginx timeout is too short\n' +
+                        '3. Server is overloaded\n\n' +
+                        'Try reducing the date range or increasing step size. ' +
+                        'Contact administrator if the problem persists.';
+                } else if (err.message.includes('Authentication') || err.message.includes('401') || err.message.includes('403')) {
+                    errorMsg = 'Authentication Error: Please check your login status and try again.';
+                }
+                error.textContent = `Error: ${errorMsg}`;
                 error.style.display = 'block';
             } finally {
                 loading.style.display = 'none';
@@ -1444,7 +1457,24 @@
                             } else {
                                 // HTML or other non-JSON response
                                 const text = await response.text();
-                                errorMessage = `Server returned HTML instead of JSON. This usually means an authentication error or server misconfiguration. Status: ${response.status}`;
+                                
+                                // Distinguish between timeout and auth errors
+                                if (response.status === 504) {
+                                    errorMessage = `Gateway Timeout (504): The server took too long to respond. This usually means:\n` +
+                                        `1. The walk-forward analysis request is too large (too many windows)\n` +
+                                        `2. Nginx timeout is too short (default: 60s)\n` +
+                                        `3. Server is overloaded\n\n` +
+                                        `Solutions:\n` +
+                                        `- Reduce the date range or increase step size to create fewer windows\n` +
+                                        `- Contact administrator to increase nginx timeout settings\n` +
+                                        `- Try again later when server load is lower`;
+                                } else if (response.status === 502 || response.status === 503) {
+                                    errorMessage = `Server Error (${response.status}): The server is temporarily unavailable. Please try again later.`;
+                                } else if (response.status === 401 || response.status === 403) {
+                                    errorMessage = `Authentication Error (${response.status}): Please check your login status and try again.`;
+                                } else {
+                                    errorMessage = `Server returned HTML instead of JSON. This usually means an authentication error or server misconfiguration. Status: ${response.status}`;
+                                }
                                 console.error('Non-JSON error response:', text.substring(0, 200));
                             }
                         } catch (e) {

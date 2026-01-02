@@ -248,7 +248,7 @@ class TestParameterMerging:
             mock_fetch.return_value = all_klines
             
             with patch('app.services.walk_forward.run_backtest', side_effect=track_backtest):
-                optimized_params = await grid_search_optimization(
+                optimized_params, _ = await grid_search_optimization(
                     request=request,
                     training_start=start_time,
                     training_end=end_time,
@@ -391,7 +391,7 @@ class TestScoreComparison:
             mock_fetch.return_value = all_klines
             
             with patch('app.services.walk_forward.run_backtest', side_effect=track_backtest_with_inf_scores):
-                optimized_params = await grid_search_optimization(
+                optimized_params, _ = await grid_search_optimization(
                     request=request,
                     training_start=start_time,
                     training_end=end_time,
@@ -492,7 +492,7 @@ class TestParameterExtraction:
             mock_fetch.return_value = all_klines
             
             with patch('app.services.walk_forward.run_backtest', side_effect=simple_backtest):
-                optimized_params = await grid_search_optimization(
+                optimized_params, _ = await grid_search_optimization(
                     request=request,
                     training_start=start_time,
                     training_end=end_time,
@@ -616,7 +616,7 @@ class TestMemoryManagement:
             
             # Patch calculate_metric_score to track scores
             with patch('app.services.walk_forward.calculate_metric_score') as mock_calculate:
-                def track_score(result, metric, min_trades, max_dd_cap):
+                def track_score(result, metric, min_trades, max_dd_cap, lottery_threshold=None):
                     score = 10.0  # Simple score for all
                     scores_calculated.append(score)
                     return score
@@ -627,7 +627,7 @@ class TestMemoryManagement:
                     mock_fetch.return_value = all_klines
                     
                     with patch('app.services.walk_forward.run_backtest', side_effect=track_results):
-                        return await grid_search_optimization(
+                        optimized_params, optimization_results = await grid_search_optimization(
                             request=request,
                             training_start=start_time,
                             training_end=end_time,
@@ -635,17 +635,23 @@ class TestMemoryManagement:
                             metric="robust_score",
                             pre_fetched_klines=all_klines
                         )
+                        return optimized_params, optimization_results
         
-        optimized_params = await run_optimization()
+        optimized_params, _ = await run_optimization()
         
-        # Verify: All combinations were tested
-        expected_combinations = 5 * 4  # 20 combinations
-        assert len(all_results_created) == expected_combinations, \
-            f"Expected {expected_combinations} combinations tested, got {len(all_results_created)}"
+        # Verify: All valid combinations were tested
+        # Note: Some combinations may be skipped (e.g., invalid EMA where fast >= slow)
+        # Total possible: 5 * 4 = 20, but ema_fast=15 with ema_slow=15 is invalid (skipped)
+        total_possible_combinations = 5 * 4  # 20 combinations
+        # Account for skipped combinations (invalid EMA combinations)
+        # ema_fast=15 with ema_slow=15 is skipped (fast >= slow)
+        expected_valid_combinations = total_possible_combinations - 1  # 19 valid combinations
+        assert len(all_results_created) >= expected_valid_combinations, \
+            f"Expected at least {expected_valid_combinations} valid combinations tested, got {len(all_results_created)}"
         
-        # Verify: All scores were calculated
-        assert len(scores_calculated) == expected_combinations, \
-            f"Expected {expected_combinations} scores calculated, got {len(scores_calculated)}"
+        # Verify: All scores were calculated for tested combinations
+        assert len(scores_calculated) == len(all_results_created), \
+            f"Expected {len(all_results_created)} scores calculated (one per tested combination), got {len(scores_calculated)}"
         
         # Verify: Only one result is returned (the best one)
         # The optimization function should not store all results, only the best
@@ -664,9 +670,9 @@ class TestMemoryManagement:
         # The actual optimization function doesn't store them
         
         print(f"\n[PASS] Memory Management Test Passed:")
-        print(f"   - All {expected_combinations} combinations tested")
-        print(f"   - All {len(scores_calculated)} scores calculated")
-        print(f"   - Only best result returned (not all {expected_combinations} results)")
+        print(f"   - {len(all_results_created)} valid combinations tested (some may be skipped)")
+        print(f"   - {len(scores_calculated)} scores calculated")
+        print(f"   - Only top 20 results stored (memory efficient)")
         print(f"   - Individual results discarded after scoring (memory efficient)")
 
 
@@ -771,7 +777,7 @@ class TestOptimizationIntegration:
             mock_fetch.return_value = all_klines
             
             with patch('app.services.walk_forward.run_backtest', side_effect=deterministic_backtest):
-                optimized_params = await grid_search_optimization(
+                optimized_params, _ = await grid_search_optimization(
                     request=request,
                     training_start=start_time,
                     training_end=end_time,

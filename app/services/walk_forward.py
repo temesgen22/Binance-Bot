@@ -881,10 +881,11 @@ async def grid_search_optimization(
                 }
                 
                 # Use min-heap to efficiently track top N results
+                # Add combination_number as tie-breaker to prevent dict comparison errors
                 if len(top_results) < MAX_STORED_RESULTS:
-                    heapq.heappush(top_results, (score, combination_result))
+                    heapq.heappush(top_results, (score, i + 1, combination_result))
                 elif score > top_results[0][0]:  # Better than worst in top N
-                    heapq.heapreplace(top_results, (score, combination_result))
+                    heapq.heapreplace(top_results, (score, i + 1, combination_result))
             else:
                 # Store failed results only if we have space (for debugging)
                 if len(top_results) < MAX_STORED_RESULTS:
@@ -902,7 +903,7 @@ async def grid_search_optimization(
                         "max_drawdown_pct": result.max_drawdown_pct,
                         "sharpe_ratio": None
                     }
-                    heapq.heappush(top_results, (float('-inf'), combination_result))
+                    heapq.heappush(top_results, (float('-inf'), i + 1, combination_result))
             
             if score == float('-inf'):
                 combinations_failed += 1
@@ -961,7 +962,7 @@ async def grid_search_optimization(
                     "max_drawdown_pct": None,
                     "sharpe_ratio": None
                 }
-                heapq.heappush(top_results, (float('-inf'), combination_result))
+                heapq.heappush(top_results, (float('-inf'), i + 1, combination_result))
             continue
     
     # Check if all combinations failed
@@ -998,11 +999,16 @@ async def grid_search_optimization(
     # MEMORY FIX: Convert heap to sorted list (best results first)
     # Extract results from heap and sort by score (descending)
     # Ensure top_results is not None and is iterable
+    # Note: Heap tuples are (score, combination_number, result_dict) to prevent dict comparison errors
     if top_results is None:
         logger.warning("top_results is None, using empty list")
         all_optimization_results = []
     else:
-        all_optimization_results = [result for _, result in sorted(top_results, key=lambda x: x[0], reverse=True)]
+        # Extract results: (score, combination_number, result_dict) -> result_dict
+        # Sort by score descending, then by combination_number ascending (earlier combinations first if scores equal)
+        all_optimization_results = [
+            result for _, _, result in sorted(top_results, key=lambda x: (x[0], -x[1]), reverse=True)
+        ]
     
     # Ensure all_optimization_results is always a list, never None
     if all_optimization_results is None:

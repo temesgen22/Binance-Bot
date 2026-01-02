@@ -331,119 +331,118 @@ def get_symbol_pnl(
     if account_id:
         symbol_strategies = [s for s in symbol_strategies if s.account_id == account_id]
     
-    if not symbol_strategies:
-        # Return empty PnL if no strategies found
-        return SymbolPnL(symbol=symbol)
-    
-    # Collect all trades for this symbol
+    # Initialize variables for trade-based calculations
     all_trades: List[OrderResponse] = []
-    for strategy in symbol_strategies:
-        trades = runner.get_trades(strategy.id)
-        all_trades.extend(trades)
-    
-    # CRITICAL: Sort trades by timestamp (oldest first) for correct FIFO position matching
-    # The position queue logic requires trades to be processed in chronological order
-    all_trades.sort(key=lambda t: t.timestamp or t.update_time or datetime.min.replace(tzinfo=timezone.utc))
-    
-    # Calculate completed trades and realized PnL
     completed_trades = []
     position_queue = []  # List of (quantity, entry_price, side, strategy_id, strategy_name) tuples
-    
-    # Build a map of order_id to strategy for faster lookup
     order_to_strategy = {}
-    for strategy in symbol_strategies:
-        strategy_trades = runner.get_trades(strategy.id)
-        for t in strategy_trades:
-            if t.order_id not in order_to_strategy:
-                order_to_strategy[t.order_id] = (strategy.id, strategy.name)
     
-    for trade in all_trades:
-        entry_price = trade.avg_price or trade.price
-        quantity = trade.executed_qty
-        side = trade.side
-        
-        # Find strategy info from map
-        strategy_id, strategy_name = order_to_strategy.get(trade.order_id, (None, None))
-        
-        if side == "BUY":
-            if position_queue and position_queue[0][2] == "SHORT":
-                # Closing or reducing SHORT position
-                remaining_qty = quantity
-                while remaining_qty > 0 and position_queue and position_queue[0][2] == "SHORT":
-                    short_entry = position_queue[0]
-                    short_qty = short_entry[0]
-                    short_price = short_entry[1]
-                    short_strategy_id = short_entry[3]
-                    short_strategy_name = short_entry[4]
-                    
-                    if short_qty <= remaining_qty:
-                        close_qty = short_qty
-                        position_queue.pop(0)
-                    else:
-                        close_qty = remaining_qty
-                        position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT", short_strategy_id, short_strategy_name)
-                    
-                    # PnL for SHORT: entry_price - exit_price
-                    pnl = (short_price - entry_price) * close_qty
-                    completed_trades.append(TradeSummary(
-                        symbol=symbol,
-                        entry_price=short_price,
-                        exit_price=entry_price,
-                        quantity=close_qty,
-                        side="SHORT",
-                        realized_pnl=pnl,
-                        strategy_id=short_strategy_id,
-                        strategy_name=short_strategy_name,
-                    ))
-                    remaining_qty -= close_qty
-                
-                # If remaining quantity after closing SHORT, open LONG
-                if remaining_qty > 0:
-                    position_queue.append((remaining_qty, entry_price, "LONG", strategy_id, strategy_name))
-            else:
-                # Opening or adding to LONG position
-                position_queue.append((quantity, entry_price, "LONG", strategy_id, strategy_name))
-        
-        elif side == "SELL":
-            if position_queue and position_queue[0][2] == "LONG":
-                # Closing or reducing LONG position
-                remaining_qty = quantity
-                while remaining_qty > 0 and position_queue and position_queue[0][2] == "LONG":
-                    long_entry = position_queue[0]
-                    long_qty = long_entry[0]
-                    long_price = long_entry[1]
-                    long_strategy_id = long_entry[3]
-                    long_strategy_name = long_entry[4]
-                    
-                    if long_qty <= remaining_qty:
-                        close_qty = long_qty
-                        position_queue.pop(0)
-                    else:
-                        close_qty = remaining_qty
-                        position_queue[0] = (long_qty - remaining_qty, long_price, "LONG", long_strategy_id, long_strategy_name)
-                    
-                    # PnL for LONG: exit_price - entry_price
-                    pnl = (entry_price - long_price) * close_qty
-                    completed_trades.append(TradeSummary(
-                        symbol=symbol,
-                        entry_price=long_price,
-                        exit_price=entry_price,
-                        quantity=close_qty,
-                        side="LONG",
-                        realized_pnl=pnl,
-                        strategy_id=long_strategy_id,
-                        strategy_name=long_strategy_name,
-                    ))
-                    remaining_qty -= close_qty
-                
-                # If remaining quantity after closing LONG, open SHORT
-                if remaining_qty > 0:
-                    position_queue.append((remaining_qty, entry_price, "SHORT", strategy_id, strategy_name))
-            else:
-                # Opening or adding to SHORT position
-                position_queue.append((quantity, entry_price, "SHORT", strategy_id, strategy_name))
+    # Only calculate trade-based PnL if there are strategies with trades
+    if symbol_strategies:
+        # Collect all trades for this symbol
+        for strategy in symbol_strategies:
+            trades = runner.get_trades(strategy.id)
+            all_trades.extend(trades)
     
-    # Calculate realized PnL statistics
+        # CRITICAL: Sort trades by timestamp (oldest first) for correct FIFO position matching
+        # The position queue logic requires trades to be processed in chronological order
+        all_trades.sort(key=lambda t: t.timestamp or t.update_time or datetime.min.replace(tzinfo=timezone.utc))
+        
+        # Build a map of order_id to strategy for faster lookup
+        for strategy in symbol_strategies:
+            strategy_trades = runner.get_trades(strategy.id)
+            for t in strategy_trades:
+                if t.order_id not in order_to_strategy:
+                    order_to_strategy[t.order_id] = (strategy.id, strategy.name)
+    
+        # Process trades to calculate realized PnL
+        for trade in all_trades:
+            entry_price = trade.avg_price or trade.price
+            quantity = trade.executed_qty
+            side = trade.side
+            
+            # Find strategy info from map
+            strategy_id, strategy_name = order_to_strategy.get(trade.order_id, (None, None))
+            
+            if side == "BUY":
+                if position_queue and position_queue[0][2] == "SHORT":
+                    # Closing or reducing SHORT position
+                    remaining_qty = quantity
+                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "SHORT":
+                        short_entry = position_queue[0]
+                        short_qty = short_entry[0]
+                        short_price = short_entry[1]
+                        short_strategy_id = short_entry[3]
+                        short_strategy_name = short_entry[4]
+                        
+                        if short_qty <= remaining_qty:
+                            close_qty = short_qty
+                            position_queue.pop(0)
+                        else:
+                            close_qty = remaining_qty
+                            position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT", short_strategy_id, short_strategy_name)
+                        
+                        # PnL for SHORT: entry_price - exit_price
+                        pnl = (short_price - entry_price) * close_qty
+                        completed_trades.append(TradeSummary(
+                            symbol=symbol,
+                            entry_price=short_price,
+                            exit_price=entry_price,
+                            quantity=close_qty,
+                            side="SHORT",
+                            realized_pnl=pnl,
+                            strategy_id=short_strategy_id,
+                            strategy_name=short_strategy_name,
+                        ))
+                        remaining_qty -= close_qty
+                    
+                    # If remaining quantity after closing SHORT, open LONG
+                    if remaining_qty > 0:
+                        position_queue.append((remaining_qty, entry_price, "LONG", strategy_id, strategy_name))
+                else:
+                    # Opening or adding to LONG position
+                    position_queue.append((quantity, entry_price, "LONG", strategy_id, strategy_name))
+            
+            elif side == "SELL":
+                if position_queue and position_queue[0][2] == "LONG":
+                    # Closing or reducing LONG position
+                    remaining_qty = quantity
+                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "LONG":
+                        long_entry = position_queue[0]
+                        long_qty = long_entry[0]
+                        long_price = long_entry[1]
+                        long_strategy_id = long_entry[3]
+                        long_strategy_name = long_entry[4]
+                        
+                        if long_qty <= remaining_qty:
+                            close_qty = long_qty
+                            position_queue.pop(0)
+                        else:
+                            close_qty = remaining_qty
+                            position_queue[0] = (long_qty - remaining_qty, long_price, "LONG", long_strategy_id, long_strategy_name)
+                        
+                        # PnL for LONG: exit_price - entry_price
+                        pnl = (entry_price - long_price) * close_qty
+                        completed_trades.append(TradeSummary(
+                            symbol=symbol,
+                            entry_price=long_price,
+                            exit_price=entry_price,
+                            quantity=close_qty,
+                            side="LONG",
+                            realized_pnl=pnl,
+                            strategy_id=long_strategy_id,
+                            strategy_name=long_strategy_name,
+                        ))
+                        remaining_qty -= close_qty
+                    
+                    # If remaining quantity after closing LONG, open SHORT
+                    if remaining_qty > 0:
+                        position_queue.append((remaining_qty, entry_price, "SHORT", strategy_id, strategy_name))
+                else:
+                    # Opening or adding to SHORT position
+                    position_queue.append((quantity, entry_price, "SHORT", strategy_id, strategy_name))
+    
+    # Calculate realized PnL statistics (only if we processed trades)
     total_realized_pnl = sum(t.realized_pnl for t in completed_trades)
     winning_trades = len([t for t in completed_trades if t.realized_pnl > 0])
     losing_trades = len([t for t in completed_trades if t.realized_pnl < 0])
