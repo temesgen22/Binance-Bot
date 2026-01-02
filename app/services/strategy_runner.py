@@ -154,6 +154,7 @@ class StrategyRunner:
             default_executor=executor,
             trade_service=None,  # Will be set later via dependency injection
             user_id=user_id,
+            strategy_service=strategy_service,  # Pass strategy_service for database lookups
             redis_storage=redis_storage,
             strategies=self._strategies,
             trades=self._trades,

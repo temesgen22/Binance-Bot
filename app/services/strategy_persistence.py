@@ -236,7 +236,16 @@ class StrategyPersistence:
         try:
             # Get account-specific client
             account_id = summary.account_id or "default"
-            account_client = self.account_manager.get_account_client(account_id)
+            logger.debug(f"Getting position for {summary.symbol} using account_id: {account_id}")
+            
+            try:
+                account_client = self.account_manager.get_account_client(account_id)
+            except RuntimeError as e:
+                logger.error(
+                    f"❌ Failed to get account client for account_id '{account_id}' when getting position for {summary.symbol}: {e}. "
+                    f"This usually means the account is not configured in the database or has invalid API keys."
+                )
+                return
             
             # Get current position from Binance (reality)
             # Wrap sync BinanceClient call in to_thread to avoid blocking event loop

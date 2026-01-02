@@ -17,6 +17,8 @@ from app.core.redis_storage import RedisStorage
 from app.services.database_service import DatabaseService
 from app.models.order import OrderResponse
 from app.models.db_models import Trade as DBTrade, Strategy
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
+from sqlalchemy.exc import IntegrityError
 
 
 class TradeService:
@@ -96,6 +98,12 @@ class TradeService:
             exit_reason=db_trade.exit_reason,
         )
     
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_not_exception_type(IntegrityError),  # Don't retry on IntegrityError (duplicates)
+        reraise=True
+    )
     def save_trade(
         self,
         user_id: UUID,
@@ -107,23 +115,58 @@ class TradeService:
         Uses transaction management: database save is atomic. If database succeeds
         but Redis fails, database is kept (database is source of truth, Redis is cache).
         
+        Includes retry logic with exponential backoff for transient database errors.
+        Handles duplicate orders gracefully by returning existing trade.
+        
         Args:
             user_id: User ID
             strategy_id: Strategy UUID (not strategy_id string)
             order: OrderResponse to save
         
         Returns:
-            DBTrade model instance
+            DBTrade model instance (existing if duplicate)
         
         Raises:
-            Exception: If database save fails (transaction will rollback)
+            Exception: If database save fails after retries (transaction will rollback)
         """
         # Convert OrderResponse to trade dict
         trade_data = self._order_response_to_trade_dict(order, strategy_id, user_id)
         
-        # Save to database within transaction (DatabaseService.create_trade handles this)
-        # If this fails, exception is raised and transaction is rolled back
-        db_trade = self.db_service.create_trade(trade_data)
+        try:
+            # Save to database within transaction (DatabaseService.create_trade handles this)
+            # If this fails, exception is raised and transaction is rolled back
+            db_trade = self.db_service.create_trade(trade_data)
+        except IntegrityError as e:
+            # Handle duplicate order gracefully
+            error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+            if 'unique' in error_msg.lower() or 'duplicate' in error_msg.lower() or 'idx_trades_strategy_order_id' in error_msg:
+                # Duplicate order detected - get existing trade
+                logger.warning(
+                    f"Duplicate order {order.order_id} for strategy {strategy_id}. "
+                    f"Returning existing trade from database."
+                )
+                # Query existing trade
+                existing_trade = self.db_service.db.query(DBTrade).filter(
+                    DBTrade.strategy_id == strategy_id,
+                    DBTrade.order_id == order.order_id
+                ).first()
+                if existing_trade:
+                    logger.info(
+                        f"Found existing trade {existing_trade.id} for order {order.order_id}. "
+                        f"This is expected for idempotent order execution."
+                    )
+                    return existing_trade
+                else:
+                    # Should not happen, but handle gracefully
+                    logger.error(
+                        f"IntegrityError for duplicate order {order.order_id}, but existing trade not found. "
+                        f"This may indicate a race condition."
+                    )
+                    raise
+            else:
+                # Not a duplicate error, re-raise
+                logger.error(f"IntegrityError saving trade {order.order_id}: {error_msg}")
+                raise
         
         # Cache in Redis (sorted set by timestamp for recent trades)
         # Note: Redis is cache, so if it fails, we don't rollback database

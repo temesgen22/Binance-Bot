@@ -106,6 +106,13 @@ def create_app() -> FastAPI:
     # Get default client for backward compatibility
     default_client = client_manager.get_default_client()
     if not default_client:
+        # Validate API keys before creating default client
+        if settings.binance_api_key in ("demo", "Demo", "DEMO", "") or settings.binance_api_secret in ("demo", "Demo", "DEMO", ""):
+            logger.warning(
+                "⚠️ Default API keys are set to 'demo' placeholder values. "
+                "This will cause 'API-key format invalid' errors when making authenticated requests. "
+                "Please configure a valid account in the database or set BINANCE_API_KEY and BINANCE_API_SECRET in .env file."
+            )
         # Fallback: create default client if no accounts configured
         default_client = BinanceClient(
             api_key=settings.binance_api_key,

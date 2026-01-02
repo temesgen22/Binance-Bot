@@ -706,9 +706,15 @@
             const allPositions = [];
             pnlData.forEach(symbol => {
                 if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
-                symbol.open_positions.forEach(pos => {
-                    allPositions.push({...pos, symbolPnL: symbol});
-                });
+                    symbol.open_positions.forEach(pos => {
+                        // BUG FIX: Ensure symbol is set (use parent symbol if missing)
+                        const positionWithSymbol = {
+                            ...pos,
+                            symbol: pos.symbol || symbol.symbol || 'N/A',
+                            symbolPnL: symbol
+                        };
+                        allPositions.push(positionWithSymbol);
+                    });
                 }
             });
 
@@ -719,6 +725,12 @@
 
             let html = '<div class="positions-grid">';
             allPositions.forEach(pos => {
+                // BUG FIX: Validate position data before displaying
+                if (!pos.position_side || (pos.position_side !== 'LONG' && pos.position_side !== 'SHORT')) {
+                    console.warn('Invalid position side:', pos);
+                    return; // Skip invalid positions
+                }
+                
                 const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
                 // Safe null checks for position data
                 const pnl = pos.unrealized_pnl || 0;
@@ -726,6 +738,12 @@
                 const entryPrice = pos.entry_price || 0;
                 const currentPrice = pos.current_price || 0;
                 const leverage = pos.leverage || 1;
+                
+                // BUG FIX: Skip positions with invalid data
+                if (entryPrice <= 0 || currentPrice <= 0 || positionSize <= 0) {
+                    console.warn('Invalid position data (zero or negative values):', pos);
+                    return; // Skip invalid positions
+                }
                 
                 html += `<div class="position-card ${sideClass}">`;
                 html += `<div class="position-header">`;
@@ -740,6 +758,9 @@
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.strategy_name) {
                     html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
+                } else {
+                    // BUG FIX: Show indicator if position not matched to strategy
+                    html += `<div class="position-detail-item"><span>Strategy:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
                 }
                 html += `</div>`;
                 html += `</div>`;

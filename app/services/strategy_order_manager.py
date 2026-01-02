@@ -22,6 +22,7 @@ from app.strategies.base import Strategy, StrategySignal
 
 if TYPE_CHECKING:
     from app.services.trade_service import TradeService
+    from app.services.strategy_service import StrategyService
     from uuid import UUID
 
 
@@ -35,6 +36,7 @@ class StrategyOrderManager:
         default_executor: Optional[OrderExecutor] = None,
         trade_service: Optional["TradeService"] = None,
         user_id: Optional["UUID"] = None,
+        strategy_service: Optional["StrategyService"] = None,
         redis_storage=None,  # Optional RedisStorage
         strategies: Optional[dict] = None,  # Reference to strategies dict
         trades: Optional[dict] = None,  # Reference to trades dict
@@ -48,6 +50,7 @@ class StrategyOrderManager:
             default_executor: Default order executor (optional)
             trade_service: Trade service for database persistence
             user_id: User ID for multi-user mode
+            strategy_service: Strategy service for looking up strategy UUID
             redis_storage: Redis storage for persistence
             strategies: Reference to strategies dictionary
             trades: Reference to trades dictionary
@@ -58,6 +61,7 @@ class StrategyOrderManager:
         self.default_executor = default_executor
         self.trade_service = trade_service
         self.user_id = user_id
+        self.strategy_service = strategy_service
         self.redis = redis_storage
         self._strategies = strategies if strategies is not None else {}
         self._trades = trades if trades is not None else {}
@@ -274,6 +278,92 @@ class StrategyOrderManager:
                         self.redis.save_trades(summary.id, trades_data)
                     except Exception as exc:
                         logger.warning(f"Failed to save trades for {summary.id} to Redis: {exc}")
+                
+                # CRITICAL: Save to database immediately after order execution
+                # This ensures orders are persisted even if system restarts
+                if self.trade_service and self.user_id and self.strategy_service:
+                    try:
+                        # Get strategy UUID from database (needed for foreign key)
+                        # Use database service directly to get Strategy model (which has UUID id)
+                        db_strategy = None
+                        if hasattr(self.strategy_service, 'db_service'):
+                            try:
+                                # DatabaseService.get_strategy returns Strategy model with UUID id
+                                db_strategy = self.strategy_service.db_service.get_strategy(
+                                    self.user_id, 
+                                    summary.id
+                                )
+                            except RuntimeError as e:
+                                # If sync method not available (async mode), log warning
+                                logger.warning(
+                                    f"[{summary.id}] ⚠️ Cannot get strategy from database (async mode): {e}. "
+                                    f"Trade {order_response.order_id} will be saved via background task or reconciliation."
+                                )
+                                db_strategy = None
+                        else:
+                            # Fallback: try strategy_service.get_strategy (returns StrategySummary, not Strategy model)
+                            # This won't work directly, but we can extract the id if available
+                            logger.warning(
+                                f"[{summary.id}] ⚠️ Strategy service has no db_service, cannot get strategy UUID. "
+                                f"Trade {order_response.order_id} may not be saved to database."
+                            )
+                        
+                        if db_strategy:
+                            # Check for duplicate before saving (optimization to avoid IntegrityError)
+                            # Note: save_trade() also handles duplicates, but this avoids the error
+                            try:
+                                from app.models.db_models import Trade as DBTrade
+                                existing_trade = self.strategy_service.db_service.db.query(DBTrade).filter(
+                                    Trade.strategy_id == db_strategy.id,
+                                    Trade.order_id == order_response.order_id
+                                ).first()
+                                
+                                if existing_trade:
+                                    logger.info(
+                                        f"[{summary.id}] Order {order_response.order_id} already exists in database. "
+                                        f"Skipping duplicate save."
+                                    )
+                                else:
+                                    # Save trade to database
+                                    self.trade_service.save_trade(
+                                        user_id=self.user_id,
+                                        strategy_id=db_strategy.id,  # UUID from database
+                                        order=order_with_exit_reason
+                                    )
+                                    logger.info(
+                                        f"[{summary.id}] ✅ Saved trade {order_response.order_id} to database "
+                                        f"({order_response.side} {order_response.executed_qty} {order_response.symbol})"
+                                    )
+                            except Exception as check_exc:
+                                # If duplicate check fails, still try to save (save_trade handles duplicates)
+                                logger.warning(
+                                    f"[{summary.id}] Error checking for duplicate order: {check_exc}. "
+                                    f"Attempting save anyway (will handle duplicates)."
+                                )
+                                self.trade_service.save_trade(
+                                    user_id=self.user_id,
+                                    strategy_id=db_strategy.id,
+                                    order=order_with_exit_reason
+                                )
+                                logger.info(
+                                    f"[{summary.id}] ✅ Saved trade {order_response.order_id} to database "
+                                    f"({order_response.side} {order_response.executed_qty} {order_response.symbol})"
+                                )
+                        else:
+                            logger.warning(
+                                f"[{summary.id}] ⚠️ Could not find strategy in database to save trade {order_response.order_id}. "
+                                f"Trade exists in Binance but not recorded in database."
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"[{summary.id}] ❌ CRITICAL: Failed to save trade {order_response.order_id} to database: {e}. "
+                            f"Order exists in Binance (order_id={order_response.order_id}) but not recorded in database. "
+                            f"This may cause PnL calculation errors and incomplete trade history. "
+                            f"Please check database connection and retry manually if needed.",
+                            exc_info=True
+                        )
+                        # Don't raise - order is already in Binance, can't undo
+                        # Trade is still tracked in memory/Redis, can be recovered later
                 
                 # Update entry price and position size based on order side
                 if order_response.side == "BUY":

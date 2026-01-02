@@ -838,7 +838,10 @@
             
             // Position info
             html += '<div class="detail-section"><h4>Current Position</h4>';
-            if (strategy.position_size && strategy.position_size > 0) {
+            // BUG FIX: Check for position_side instead of position_size > 0
+            // position_size is always positive (absolute value), position_side indicates direction
+            // This fixes the bug where SHORT positions weren't displayed
+            if (strategy.position_side && strategy.position_size && strategy.position_size !== 0) {
                 html += `<div class="detail-item"><label>Position Side:</label><value><span class="badge ${strategy.position_side === 'LONG' ? 'success' : 'danger'}">${strategy.position_side}</span></value></div>`;
                 html += `<div class="detail-item"><label>Position Size:</label><value>${strategy.position_size.toFixed(4)}</value></div>`;
                 html += `<div class="detail-item"><label>Entry Price:</label><value>$${strategy.entry_price?.toFixed(4) || 'N/A'}</value></div>`;

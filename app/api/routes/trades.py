@@ -460,56 +460,77 @@ def get_symbol_pnl(
             account_client = client_manager.get_client(account_id)
             if account_client:
                 position_client = account_client
+                logger.debug(f"Using account-specific client for {account_id} to get position for {symbol}")
+            else:
+                logger.warning(
+                    f"⚠️ Account '{account_id}' not found in client manager. "
+                    f"Falling back to default client. This may cause API key errors if default client has invalid keys."
+                )
         except Exception as exc:
-            logger.warning(f"Could not get account-specific client for {account_id}, using default: {exc}")
+            logger.warning(
+                f"⚠️ Could not get account-specific client for {account_id}, using default: {exc}. "
+                f"This may cause API key errors if default client has invalid keys."
+            )
     
     try:
+        logger.debug(f"Getting position for {symbol} using client (account_id: {account_id or 'default'})")
         position_data = position_client.get_open_position(symbol)
         if position_data:
             position_side = "LONG" if position_data["positionAmt"] > 0 else "SHORT"
             binance_position_size = abs(position_data["positionAmt"])
             
             # Find matching strategy - verify position size and side match
+            # Use best match (closest size) instead of first match
             strategy_match = None
+            best_match_score = float('inf')
+            
             for strategy in symbol_strategies:
                 if strategy.position_size and abs(strategy.position_size) > 0:
                     # Check if position side matches
                     strategy_side = "LONG" if strategy.position_size > 0 else "SHORT"
                     if strategy_side == position_side:
-                        # Position sizes should be approximately equal (allow small difference for rounding)
-                        size_diff = abs(abs(strategy.position_size) - binance_position_size)
-                        if size_diff < 0.01 or size_diff / max(abs(strategy.position_size), binance_position_size, 0.01) < 0.05:
-                            strategy_match = strategy
-                            break
+                        # Calculate size difference (absolute and relative)
+                        strategy_size = abs(strategy.position_size)
+                        size_diff_abs = abs(strategy_size - binance_position_size)
+                        size_diff_rel = size_diff_abs / max(strategy_size, binance_position_size, 0.01)
+                        
+                        # Match if within tolerance (5% relative or 0.01 absolute)
+                        if size_diff_abs < 0.01 or size_diff_rel < 0.05:
+                            # Use the match with smallest difference (best match)
+                            if size_diff_rel < best_match_score:
+                                best_match_score = size_diff_rel
+                                strategy_match = strategy
             
-            # If no exact match found, try to find any strategy for this symbol
-            if not strategy_match and symbol_strategies:
-                # Use first strategy as fallback (might be a partial match or manual position)
-                strategy_match = symbol_strategies[0]
+            # BUG FIX: Don't use fallback to first strategy - leave as None if no match
+            # This prevents incorrectly attributing positions to wrong strategies
+            if not strategy_match:
                 logger.debug(
-                    f"Position for {symbol} doesn't exactly match any strategy. "
+                    f"Position for {symbol} doesn't match any strategy. "
                     f"Binance: {binance_position_size} {position_side}, "
-                    f"Using strategy: {strategy_match.name}"
+                    f"Available strategies: {[(s.name, abs(s.position_size) if s.position_size else 0, 'LONG' if s.position_size and s.position_size > 0 else 'SHORT' if s.position_size and s.position_size < 0 else 'NONE') for s in symbol_strategies]}"
                 )
             
-            # Validate position data
+            # Validate position data - skip invalid positions
             if position_data["entryPrice"] <= 0:
-                logger.warning(f"Invalid entry price for {symbol}: {position_data['entryPrice']}")
-            if position_data["markPrice"] <= 0:
-                logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}")
-            
-            open_positions.append(PositionSummary(
-                symbol=symbol,
-                position_size=binance_position_size,
-                entry_price=position_data["entryPrice"],
-                current_price=position_data["markPrice"],
-                position_side=position_side,
-                unrealized_pnl=position_data["unRealizedProfit"],
-                leverage=position_data["leverage"],
-                strategy_id=strategy_match.id if strategy_match else None,
-                strategy_name=strategy_match.name if strategy_match else None,
-            ))
-            total_unrealized_pnl = position_data["unRealizedProfit"]
+                logger.warning(f"Invalid entry price for {symbol}: {position_data['entryPrice']}. Skipping position.")
+                # Skip this position - don't add it, but continue with rest of function
+            elif position_data["markPrice"] <= 0:
+                logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}. Skipping position.")
+                # Skip this position - don't add it, but continue with rest of function
+            else:
+                # Position data is valid, add it
+                open_positions.append(PositionSummary(
+                    symbol=symbol,
+                    position_size=binance_position_size,
+                    entry_price=position_data["entryPrice"],
+                    current_price=position_data["markPrice"],
+                    position_side=position_side,
+                    unrealized_pnl=position_data["unRealizedProfit"],
+                    leverage=position_data["leverage"],
+                    strategy_id=strategy_match.id if strategy_match else None,
+                    strategy_name=strategy_match.name if strategy_match else None,
+                ))
+                total_unrealized_pnl = position_data["unRealizedProfit"]
             
             # Log if position doesn't match any strategy's tracked position
             if symbol_strategies:

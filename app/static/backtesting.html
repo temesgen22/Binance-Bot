@@ -1431,8 +1431,35 @@
                     },
                     body: JSON.stringify(walkForwardRequest)
                 })
-                .then(response => response.json())
+                .then(async response => {
+                    // Check if response is OK before parsing JSON
+                    if (!response.ok) {
+                        // Try to parse error as JSON, fallback to text
+                        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        try {
+                            const contentType = response.headers.get('content-type');
+                            if (contentType && contentType.includes('application/json')) {
+                                const errorData = await response.json();
+                                errorMessage = errorData.detail || errorData.message || errorMessage;
+                            } else {
+                                // HTML or other non-JSON response
+                                const text = await response.text();
+                                errorMessage = `Server returned HTML instead of JSON. This usually means an authentication error or server misconfiguration. Status: ${response.status}`;
+                                console.error('Non-JSON error response:', text.substring(0, 200));
+                            }
+                        } catch (e) {
+                            // Failed to parse error response
+                            console.error('Error parsing error response:', e);
+                        }
+                        throw new Error(errorMessage);
+                    }
+                    // Response is OK, parse as JSON
+                    return response.json();
+                })
                 .then(data => {
+                    if (!data || !data.task_id) {
+                        throw new Error('Invalid response: missing task_id');
+                    }
                     currentWalkForwardTaskId = data.task_id;
                     
                     // Set up stop button handler
@@ -1553,7 +1580,13 @@
                     };
                 })
                 .catch(err => {
-                    reject(err);
+                    console.error('Error starting walk-forward analysis:', err);
+                    // Provide user-friendly error message
+                    let errorMessage = err.message || 'Failed to start walk-forward analysis';
+                    if (errorMessage.includes('HTML instead of JSON')) {
+                        errorMessage = 'Authentication error or server misconfiguration. Please check your login status and try again.';
+                    }
+                    reject(new Error(errorMessage));
                 });
             });
         }
