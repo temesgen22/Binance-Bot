@@ -500,6 +500,7 @@ def get_trading_report(
                 if strategy_uuid_map:
                     # Batch fetch trades from database
                     uuid_list = [UUID(uuid_str) for uuid_str in strategy_uuid_map.values()]
+                    logger.info(f"Reports: Fetching trades from database for {len(uuid_list)} strategies (UUIDs: {[str(u) for u in uuid_list[:3]]}...)")
                     trades_by_uuid = trade_service.get_trades_batch(
                         user_id=current_user.id,
                         strategy_ids=uuid_list,
@@ -511,8 +512,10 @@ def get_trading_report(
                         strategy_uuid = UUID(uuid_str)
                         if strategy_uuid in trades_by_uuid:
                             trades_by_strategy[strategy_id] = trades_by_uuid[strategy_uuid]
+                            logger.debug(f"Reports: Strategy {strategy_id} (UUID {uuid_str}) has {len(trades_by_uuid[strategy_uuid])} trades from database")
                         else:
                             trades_by_strategy[strategy_id] = []
+                            logger.warning(f"Reports: Strategy {strategy_id} (UUID {uuid_str}) has no trades in database result")
                     
                     logger.info(f"Reports: Fetched {sum(len(t) for t in trades_by_strategy.values())} trades from database for {len(trades_by_strategy)} strategies")
                 else:
@@ -566,7 +569,7 @@ def get_trading_report(
             try:
                 # Get trades for this strategy (from batch-loaded data)
                 trades = trades_by_strategy.get(strategy.id, [])
-                logger.debug(f"Reports: Strategy {strategy.id} has {len(trades)} trades")
+                logger.info(f"Reports: Strategy {strategy.id} ({strategy.name}) has {len(trades)} raw trades from database")
                 
                 # Match trades to form completed positions
                 completed_trades_list = _match_trades_to_completed_positions(
@@ -576,6 +579,7 @@ def get_trading_report(
                     strategy.symbol,
                     strategy.leverage,
                 )
+                logger.info(f"Reports: Strategy {strategy.id} has {len(completed_trades_list)} completed trades after matching")
                 
                 # Apply date filters to trades
                 if start_datetime or end_datetime:
@@ -592,6 +596,7 @@ def get_trading_report(
                             if end_datetime and trade_time > end_datetime:
                                 continue
                         filtered_trades.append(trade)
+                    logger.info(f"Reports: Strategy {strategy.id} has {len(filtered_trades)} trades after date filtering (from {len(completed_trades_list)} completed trades)")
                     completed_trades_list = filtered_trades
                 
                 # Calculate strategy statistics (single pass for efficiency)
