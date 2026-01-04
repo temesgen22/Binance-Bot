@@ -238,7 +238,8 @@ class OrderExecutor:
         strategy_id: Optional[str] = None,  # For idempotency tracking
     ) -> OrderResponse | None:
         if signal.action == "HOLD":
-            logger.info(f"HOLD signal for {signal.symbol}, skipping order")
+            # Use debug level to reduce log noise (HOLD is very repetitive)
+            logger.debug(f"HOLD signal for {signal.symbol}, skipping order")
             return None
 
         # Binance Futures One-Way Mode semantics:

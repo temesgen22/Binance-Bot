@@ -145,14 +145,22 @@ class StrategyExecutor:
                 signal = await strategy.evaluate()
                 summary.last_signal = signal.action  # type: ignore[assignment]
                 
-                # Log all signals for debugging
-                logger.info(
-                    f"[{summary.id}] Signal: {signal.action} | "
-                    f"Symbol: {signal.symbol} | "
-                    f"Price: {signal.price} | "
-                    f"Confidence: {signal.confidence} | "
-                    f"Exit Reason: {signal.exit_reason or 'N/A'}"
-                )
+                # Log signals (skip HOLD to reduce log noise)
+                if signal.action != "HOLD":
+                    logger.info(
+                        f"[{summary.id}] Signal: {signal.action} | "
+                        f"Symbol: {signal.symbol} | "
+                        f"Price: {signal.price} | "
+                        f"Confidence: {signal.confidence} | "
+                        f"Exit Reason: {signal.exit_reason or 'N/A'}"
+                    )
+                else:
+                    # Only log HOLD at debug level to reduce noise
+                    logger.debug(
+                        f"[{summary.id}] Signal: HOLD | "
+                        f"Symbol: {signal.symbol} | "
+                        f"Price: {signal.price}"
+                    )
                 
                 # 5) Update current price for UI/stats (not critical to logic)
                 # Wrap sync BinanceClient call in to_thread to avoid blocking event loop
@@ -325,12 +333,32 @@ class StrategyExecutor:
                 f"{order_response.side} {order_response.symbol} "
                 f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
             )
+            # Send Telegram notification for opening position
+            if self.notifications:
+                asyncio.create_task(
+                    self.notifications.notify_order_executed(
+                        summary,
+                        order_response,
+                        position_action="OPEN",
+                        exit_reason=None,
+                    )
+                )
         elif is_closing_order:
             logger.info(
                 f"[{summary.id}] 🔴 CLOSE {position_direction} position (reason: {exit_reason}): "
                 f"{order_response.side} {order_response.symbol} "
                 f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
             )
+            # Send Telegram notification for closing position
+            if self.notifications:
+                asyncio.create_task(
+                    self.notifications.notify_order_executed(
+                        summary,
+                        order_response,
+                        position_action="CLOSE",
+                        exit_reason=exit_reason,
+                    )
+                )
         else:
             logger.info(
                 f"[{summary.id}] 📊 Trade executed: "
@@ -338,6 +366,16 @@ class StrategyExecutor:
                 f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f} "
                 f"(position: {position_direction}, exit_reason: {exit_reason})"
             )
+            # Send Telegram notification for trade execution
+            if self.notifications:
+                asyncio.create_task(
+                    self.notifications.notify_order_executed(
+                        summary,
+                        order_response,
+                        position_action="TRADE",
+                        exit_reason=exit_reason,
+                    )
+                )
         
         # Place Binance native TP/SL orders when opening a new position
         has_position = summary.position_size and summary.position_size > 0

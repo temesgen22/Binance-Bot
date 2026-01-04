@@ -10,6 +10,7 @@ import httpx
 from loguru import logger
 
 from app.models.strategy import StrategySummary, StrategyState
+from app.models.order import OrderResponse
 
 
 class NotificationLevel(str, Enum):
@@ -194,6 +195,32 @@ class TelegramNotifier:
             if additional_info.get("error"):
                 error_msg = str(additional_info['error'])[:200]
                 message += f"<code>{error_msg}</code>\n"
+        
+        elif notification_type == NotificationType.ORDER_EXECUTED:
+            order_side = additional_info.get("side", "UNKNOWN")
+            order_emoji = "🟢" if order_side == "BUY" else "🔴" if order_side == "SELL" else "📊"
+            position_action = additional_info.get("position_action", "TRADE")  # OPEN, CLOSE, or TRADE
+            executed_qty = additional_info.get("executed_qty", 0)
+            price = additional_info.get("price", 0)
+            exit_reason = additional_info.get("exit_reason")
+            
+            if position_action == "OPEN":
+                position_type = "LONG" if order_side == "BUY" else "SHORT"
+                message += f"\n{order_emoji} <b>OPEN {position_type} Position</b>\n"
+            elif position_action == "CLOSE":
+                message += f"\n{order_emoji} <b>CLOSE Position</b>\n"
+                if exit_reason:
+                    message += f"Reason: {exit_reason}\n"
+            else:
+                message += f"\n{order_emoji} <b>Trade Executed</b>\n"
+            
+            message += f"Side: <b>{order_side}</b>\n"
+            message += f"Quantity: {executed_qty:.8f}\n"
+            message += f"Price: ${price:,.8f}\n"
+            if additional_info.get("notional"):
+                message += f"Notional: ${additional_info['notional']:,.2f}\n"
+            if additional_info.get("leverage"):
+                message += f"Leverage: {additional_info['leverage']}x\n"
         
         # Add timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -455,6 +482,46 @@ class TelegramNotifier:
         message += f"\n⏰ {timestamp}"
         
         return await self.send_message(message, disable_notification=False)
+    
+    async def notify_order_executed(
+        self,
+        summary: StrategySummary,
+        order_response: OrderResponse,
+        position_action: str = "TRADE",  # OPEN, CLOSE, or TRADE
+        exit_reason: Optional[str] = None,
+    ) -> bool:
+        """Send notification when an order is successfully executed.
+        
+        Args:
+            summary: Strategy summary
+            order_response: OrderResponse from executed order
+            position_action: Whether this opens, closes, or modifies a position
+            exit_reason: Optional exit reason if closing position
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        additional_info = {
+            "side": order_response.side,
+            "executed_qty": order_response.executed_qty,
+            "price": order_response.avg_price or order_response.price,
+            "position_action": position_action,
+            "exit_reason": exit_reason,
+        }
+        
+        # Add optional fields if available
+        if hasattr(order_response, 'notional_value') and order_response.notional_value:
+            additional_info["notional"] = order_response.notional_value
+        if hasattr(order_response, 'leverage') and order_response.leverage:
+            additional_info["leverage"] = order_response.leverage
+        
+        message = self.format_strategy_message(
+            NotificationType.ORDER_EXECUTED,
+            summary,
+            additional_info,
+        )
+        
+        return await self.send_message(message)
 
 
 class NotificationService:
@@ -596,4 +663,27 @@ class NotificationService:
         """Notify that database connection has been restored."""
         if self.telegram:
             await self.telegram.notify_database_connection_restored(downtime_seconds)
+    
+    async def notify_order_executed(
+        self,
+        summary: StrategySummary,
+        order_response: OrderResponse,
+        position_action: str = "TRADE",  # OPEN, CLOSE, or TRADE
+        exit_reason: Optional[str] = None,
+    ) -> None:
+        """Notify that an order was successfully executed.
+        
+        Args:
+            summary: Strategy summary
+            order_response: OrderResponse from executed order
+            position_action: Whether this opens, closes, or modifies a position
+            exit_reason: Optional exit reason if closing position
+        """
+        if self.telegram:
+            await self.telegram.notify_order_executed(
+                summary,
+                order_response,
+                position_action,
+                exit_reason,
+            )
 
