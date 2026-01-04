@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Optional
+from uuid import UUID
 
 from loguru import logger
 
@@ -11,7 +12,8 @@ from app.models.order import OrderResponse
 from app.models.strategy import OverallStats, StrategyState, StrategyStats, StrategySummary
 
 if TYPE_CHECKING:
-    pass
+    from app.services.trade_service import TradeService
+    from app.services.strategy_service import StrategyService
 
 
 class StrategyStatistics:
@@ -22,6 +24,9 @@ class StrategyStatistics:
         strategies: Dict[str, StrategySummary],
         trades: Dict[str, List[OrderResponse]],
         redis_storage: Optional[RedisStorage] = None,
+        trade_service: Optional["TradeService"] = None,
+        strategy_service: Optional["StrategyService"] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Initialize the statistics calculator.
         
@@ -29,10 +34,16 @@ class StrategyStatistics:
             strategies: Reference to strategies dictionary
             trades: Reference to trades dictionary
             redis_storage: Redis storage for loading trades (optional)
+            trade_service: TradeService for loading trades from database (optional, for multi-user mode)
+            strategy_service: StrategyService for looking up strategy UUID (optional, for multi-user mode)
+            user_id: User ID for database queries (optional, for multi-user mode)
         """
         self._strategies = strategies
         self._trades = trades
         self.redis = redis_storage
+        self.trade_service = trade_service
+        self.strategy_service = strategy_service
+        self.user_id = user_id
         self._overall_stats_cache: Optional[tuple] = None
     
     def calculate_strategy_stats(self, strategy_id: str) -> StrategyStats:
@@ -185,16 +196,16 @@ class StrategyStatistics:
     def _ensure_trades_loaded(self, strategy_id: str) -> None:
         """Ensure trades for a strategy are available.
         
-        Trades are always stored in memory (self._trades). If Redis is enabled,
-        this method will attempt to load trades from Redis if they're not already
-        in memory (e.g., after server restart). If Redis is disabled, trades are
-        only available in memory during the current server session.
+        Trades are always stored in memory (self._trades). This method tries multiple sources:
+        1. In-memory trades (current session)
+        2. Redis cache (if enabled)
+        3. Database (if trade_service, strategy_service, and user_id are available)
         
         Args:
-            strategy_id: Strategy ID to ensure trades are loaded for
+            strategy_id: Strategy ID (string) to ensure trades are loaded for
         """
         # Check if trades are already in memory
-        if strategy_id in self._trades:
+        if strategy_id in self._trades and len(self._trades[strategy_id]) > 0:
             trades_count = len(self._trades[strategy_id])
             logger.debug(
                 f"Using {trades_count} in-memory trades for {strategy_id} "
@@ -202,43 +213,63 @@ class StrategyStatistics:
             )
             return
         
-        # If Redis is disabled, trades are only in memory (will be empty after restart)
-        if not self.redis or not self.redis.enabled:
-            logger.debug(
-                f"No trades in memory for {strategy_id} and Redis is disabled. "
-                f"Trades will only be available during current server session."
-            )
-            return
-        
         # Try to load from Redis (e.g., after server restart)
-        try:
-            trades_data = self.redis.get_trades(strategy_id)
-            if trades_data:
-                trades = []
-                for trade_data in trades_data:
-                    try:
-                        trade = OrderResponse(**trade_data)
-                        # Filter out invalid trades (status NEW with zero execution)
-                        if trade.status == "NEW" and trade.executed_qty == 0:
-                            logger.debug(
-                                f"Skipping invalid trade {trade.order_id} for {strategy_id}: "
-                                f"status=NEW with zero execution"
+        if self.redis and self.redis.enabled:
+            try:
+                trades_data = self.redis.get_trades(strategy_id)
+                if trades_data:
+                    trades = []
+                    for trade_data in trades_data:
+                        try:
+                            trade = OrderResponse(**trade_data)
+                            # Filter out invalid trades (status NEW with zero execution)
+                            if trade.status == "NEW" and trade.executed_qty == 0:
+                                logger.debug(
+                                    f"Skipping invalid trade {trade.order_id} for {strategy_id}: "
+                                    f"status=NEW with zero execution"
+                                )
+                                continue
+                            trades.append(trade)
+                        except Exception as exc:
+                            logger.warning(
+                                f"Failed to parse trade data for {strategy_id}: {exc}, "
+                                f"data: {trade_data}"
                             )
                             continue
-                        trades.append(trade)
-                    except Exception as exc:
-                        logger.warning(
-                            f"Failed to parse trade data for {strategy_id}: {exc}, "
-                            f"data: {trade_data}"
-                        )
-                        continue
-                if trades:
-                    self._trades[strategy_id] = trades
-                    logger.info(f"Loaded {len(trades)} trades for {strategy_id} from Redis")
-            else:
-                logger.debug(f"No trades found in Redis for {strategy_id}")
-        except Exception as exc:
-            logger.warning(f"Failed to load trades for {strategy_id} from Redis: {exc}")
+                    if trades:
+                        self._trades[strategy_id] = trades
+                        logger.info(f"Loaded {len(trades)} trades for {strategy_id} from Redis")
+                        return
+            except Exception as exc:
+                logger.warning(f"Failed to load trades for {strategy_id} from Redis: {exc}")
+        
+        # Try to load from database (if trade_service, strategy_service, and user_id are available)
+        if self.trade_service and self.strategy_service and self.user_id:
+            try:
+                # Look up strategy UUID from database using strategy_id (string)
+                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                if db_strategy:
+                    strategy_uuid = db_strategy.id  # UUID primary key
+                    # Fetch trades from database
+                    db_trades = self.trade_service.get_strategy_trades(self.user_id, strategy_uuid, limit=10000)
+                    if db_trades:
+                        self._trades[strategy_id] = db_trades
+                        logger.info(f"Loaded {len(db_trades)} trades for {strategy_id} from database")
+                        return
+                    else:
+                        logger.debug(f"No trades found in database for {strategy_id} (UUID: {strategy_uuid})")
+                else:
+                    logger.debug(f"Strategy {strategy_id} not found in database")
+            except Exception as exc:
+                logger.warning(f"Failed to load trades for {strategy_id} from database: {exc}")
+        
+        # No trades found in any source
+        if strategy_id not in self._trades:
+            self._trades[strategy_id] = []  # Initialize empty list to avoid repeated lookups
+            logger.debug(
+                f"No trades found for {strategy_id} in memory, Redis, or database. "
+                f"Statistics will show zero values."
+            )
     
     def calculate_overall_stats(self, use_cache: bool = True) -> OverallStats:
         """Calculate overall statistics across all strategies.

@@ -195,6 +195,9 @@ class StrategyRunner:
             strategies=self._strategies,
             trades=self._trades,
             redis_storage=redis_storage,
+            trade_service=self.trade_service,
+            strategy_service=strategy_service,
+            user_id=user_id,
         )
         
         # Load strategies on startup
