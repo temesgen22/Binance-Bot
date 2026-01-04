@@ -698,6 +698,16 @@
                 }
 
                 const report = await response.json();
+                console.log('Reports: Received report data:', report);
+                console.log('Reports: Number of strategies:', report.strategies?.length || 0);
+                if (report.strategies) {
+                    report.strategies.forEach((strategy, idx) => {
+                        console.log(`Reports: Strategy ${idx} (${strategy.strategy_id}): ${strategy.trades?.length || 0} trades`);
+                        if (strategy.trades && strategy.trades.length > 0) {
+                            console.log('Reports: First trade:', strategy.trades[0]);
+                        }
+                    });
+                }
                 displayReport(report);
             } catch (error) {
                 console.error('Error loading report:', error);

@@ -147,12 +147,29 @@ class StrategyRunner:
             account_manager=self.account_manager,
         )
         
+        # Initialize trade service if strategy_service and user_id are available
+        if strategy_service and user_id and hasattr(strategy_service, 'db_service'):
+            try:
+                from app.services.trade_service import TradeService
+                # Get the database session from strategy_service
+                db_session = strategy_service.db_service.db
+                # Create TradeService with database session and Redis storage
+                self.trade_service = TradeService(db_session, redis_storage)
+                logger.info(f"Initialized TradeService for user {user_id} - trades will be saved to database")
+            except Exception as e:
+                logger.warning(f"Failed to initialize TradeService: {e}. Trades will not be saved to database.")
+                self.trade_service = None
+        else:
+            self.trade_service = None
+            if strategy_service or user_id:
+                logger.warning("TradeService not initialized: strategy_service or user_id missing. Trades will not be saved to database.")
+        
         # Initialize order manager
         self.order_manager = StrategyOrderManager(
             account_manager=self.account_manager,
             default_risk=risk,
             default_executor=executor,
-            trade_service=None,  # Will be set later via dependency injection
+            trade_service=self.trade_service,  # Pass initialized trade_service
             user_id=user_id,
             strategy_service=strategy_service,  # Pass strategy_service for database lookups
             redis_storage=redis_storage,

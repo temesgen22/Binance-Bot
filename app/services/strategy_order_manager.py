@@ -274,6 +274,20 @@ class StrategyOrderManager:
                 # Note: trade_service.save_trade() also handles Redis caching automatically,
                 # so we don't need to manually save to Redis here (avoids duplicate Redis writes)
                 # This ensures orders are persisted even if system restarts
+                if not self.trade_service:
+                    logger.warning(
+                        f"[{summary.id}] ⚠️ TradeService not available. Trade {order_response.order_id} will NOT be saved to database. "
+                        f"Check StrategyRunner initialization."
+                    )
+                elif not self.user_id:
+                    logger.warning(
+                        f"[{summary.id}] ⚠️ user_id not available. Trade {order_response.order_id} will NOT be saved to database."
+                    )
+                elif not self.strategy_service:
+                    logger.warning(
+                        f"[{summary.id}] ⚠️ StrategyService not available. Trade {order_response.order_id} will NOT be saved to database."
+                    )
+                
                 if self.trade_service and self.user_id and self.strategy_service:
                     try:
                         # Get strategy UUID from database (needed for foreign key)

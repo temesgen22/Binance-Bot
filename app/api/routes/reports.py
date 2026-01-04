@@ -169,7 +169,15 @@ def _match_trades_to_completed_positions(
     for trade in trades:
         order_id_to_timestamp[trade.order_id] = get_trade_timestamp(trade)
     
-    for trade in sorted(trades, key=lambda t: order_id_to_timestamp.get(t.order_id, datetime.min.replace(tzinfo=timezone.utc))):
+    # Log trade details for debugging
+    logger.info(f"_match_trades_to_completed_positions: Processing {len(trades)} trades for strategy {strategy_id}")
+    for i, trade in enumerate(trades):
+        logger.debug(f"  Trade {i+1}: order_id={trade.order_id}, side={trade.side}, qty={trade.executed_qty}, price={trade.avg_price or trade.price}, timestamp={order_id_to_timestamp.get(trade.order_id)}")
+    
+    sorted_trades = sorted(trades, key=lambda t: order_id_to_timestamp.get(t.order_id, datetime.min.replace(tzinfo=timezone.utc)))
+    logger.debug(f"_match_trades_to_completed_positions: Sorted {len(sorted_trades)} trades by timestamp")
+    
+    for trade in sorted_trades:
         entry_price = trade.avg_price or trade.price
         quantity = trade.executed_qty
         side = trade.side
@@ -276,9 +284,11 @@ def _match_trades_to_completed_positions(
                 if remaining_qty > 0:
                     remaining_fee_portion = actual_fee * (remaining_qty / quantity) if quantity > 0 else 0
                     position_queue.append((remaining_qty, entry_price, trade_time, trade.order_id, "LONG", None, remaining_fee_portion, trade_leverage))
+                    logger.debug(f"  After closing SHORT, opening LONG: qty={remaining_qty}, price={entry_price}")
             else:
                 # Opening or adding to LONG position
                 position_queue.append((quantity, entry_price, trade_time, trade.order_id, "LONG", None, actual_fee, trade_leverage))
+                logger.debug(f"  Opening LONG position: qty={quantity}, price={entry_price}, order_id={trade.order_id}")
         
         elif side == "SELL":
             if position_queue and position_queue[0][4] == "LONG":
@@ -376,9 +386,17 @@ def _match_trades_to_completed_positions(
                 if remaining_qty > 0:
                     remaining_fee_portion = actual_fee * (remaining_qty / quantity) if quantity > 0 else 0
                     position_queue.append((remaining_qty, entry_price, trade_time, trade.order_id, "SHORT", None, remaining_fee_portion, trade_leverage))
+                    logger.debug(f"  After closing LONG, opening SHORT: qty={remaining_qty}, price={entry_price}")
             else:
                 # Opening or adding to SHORT position
                 position_queue.append((quantity, entry_price, trade_time, trade.order_id, "SHORT", None, actual_fee, trade_leverage))
+                logger.debug(f"  Opening SHORT position: qty={quantity}, price={entry_price}, order_id={trade.order_id}")
+    
+    logger.info(f"_match_trades_to_completed_positions: Created {len(completed_trades)} completed trades from {len(trades)} raw trades")
+    if position_queue:
+        logger.warning(f"_match_trades_to_completed_positions: {len(position_queue)} open positions remain in queue (not shown as completed trades)")
+        for pos in position_queue:
+            logger.debug(f"  Open position: side={pos[4]}, qty={pos[0]}, price={pos[1]}, order_id={pos[3]}")
     
     return completed_trades
 
@@ -871,6 +889,7 @@ def get_trading_report(
                     klines=klines_data,
                     indicators=indicators_data,
                 )
+                logger.info(f"Reports: Strategy {strategy.id} report created with {len(completed_trades_list)} trades in trades list")
                 
                 strategy_reports.append(strategy_report)
                 # Count completed trades for consistency with win rate and profit/loss calculations
@@ -907,6 +926,11 @@ def get_trading_report(
             "account_id": normalized_account_id,
         }
         filters = {k: v for k, v in filters.items() if v is not None}
+        
+        # Log final report summary
+        logger.info(f"Reports: Final report summary - {len(strategy_reports)} strategies, {total_trades_count} total completed trades")
+        for sr in strategy_reports:
+            logger.info(f"Reports: Strategy {sr.strategy_id} ({sr.strategy_name}) has {len(sr.trades)} trades in final report")
         
         return TradingReport(
             strategies=strategy_reports,
