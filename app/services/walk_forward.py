@@ -34,7 +34,7 @@ from app.services.walk_forward_task_manager import get_task_manager
 class WalkForwardRequest(BaseModel):
     """Request model for walk-forward analysis."""
     symbol: str
-    strategy_type: Literal["scalping", "range_mean_reversion"]
+    strategy_type: Literal["scalping", "range_mean_reversion", "reverse_scalping"]
     
     # User-friendly identification
     name: Optional[str] = Field(default=None, max_length=255, description="Optional name/label for this analysis")
@@ -587,7 +587,7 @@ def is_valid_ema_combination(param_set: dict, strategy_type: str) -> bool:
     Returns:
         True if combination is valid, False if it should be skipped
     """
-    if strategy_type != "scalping":
+    if strategy_type not in ("scalping", "reverse_scalping"):
         return True  # No EMA constraint for other strategy types
     
     # Check both possible parameter naming conventions
@@ -1131,7 +1131,7 @@ async def run_walk_forward_analysis(
     logger.info("Fetching all klines once for the entire time range (optimization)...")
     
     # Validate and normalize interval using shared utility function
-    raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type == "scalping" else "5m")
+    raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type in ("scalping", "reverse_scalping") else "5m")
     interval = validate_and_normalize_interval(raw_interval, request.strategy_type)
     
     # CRITICAL: Hard-fail if kline_interval is in optimize_params

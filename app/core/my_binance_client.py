@@ -1248,6 +1248,68 @@ class BinanceClient:
             ) from exc
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_funding_fees(
+        self,
+        symbol: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """Get funding fee income history from Binance.
+        
+        Args:
+            symbol: Trading symbol (optional, None for all symbols)
+            start_time: Start timestamp in milliseconds (optional)
+            end_time: End timestamp in milliseconds (optional)
+            limit: Maximum number of records (default 1000, max 1000)
+            
+        Returns:
+            List of funding fee income records with:
+            - symbol: Trading symbol
+            - incomeType: "FUNDING_FEE"
+            - income: Funding fee amount (negative for paid, positive for received)
+            - asset: Asset (usually USDT)
+            - time: Timestamp in milliseconds
+        """
+        rest = self._ensure()
+        if rest is None:
+            return []
+        
+        try:
+            params: Dict[str, Any] = {
+                "incomeType": "FUNDING_FEE",
+                "limit": min(limit, 1000),  # Binance max is 1000
+            }
+            if symbol:
+                params["symbol"] = symbol
+            if start_time:
+                params["startTime"] = start_time
+            if end_time:
+                params["endTime"] = end_time
+            
+            income_history = rest.futures_income_history(**params)
+            return income_history if isinstance(income_history, list) else []
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            error_msg = f"Failed to get funding fees: {exc}"
+            if status_code == 429:
+                raise BinanceRateLimitError(
+                    error_msg, retry_after=10,
+                    details={"symbol": symbol, "start_time": start_time, "end_time": end_time}
+                ) from exc
+            else:
+                # Log warning but don't fail - funding fees are optional
+                logger.warning(f"Could not fetch funding fees: {exc}")
+                return []
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            logger.warning(f"Network error getting funding fees: {exc}")
+            return []
+        except Exception as exc:
+            logger.warning(f"Unexpected error getting funding fees: {exc}")
+            return []
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_open_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get open position for a specific symbol.
         

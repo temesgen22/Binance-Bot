@@ -224,6 +224,7 @@
                             <select id="strategy_type" name="strategy_type" required>
                                 <option value="">Select strategy type</option>
                                 <option value="scalping">Scalping (EMA-based)</option>
+                                <option value="reverse_scalping">Reverse Scalping (Contrarian)</option>
                                 <option value="range_mean_reversion">Range Mean-Reversion</option>
                             </select>
                         </div>
@@ -346,6 +347,23 @@
                     { name: 'ema_slow', type: 'number', label: 'Slow EMA Period', default: 21, min: 2, max: 400 },
                     { name: 'take_profit_pct', type: 'number', label: 'Take Profit %', default: 0.004, min: 0.001, max: 0.1, step: 0.001 },
                     { name: 'stop_loss_pct', type: 'number', label: 'Stop Loss %', default: 0.002, min: 0.001, max: 0.1, step: 0.001 },
+                    { name: 'enable_short', type: 'checkbox', label: 'Enable Short Trading', default: true },
+                    { name: 'min_ema_separation', type: 'number', label: 'Min EMA Separation', default: 0.0002, min: 0, max: 0.01, step: 0.0001 },
+                    { name: 'enable_htf_bias', type: 'checkbox', label: 'Enable HTF Bias', default: true },
+                    { name: 'cooldown_candles', type: 'number', label: 'Cooldown Candles', default: 2, min: 0, max: 10 },
+                    { name: 'enable_ema_cross_exit', type: 'checkbox', label: 'Enable EMA Cross Exits', default: true },
+                    { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
+                    { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 }
+                ]
+            },
+            reverse_scalping: {
+                fields: [
+                    { name: 'interval_seconds', type: 'number', label: 'Interval (seconds)', default: 10, min: 1, max: 3600, description: 'How often the strategy evaluates the market (in seconds)' },
+                    { name: 'kline_interval', type: 'select', label: 'Kline Interval', default: '1m', options: ['1s', '3s', '5s', '10s', '30s', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'] },
+                    { name: 'ema_fast', type: 'number', label: 'Fast EMA Period', default: 8, min: 1, max: 200 },
+                    { name: 'ema_slow', type: 'number', label: 'Slow EMA Period', default: 21, min: 2, max: 400 },
+                    { name: 'take_profit_pct', type: 'number', label: 'Take Profit %', default: 0.004, min: 0.0001, max: 0.1, step: 0.0001 },
+                    { name: 'stop_loss_pct', type: 'number', label: 'Stop Loss %', default: 0.002, min: 0.0001, max: 0.1, step: 0.0001 },
                     { name: 'enable_short', type: 'checkbox', label: 'Enable Short Trading', default: true },
                     { name: 'min_ema_separation', type: 'number', label: 'Min EMA Separation', default: 0.0002, min: 0, max: 0.01, step: 0.0001 },
                     { name: 'enable_htf_bias', type: 'checkbox', label: 'Enable HTF Bias', default: true },

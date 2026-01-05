@@ -12,6 +12,7 @@ class StrategyType(str, Enum):
     futures = "futures"
     ema_crossover = "ema_crossover"  # EMA 5/20 Crossover Scalping
     range_mean_reversion = "range_mean_reversion"  # Range Mean-Reversion Scalping
+    reverse_scalping = "reverse_scalping"  # Reverse/Contrarian EMA Scalping (trades opposite signals)
 
 
 class StrategyParams(BaseModel):

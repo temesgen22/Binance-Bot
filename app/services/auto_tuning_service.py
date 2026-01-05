@@ -871,7 +871,7 @@ class AutoTuningService:
             ValueError: If validation fails
         """
         # Basic validation - check required params exist
-        if strategy_type == "scalping":
+        if strategy_type in ("scalping", "reverse_scalping"):
             # Validate EMA parameters
             if "ema_fast" in params:
                 ema_fast = int(params["ema_fast"])

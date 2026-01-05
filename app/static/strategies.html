@@ -896,7 +896,7 @@
                 
                 // Determine which parameters to show based on strategy type
                 let relevantParams = [];
-                if (strategy.strategy_type === 'scalping' || strategy.strategy_type === 'ema_crossover') {
+                if (strategy.strategy_type === 'scalping' || strategy.strategy_type === 'ema_crossover' || strategy.strategy_type === 'reverse_scalping') {
                     relevantParams = emaScalpingParams;
                 } else if (strategy.strategy_type === 'range_mean_reversion') {
                     relevantParams = rangeMeanReversionParams;

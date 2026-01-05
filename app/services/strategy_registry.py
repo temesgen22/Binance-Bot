@@ -20,6 +20,7 @@ class StrategyRegistry:
         # Lazy import to avoid circular dependencies
         from app.strategies.scalping import EmaScalpingStrategy
         from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
+        from app.strategies.reverse_scalping import ReverseScalpingStrategy
         
         self._registry: Dict[str, type[Strategy]] = {
             StrategyType.scalping.value: EmaScalpingStrategy,
@@ -27,6 +28,7 @@ class StrategyRegistry:
             # Users can achieve the same by setting ema_fast=5, ema_slow=20 in params
             StrategyType.ema_crossover.value: EmaScalpingStrategy,
             StrategyType.range_mean_reversion.value: RangeMeanReversionStrategy,
+            StrategyType.reverse_scalping.value: ReverseScalpingStrategy,
         }
 
     def build(self, strategy_type: StrategyType, context: StrategyContext, client: BinanceClient) -> Strategy:

@@ -803,6 +803,14 @@
                                 <div class="stat-item-value ${netPnlClass}">${formatCurrency(strategy.net_pnl)}</div>
                             </div>
                             <div class="stat-item">
+                                <div class="stat-item-label">Total Fee</div>
+                                <div class="stat-item-value">${formatCurrency(strategy.total_fee || 0)}</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-item-label">Total Funding Fee</div>
+                                <div class="stat-item-value">${formatCurrency(strategy.total_funding_fee || 0)}</div>
+                            </div>
+                            <div class="stat-item">
                                 <div class="stat-item-label">Total Trades</div>
                                 <div class="stat-item-value">${strategy.total_trades}</div>
                             </div>
@@ -824,6 +832,10 @@
                         <div style="margin-bottom: 15px;">
                             <strong>Total Profit:</strong> <span class="positive">${formatCurrency(strategy.total_profit_usd)}</span> | 
                             <strong>Total Loss:</strong> <span class="negative">${formatCurrency(strategy.total_loss_usd)}</span>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <strong>Total Trading Fee:</strong> ${formatCurrency(strategy.total_fee || 0)} | 
+                            <strong>Total Funding Fee:</strong> ${formatCurrency(strategy.total_funding_fee || 0)}
                         </div>
                         ${strategy.klines && strategy.klines.length > 0 ? `
                             <div class="chart-section">
@@ -882,7 +894,7 @@
             let html = '<table class="trades-table"><thead><tr>';
             html += '<th>Trade ID</th><th>Symbol</th><th>Side</th><th>Entry Time</th><th>Entry Price</th>';
             html += '<th>Exit Time</th><th>Exit Price</th><th>Quantity</th><th>Leverage</th>';
-            html += '<th>Fee Paid</th><th>Initial Margin</th><th>Margin Type</th><th>Notional Value</th>';
+            html += '<th>Fee Paid</th><th>Funding Fee</th><th>Initial Margin</th><th>Margin Type</th><th>Notional Value</th>';
             html += '<th>PnL (USD)</th><th>PnL (%)</th><th>Exit Reason</th>';
             html += '</tr></thead><tbody>';
 
@@ -899,6 +911,7 @@
                 html += `<td>${trade.quantity.toFixed(4)}</td>`;
                 html += `<td>${trade.leverage}x</td>`;
                 html += `<td>$${trade.fee_paid.toFixed(4)}</td>`;
+                html += `<td>$${(trade.funding_fee || 0).toFixed(4)}</td>`;
                 html += `<td>${trade.initial_margin ? '$' + trade.initial_margin.toFixed(2) : 'N/A'}</td>`;
                 html += `<td>${trade.margin_type ? `<span class="badge info">${trade.margin_type}</span>` : 'N/A'}</td>`;
                 html += `<td>${trade.notional_value ? '$' + trade.notional_value.toFixed(2) : 'N/A'}</td>`;

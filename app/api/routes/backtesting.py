@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.strategies.base import StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
 from app.strategies.range_mean_reversion import RangeMeanReversionStrategy
+from app.strategies.reverse_scalping import ReverseScalpingStrategy
 from app.strategies.indicators import calculate_ema, calculate_rsi
 from app.risk.manager import RiskManager, PositionSizingResult
 from app.utils.backtest_params import (
@@ -46,7 +47,7 @@ SPREAD_OFFSET = 0.0002  # 0.02% - simulates real bid/ask difference
 class BacktestRequest(BaseModel):
     """Request model for backtesting."""
     symbol: str
-    strategy_type: Literal["scalping", "range_mean_reversion"]
+    strategy_type: Literal["scalping", "reverse_scalping", "range_mean_reversion"]
     start_time: datetime
     end_time: datetime
     leverage: int = Field(ge=1, le=50, default=5)
@@ -496,7 +497,7 @@ def validate_and_normalize_interval(
     
     # Determine default if not provided
     if default_interval is None:
-        default_interval = "1m" if strategy_type == "scalping" else "5m"
+        default_interval = "1m" if strategy_type in ("scalping", "reverse_scalping") else "5m"
     
     # If interval is a list/comma string (from optimization params), extract first valid one
     if isinstance(interval, str) and ("," in interval or interval not in valid_intervals):
@@ -638,7 +639,7 @@ async def run_backtest(
             logger.debug(f"Inferred interval from pre-fetched klines: {interval}")
         else:
             # Fallback: use params if inference fails (shouldn't happen with valid data)
-            raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type == "scalping" else "5m")
+            raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type in ("scalping", "reverse_scalping") else "5m")
             interval = validate_and_normalize_interval(raw_interval, request.strategy_type)
             logger.warning(
                 f"Could not infer interval from pre-fetched klines, using params: {interval}. "
@@ -660,7 +661,7 @@ async def run_backtest(
             )
     else:
         # Fetch historical klines - use interval from params
-        raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type == "scalping" else "5m")
+        raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type in ("scalping", "reverse_scalping") else "5m")
         interval = validate_and_normalize_interval(raw_interval, request.strategy_type)
         logger.debug(f"Fetching klines from Binance for range: {request.start_time} to {request.end_time}, interval: {interval}")
         filtered_klines = await _fetch_historical_klines(
@@ -698,6 +699,8 @@ async def run_backtest(
     # Create strategy instance
     if request.strategy_type == "scalping":
         strategy = EmaScalpingStrategy(context, mock_client)
+    elif request.strategy_type == "reverse_scalping":
+        strategy = ReverseScalpingStrategy(context, mock_client)
     elif request.strategy_type == "range_mean_reversion":
         strategy = RangeMeanReversionStrategy(context, mock_client)
     else:
@@ -936,8 +939,8 @@ async def run_backtest(
                     exit_price = signal.price if signal.price is not None else current_price
                     exit_reason = signal.exit_reason or "SIGNAL_CLOSE"
                     logger.info(f"Signal action {signal.action} closes {position_side} position at price {exit_price:.8f}")
-            elif request.strategy_type == "scalping":
-                # For scalping, check fixed TP/SL if trailing stop is not enabled or didn't trigger
+            elif request.strategy_type in ("scalping", "reverse_scalping"):
+                # For scalping/reverse_scalping, check fixed TP/SL if trailing stop is not enabled or didn't trigger
                 # Use strategy's parse_bool_param to safely handle string values from JSON/DB
                 trailing_stop_enabled = EmaScalpingStrategy.parse_bool_param(
                     request.params.get("trailing_stop_enabled"), 
@@ -1476,7 +1479,7 @@ async def run_backtest(
             "buy_zone_pct": rmr_params["buy_zone_pct"],
             "sell_zone_pct": rmr_params["sell_zone_pct"]
         }
-    elif request.strategy_type == "scalping":
+    elif request.strategy_type in ("scalping", "reverse_scalping"):
         # PERFORMANCE FIX: Use pre-calculated closing_prices_all (already calculated above)
         closing_prices = closing_prices_all
         

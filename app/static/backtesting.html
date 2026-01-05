@@ -433,6 +433,7 @@
                             <select id="strategyType" required>
                                 <option value="">Select strategy...</option>
                                 <option value="scalping">EMA Scalping</option>
+                                <option value="reverse_scalping">Reverse Scalping (Contrarian)</option>
                                 <option value="range_mean_reversion">Range Mean Reversion</option>
                             </select>
                         </div>
@@ -705,6 +706,7 @@
                             <select id="historyStrategyType">
                                 <option value="">All Strategies</option>
                                 <option value="scalping">EMA Scalping</option>
+                                <option value="reverse_scalping">Reverse Scalping (Contrarian)</option>
                                 <option value="range_mean_reversion">Range Mean Reversion</option>
                             </select>
                         </div>
@@ -769,6 +771,7 @@
                                 <select id="sensitivityStrategyType" required onchange="updateSensitivityParams()">
                                     <option value="">Select strategy...</option>
                                     <option value="scalping">EMA Scalping</option>
+                                    <option value="reverse_scalping">Reverse Scalping (Contrarian)</option>
                                     <option value="range_mean_reversion">Range Mean Reversion</option>
                                 </select>
                             </div>
@@ -900,6 +903,20 @@
         // Strategy parameter templates
         const strategyParams = {
             scalping: {
+                kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
+                ema_fast: { type: 'number', label: 'Fast EMA Period', value: 8, min: 1, max: 200 },
+                ema_slow: { type: 'number', label: 'Slow EMA Period', value: 21, min: 2, max: 400 },
+                take_profit_pct: { type: 'number', label: 'Take Profit %', value: 0.004, min: 0.001, max: 0.1, step: 0.001 },
+                stop_loss_pct: { type: 'number', label: 'Stop Loss %', value: 0.002, min: 0.001, max: 0.1, step: 0.001 },
+                enable_short: { type: 'checkbox', label: 'Enable Short Trading', value: true },
+                min_ema_separation: { type: 'number', label: 'Min EMA Separation', value: 0.0002, min: 0, max: 0.01, step: 0.0001 },
+                enable_htf_bias: { type: 'checkbox', label: 'Enable HTF Bias', value: true },
+                cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
+                enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
+                trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
+                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 }
+            },
+            reverse_scalping: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
                 ema_fast: { type: 'number', label: 'Fast EMA Period', value: 8, min: 1, max: 200 },
                 ema_slow: { type: 'number', label: 'Slow EMA Period', value: 21, min: 2, max: 400 },

@@ -31,7 +31,7 @@ from app.services.backtest_service import (
 class SensitivityAnalysisRequest(BaseModel):
     """Request model for sensitivity analysis."""
     symbol: str
-    strategy_type: Literal["scalping", "range_mean_reversion"]
+    strategy_type: Literal["scalping", "range_mean_reversion", "reverse_scalping"]
     
     # User-friendly identification
     name: Optional[str] = Field(default=None, max_length=255, description="Optional name/label for this analysis")

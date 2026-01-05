@@ -268,6 +268,7 @@ def _match_trades_to_completed_positions(
                         quantity=close_qty,
                         leverage=short_leverage,  # Use actual leverage from entry order
                         fee_paid=round(total_fee, 4),
+                        funding_fee=0.0,  # Will be updated later when funding fees are fetched
                         pnl_usd=round(net_pnl, 4),
                         pnl_pct=round(pnl_pct, 4),
                         exit_reason=exit_reason,
@@ -370,6 +371,7 @@ def _match_trades_to_completed_positions(
                         quantity=close_qty,
                         leverage=long_leverage,  # Use actual leverage from entry order
                         fee_paid=round(total_fee, 4),
+                        funding_fee=0.0,  # Will be updated later when funding fees are fetched
                         pnl_usd=round(net_pnl, 4),
                         pnl_pct=round(pnl_pct, 4),
                         exit_reason=exit_reason,
@@ -617,11 +619,67 @@ def get_trading_report(
                     logger.info(f"Reports: Strategy {strategy.id} has {len(filtered_trades)} trades after date filtering (from {len(completed_trades_list)} completed trades)")
                     completed_trades_list = filtered_trades
                 
+                # Fetch funding fees for this strategy if client is available
+                funding_fees_by_trade: Dict[str, float] = {}  # Map trade_id to total funding fee
+                total_funding_fee = 0.0
+                
+                if client and completed_trades_list:
+                    try:
+                        # Determine time range for funding fees
+                        earliest_entry = min(
+                            (t.entry_time for t in completed_trades_list if t.entry_time),
+                            default=None
+                        )
+                        latest_exit = max(
+                            (t.exit_time for t in completed_trades_list if t.exit_time),
+                            default=None
+                        )
+                        
+                        if earliest_entry and latest_exit:
+                            # Convert to milliseconds for Binance API
+                            start_time_ms = int(earliest_entry.timestamp() * 1000)
+                            end_time_ms = int(latest_exit.timestamp() * 1000)
+                            
+                            # Fetch funding fees from Binance
+                            funding_fees = client.get_funding_fees(
+                                symbol=strategy.symbol,
+                                start_time=start_time_ms,
+                                end_time=end_time_ms,
+                                limit=1000
+                            )
+                            
+                            # Match funding fees to trades based on entry/exit times
+                            for trade in completed_trades_list:
+                                trade_funding_fee = 0.0
+                                if trade.entry_time and trade.exit_time:
+                                    entry_ms = int(trade.entry_time.timestamp() * 1000)
+                                    exit_ms = int(trade.exit_time.timestamp() * 1000)
+                                    
+                                    # Sum funding fees that occurred during this trade's holding period
+                                    for fee_record in funding_fees:
+                                        fee_time = fee_record.get("time", 0)
+                                        # Funding fees occur every 8 hours, check if within trade period
+                                        # Include fees that occurred during the position holding period
+                                        # Use <= for entry to include funding fees at entry time
+                                        if entry_ms <= fee_time <= exit_ms:
+                                            income = float(fee_record.get("income", 0))
+                                            # Income is negative when paid, positive when received
+                                            # For reporting, we want the absolute value paid (negative income = fee paid)
+                                            if income < 0:
+                                                trade_funding_fee += abs(income)
+                                
+                                # Update trade report with funding fee
+                                trade.funding_fee = round(trade_funding_fee, 4)
+                                total_funding_fee += trade_funding_fee
+                    except Exception as fee_exc:
+                        logger.warning(f"Failed to fetch funding fees for strategy {strategy.id}: {fee_exc}")
+                
                 # Calculate strategy statistics (single pass for efficiency)
                 wins = 0
                 losses = 0
                 total_profit_usd = 0.0
                 total_loss_usd = 0.0
+                total_fee = 0.0
                 
                 for trade in completed_trades_list:
                     pnl = trade.pnl_usd
@@ -631,6 +689,9 @@ def get_trading_report(
                     elif pnl < 0:
                         losses += 1
                         total_loss_usd += abs(pnl)
+                    
+                    # Sum trading fees
+                    total_fee += trade.fee_paid
                 
                 win_rate = ((wins / len(completed_trades_list)) * 100) if completed_trades_list else 0.0
                 # Calculate net_pnl from already computed profit and loss
@@ -885,6 +946,8 @@ def get_trading_report(
                     total_profit_usd=round(total_profit_usd, 4),
                     total_loss_usd=round(total_loss_usd, 4),
                     net_pnl=round(net_pnl, 4),
+                    total_fee=round(total_fee, 4),
+                    total_funding_fee=round(total_funding_fee, 4),
                     trades=completed_trades_list,
                     klines=klines_data,
                     indicators=indicators_data,
