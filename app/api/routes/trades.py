@@ -472,8 +472,34 @@ def get_symbol_pnl(
             )
     
     try:
-        logger.debug(f"Getting position for {symbol} using client (account_id: {account_id or 'default'})")
-        position_data = position_client.get_open_position(symbol)
+        # Validate client before calling
+        if position_client is None:
+            logger.warning(f"Position client is None for {symbol} (account_id: {account_id or 'default'}). Cannot get open position.")
+            position_data = None
+        else:
+            logger.debug(f"Getting position for {symbol} using client (account_id: {account_id or 'default'})")
+            try:
+                position_data = position_client.get_open_position(symbol)
+            except Exception as pos_exc:
+                # Handle RetryError from tenacity retry decorator
+                from tenacity import RetryError
+                if isinstance(pos_exc, RetryError):
+                    # Extract underlying exception from RetryError
+                    try:
+                        underlying_exc = pos_exc.last_attempt.exception() if hasattr(pos_exc, 'last_attempt') and pos_exc.last_attempt else pos_exc
+                    except (AttributeError, Exception) as extract_exc:
+                        # If we can't extract the underlying exception, use the RetryError itself
+                        underlying_exc = pos_exc
+                        logger.debug(f"Could not extract underlying exception from RetryError: {extract_exc}")
+                    
+                    logger.warning(
+                        f"Could not get open position for {symbol} after retries: {underlying_exc}. "
+                        f"RetryError type: {type(pos_exc)}"
+                    )
+                else:
+                    logger.warning(f"Could not get open position for {symbol}: {pos_exc}")
+                position_data = None
+        
         if position_data:
             position_side = "LONG" if position_data["positionAmt"] > 0 else "SHORT"
             binance_position_size = abs(position_data["positionAmt"])
