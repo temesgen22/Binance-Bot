@@ -201,7 +201,9 @@ class TradeService:
         self,
         user_id: UUID,
         strategy_id: Optional[UUID] = None,
-        limit: int = 100
+        limit: int = 100,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
     ) -> List[OrderResponse]:
         """Get recent trades using cache-aside pattern.
         
@@ -263,6 +265,18 @@ class TradeService:
         )
         
         orders = [self._db_trade_to_order_response(trade) for trade in db_trades]
+        
+        # Filter by time range if provided
+        if start_time or end_time:
+            filtered_orders = []
+            for order in orders:
+                if order.timestamp:
+                    if start_time and order.timestamp < start_time:
+                        continue
+                    if end_time and order.timestamp > end_time:
+                        continue
+                filtered_orders.append(order)
+            orders = filtered_orders
         
         # Cache recent trades in Redis
         if self.redis and self.redis.enabled and strategy_id and orders:
@@ -337,6 +351,136 @@ class TradeService:
                     )
         
         return trades_by_strategy
+    
+    def get_trades_by_account(
+        self,
+        user_id: UUID,
+        account_id: str,
+        limit: int = 1000,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> List[OrderResponse]:
+        """Get all trades for a specific account.
+        
+        Args:
+            user_id: User ID
+            account_id: Account ID (string identifier)
+            limit: Maximum number of trades to return
+            start_time: Optional start time filter
+            end_time: Optional end time filter
+            
+        Returns:
+            List of OrderResponse for all strategies in the account
+        """
+        # Get account UUID from account_id string
+        from app.models.db_models import Account
+        if self._is_async:
+            from sqlalchemy import select
+            stmt = select(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id == account_id.lower(),
+                Account.is_active == True
+            )
+            result = self.db_service.db.execute(stmt)
+            account = result.scalar_one_or_none()
+        else:
+            account = self.db_service.db.query(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id == account_id.lower(),
+                Account.is_active == True
+            ).first()
+        
+        if not account:
+            return []
+        
+        # Get all strategies for this account
+        from app.models.db_models import Strategy
+        if self._is_async:
+            from sqlalchemy import select
+            stmt = select(Strategy).filter(
+                Strategy.user_id == user_id,
+                Strategy.account_id == account.id
+            )
+            result = self.db_service.db.execute(stmt)
+            strategies = list(result.scalars().all())
+        else:
+            strategies = self.db_service.db.query(Strategy).filter(
+                Strategy.user_id == user_id,
+                Strategy.account_id == account.id
+            ).all()
+        
+        if not strategies:
+            return []
+        
+        # Get strategy UUIDs
+        strategy_ids = [s.id for s in strategies]
+        
+        # Get trades for all strategies
+        # Note: get_trades_by_account is sync, so we use sync methods
+        trades_dict = self.get_trades_batch(user_id, strategy_ids, limit_per_strategy=limit)
+        
+        # Flatten to single list
+        all_trades = []
+        for strategy_trades in trades_dict.values():
+            all_trades.extend(strategy_trades)
+        
+        # Filter by time range if provided
+        if start_time or end_time:
+            filtered_trades = []
+            for trade in all_trades:
+                if trade.timestamp:
+                    if start_time and trade.timestamp < start_time:
+                        continue
+                    if end_time and trade.timestamp > end_time:
+                        continue
+                filtered_trades.append(trade)
+            all_trades = filtered_trades
+        
+        # Sort by timestamp descending
+        all_trades.sort(key=lambda t: t.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        
+        return all_trades[:limit]
+    
+    def get_all_trades(
+        self,
+        user_id: UUID,
+        limit: int = 1000,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> List[OrderResponse]:
+        """Get all trades for a user across all accounts.
+        
+        Args:
+            user_id: User ID
+            limit: Maximum number of trades to return
+            start_time: Optional start time filter
+            end_time: Optional end time filter
+            
+        Returns:
+            List of OrderResponse for all user's trades
+        """
+        # Get all trades directly from database (no strategy filter)
+        db_trades = self.db_service.get_user_trades(
+            user_id=user_id,
+            strategy_id=None,
+            limit=limit
+        )
+        
+        orders = [self._db_trade_to_order_response(trade) for trade in db_trades]
+        
+        # Filter by time range if provided
+        if start_time or end_time:
+            filtered_orders = []
+            for order in orders:
+                if order.timestamp:
+                    if start_time and order.timestamp < start_time:
+                        continue
+                    if end_time and order.timestamp > end_time:
+                        continue
+                filtered_orders.append(order)
+            orders = filtered_orders
+        
+        return orders
     
     async def async_get_trades_batch(
         self,

@@ -262,7 +262,7 @@ class Strategy(Base):
         CheckConstraint("leverage >= 1 AND leverage <= 50", name="strategies_leverage_check"),
         CheckConstraint("risk_per_trade > 0 AND risk_per_trade < 1", name="strategies_risk_check"),
         CheckConstraint("max_positions >= 1 AND max_positions <= 5", name="strategies_max_positions_check"),
-        CheckConstraint("status IN ('stopped', 'running', 'error')", name="strategies_status_check"),
+        CheckConstraint("status IN ('stopped', 'running', 'error', 'paused_by_risk')", name="strategies_status_check"),
         CheckConstraint("position_side IS NULL OR position_side IN ('LONG', 'SHORT')", name="strategies_position_side_check"),
         CheckConstraint("last_signal IS NULL OR last_signal IN ('BUY', 'SELL', 'HOLD')", name="strategies_last_signal_check"),
         Index("idx_strategies_params", "params", postgresql_using="gin"),
@@ -832,5 +832,154 @@ class StrategyParameterHistory(Base):
         Index('idx_param_history_strategy_uuid', 'strategy_uuid'),
         Index('idx_param_history_status', 'status'),
         Index('idx_param_history_reason', 'reason'),
+    )
+
+
+# ============================================
+# RISK MANAGEMENT
+# ============================================
+
+class RiskManagementConfig(Base):
+    """Risk management configuration per account."""
+    __tablename__ = "risk_management_config"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(PGUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Portfolio Limits
+    max_portfolio_exposure_usdt = Column(Numeric(20, 8), nullable=True)
+    max_portfolio_exposure_pct = Column(Numeric(10, 6), nullable=True)
+    max_daily_loss_usdt = Column(Numeric(20, 8), nullable=True)
+    max_daily_loss_pct = Column(Numeric(10, 6), nullable=True)
+    max_weekly_loss_usdt = Column(Numeric(20, 8), nullable=True)
+    max_weekly_loss_pct = Column(Numeric(10, 6), nullable=True)
+    max_drawdown_pct = Column(Numeric(10, 6), nullable=True)
+    
+    # Loss Reset Configuration
+    daily_loss_reset_time = Column(DateTime(timezone=False), nullable=True)  # TIME type stored as datetime
+    weekly_loss_reset_day = Column(Integer, nullable=True, default=1)  # 1=Monday, 7=Sunday
+    timezone = Column(String(50), nullable=False, default="UTC")
+    
+    # Circuit Breaker Settings
+    circuit_breaker_enabled = Column(Boolean, nullable=False, default=False)
+    max_consecutive_losses = Column(Integer, nullable=False, default=5)
+    rapid_loss_threshold_pct = Column(Numeric(10, 6), nullable=False, default=0.05)
+    rapid_loss_timeframe_minutes = Column(Integer, nullable=False, default=60)
+    circuit_breaker_cooldown_minutes = Column(Integer, nullable=False, default=60)
+    
+    # Dynamic Risk Settings
+    volatility_based_sizing_enabled = Column(Boolean, nullable=False, default=False)
+    performance_based_adjustment_enabled = Column(Boolean, nullable=False, default=False)
+    kelly_criterion_enabled = Column(Boolean, nullable=False, default=False)
+    kelly_fraction = Column(Numeric(10, 6), nullable=False, default=0.25)  # Quarter Kelly
+    
+    # Correlation Limits
+    correlation_limits_enabled = Column(Boolean, nullable=False, default=False)
+    max_correlation_exposure_pct = Column(Numeric(10, 6), nullable=False, default=0.5)
+    
+    # Margin Protection
+    margin_call_protection_enabled = Column(Boolean, nullable=False, default=True)
+    min_margin_ratio = Column(Numeric(10, 6), nullable=False, default=0.1)  # 10%
+    
+    # Trade Frequency Limits
+    max_trades_per_day_per_strategy = Column(Integer, nullable=True)
+    max_trades_per_day_total = Column(Integer, nullable=True)
+    
+    # Order Size Adjustment
+    auto_reduce_order_size = Column(Boolean, nullable=False, default=False)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("User")
+    account = relationship("Account")
+    
+    __table_args__ = (
+        # Unique constraint: one config per account
+        Index("idx_risk_config_user_account_unique", "user_id", "account_id", unique=True),
+    )
+
+
+class RiskMetrics(Base):
+    """Risk metrics tracking (historical snapshots)."""
+    __tablename__ = "risk_metrics"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(PGUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    
+    # Balance Tracking
+    total_balance_usdt = Column(Numeric(20, 8), nullable=True)
+    available_balance_usdt = Column(Numeric(20, 8), nullable=True)
+    used_margin_usdt = Column(Numeric(20, 8), nullable=True)
+    peak_balance_usdt = Column(Numeric(20, 8), nullable=True)
+    peak_balance_timestamp = Column(DateTime(timezone=True), nullable=True)
+    
+    # Portfolio Metrics
+    total_exposure_usdt = Column(Numeric(20, 8), nullable=True)
+    total_exposure_pct = Column(Numeric(10, 6), nullable=True)
+    daily_pnl_usdt = Column(Numeric(20, 8), nullable=True)
+    daily_pnl_pct = Column(Numeric(10, 6), nullable=True)
+    weekly_pnl_usdt = Column(Numeric(20, 8), nullable=True)
+    weekly_pnl_pct = Column(Numeric(10, 6), nullable=True)
+    current_drawdown_pct = Column(Numeric(10, 6), nullable=True)
+    max_drawdown_pct = Column(Numeric(10, 6), nullable=True)
+    
+    # Performance Metrics
+    sharpe_ratio = Column(Numeric(10, 4), nullable=True)
+    profit_factor = Column(Numeric(10, 4), nullable=True)
+    win_rate = Column(Numeric(10, 4), nullable=True)
+    avg_win = Column(Numeric(20, 8), nullable=True)
+    avg_loss = Column(Numeric(20, 8), nullable=True)
+    
+    # Risk Status
+    risk_status = Column(String(20), nullable=True)  # 'normal', 'warning', 'breach', 'paused'
+    active_circuit_breakers = Column(JSONB, nullable=True)  # List of active circuit breakers
+    
+    # Metadata (renamed to avoid SQLAlchemy reserved name conflict)
+    meta_data = Column("metadata", JSONB, nullable=True)
+    
+    # Relationships
+    user = relationship("User")
+    account = relationship("Account")
+    
+    __table_args__ = (
+        Index("idx_risk_metrics_account_timestamp", "account_id", "timestamp"),
+        Index("idx_risk_metrics_user_timestamp", "user_id", "timestamp"),
+    )
+
+
+class CircuitBreakerEvent(Base):
+    """Circuit breaker events log."""
+    __tablename__ = "circuit_breaker_events"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(PGUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_id = Column(PGUUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=True, index=True)
+    
+    breaker_type = Column(String(50), nullable=False)  # 'consecutive_losses', 'rapid_loss', 'drawdown', etc.
+    breaker_scope = Column(String(20), nullable=False, default="account")  # 'account' or 'strategy'
+    trigger_value = Column(Numeric(20, 8), nullable=False)
+    threshold_value = Column(Numeric(20, 8), nullable=False)
+    triggered_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(20), nullable=False, default="active")  # 'active', 'resolved', 'manual_override'
+    
+    # Metadata (renamed to avoid SQLAlchemy reserved name conflict)
+    meta_data = Column("metadata", JSONB, nullable=True)
+    
+    # Relationships
+    user = relationship("User")
+    account = relationship("Account")
+    strategy = relationship("Strategy")
+    
+    __table_args__ = (
+        Index("idx_circuit_breaker_account_status", "account_id", "status"),
+        Index("idx_circuit_breaker_strategy_status", "strategy_id", "status"),
     )
 

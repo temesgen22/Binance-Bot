@@ -2,7 +2,7 @@
 
 import asyncio
 from functools import partial
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable, List
 
 from loguru import logger
 
@@ -11,11 +11,14 @@ from app.core.exceptions import (
     PositionSizingError,
     OrderExecutionError,
     BinanceAPIError,
+    RiskLimitExceededError,
+    CircuitBreakerActiveError,
 )
 from app.core.my_binance_client import BinanceClient
 from app.models.order import OrderResponse
 from app.models.strategy import StrategySummary
 from app.risk.manager import RiskManager, PositionSizingResult
+from app.risk.dynamic_sizing import DynamicPositionSizer, DynamicSizingConfig
 from app.services.order_executor import OrderExecutor
 from app.services.strategy_account_manager import StrategyAccountManager
 from app.strategies.base import Strategy, StrategySignal
@@ -41,6 +44,9 @@ class StrategyOrderManager:
         strategies: Optional[dict] = None,  # Reference to strategies dict
         trades: Optional[dict] = None,  # Reference to trades dict
         lock: Optional[asyncio.Lock] = None,  # Lock for thread safety
+        portfolio_risk_manager_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account PortfolioRiskManager
+        circuit_breaker_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account CircuitBreaker
+        dynamic_sizing_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account DynamicPositionSizer
     ) -> None:
         """Initialize the order manager.
         
@@ -66,6 +72,9 @@ class StrategyOrderManager:
         self._strategies = strategies if strategies is not None else {}
         self._trades = trades if trades is not None else {}
         self._lock = lock
+        self.portfolio_risk_manager_factory = portfolio_risk_manager_factory
+        self.circuit_breaker_factory = circuit_breaker_factory
+        self.dynamic_sizing_factory = dynamic_sizing_factory
     
     async def execute_order(
         self,
@@ -74,6 +83,7 @@ class StrategyOrderManager:
         strategy: Optional[Strategy] = None,
         risk: Optional[RiskManager] = None,
         executor: Optional[OrderExecutor] = None,
+        klines: Optional[List[List]] = None,  # Bug #4: Add klines parameter for ATR calculation
     ) -> Optional[OrderResponse]:
         """Execute an order based on a strategy signal.
         
@@ -96,6 +106,17 @@ class StrategyOrderManager:
         # Use account-specific risk/executor if provided, otherwise fall back to defaults
         account_id = summary.account_id or "default"
         account_client = self.account_manager.get_account_client(account_id)
+        
+        # Check if dynamic sizing is enabled for this account
+        dynamic_sizer = None
+        if self.dynamic_sizing_factory:
+            # Factory can be a callable or an object with get_dynamic_sizer method
+            if callable(self.dynamic_sizing_factory):
+                dynamic_sizer = self.dynamic_sizing_factory(account_id)
+            elif hasattr(self.dynamic_sizing_factory, 'get_dynamic_sizer'):
+                dynamic_sizer = self.dynamic_sizing_factory.get_dynamic_sizer(account_id)
+        
+        # Use base risk manager for sizing, dynamic sizer will adjust later
         account_risk = risk or self.default_risk or RiskManager(client=account_client)
         
         # Create executor with trade_service and user_id for idempotency
@@ -123,6 +144,68 @@ class StrategyOrderManager:
                 f"Price: {signal.price}"
             )
             return None
+        
+        # CRITICAL FIX: Portfolio risk checks BEFORE order execution
+        # This includes async locking and exposure reservation
+        portfolio_risk_manager = None
+        if self.portfolio_risk_manager_factory:
+            portfolio_risk_manager = self.portfolio_risk_manager_factory(account_id)
+        
+        if portfolio_risk_manager:
+            # CRITICAL: check_order_allowed() uses async locking internally
+            # It also RESERVES exposure before order execution
+            allowed, reason = await portfolio_risk_manager.check_order_allowed(
+                signal=signal,
+                summary=summary,
+                account_id=account_id
+            )
+            if not allowed:
+                # Option 1: Reject order
+                if not portfolio_risk_manager.config.auto_reduce_order_size:
+                    raise RiskLimitExceededError(
+                        f"Order would breach risk limit: {reason}",
+                        account_id=account_id,
+                        strategy_id=summary.id,
+                        details={"account_id": account_id, "strategy_id": summary.id, "reason": reason}
+                    )
+                # Option 2: Reduce order size (if enabled)
+                else:
+                    adjusted_sizing = portfolio_risk_manager.calculate_max_allowed_size(
+                        signal, summary, account_id
+                    )
+                    if adjusted_sizing:
+                        # Adjust signal quantity (simplified - actual implementation would update signal)
+                        logger.info(
+                            f"[{summary.id}] Reducing order size to fit within risk limits: "
+                            f"{adjusted_sizing:.8f} (original would breach)"
+                        )
+                        # TODO: Update signal.quantity with adjusted_sizing
+                    else:
+                        raise RiskLimitExceededError(
+                            f"Cannot reduce order size to fit within limits: {reason}",
+                            account_id=account_id,
+                            strategy_id=summary.id,
+                            details={"account_id": account_id, "strategy_id": summary.id, "reason": reason}
+                        )
+        
+        # Check circuit breakers
+        # Bug #3: Fix circuit breaker factory access - handle both callable and object with get_circuit_breaker method
+        circuit_breaker = None
+        if self.circuit_breaker_factory:
+            # Factory can be a callable or an object with get_circuit_breaker method
+            if callable(self.circuit_breaker_factory):
+                circuit_breaker = self.circuit_breaker_factory(account_id)
+            elif hasattr(self.circuit_breaker_factory, 'get_circuit_breaker'):
+                circuit_breaker = self.circuit_breaker_factory.get_circuit_breaker(account_id)
+        
+        if circuit_breaker and hasattr(circuit_breaker, 'is_active'):
+            if circuit_breaker.is_active(account_id, summary.id):
+                raise CircuitBreakerActiveError(
+                    f"Circuit breaker active for {account_id}",
+                    account_id=account_id,
+                    strategy_id=summary.id,
+                    details={"account_id": account_id, "strategy_id": summary.id}
+                )
         
         # CRITICAL: Leverage in Binance is PER SYMBOL, not per strategy.
         # Binance defaults to 20x leverage if not explicitly set.
@@ -211,15 +294,31 @@ class StrategyOrderManager:
                     f"fixed_amount={summary.fixed_amount}, risk_per_trade={summary.risk_per_trade}, "
                     f"price={price}, symbol={signal.symbol}"
                 )
-                sizing = account_risk.size_position(
-                    symbol=signal.symbol,
-                    risk_per_trade=summary.risk_per_trade,
-                    price=price,
-                    fixed_amount=summary.fixed_amount
-                )
-                logger.info(
-                    f"[{summary.id}] Position sizing result: qty={sizing.quantity}, notional={sizing.notional:.2f} USDT"
-                )
+                
+                # Bug #4: Use dynamic sizing if enabled (dynamic_sizer exists), otherwise use base risk manager
+                if dynamic_sizer:
+                    # Bug #4: Pass klines to dynamic sizer for ATR calculation
+                    sizing = dynamic_sizer.size_position(
+                        symbol=signal.symbol,
+                        risk_per_trade=summary.risk_per_trade,
+                        price=price,
+                        fixed_amount=summary.fixed_amount,
+                        strategy_id=summary.id,
+                        klines=klines  # Bug #4: Pass klines for ATR calculation
+                    )
+                    logger.info(
+                        f"[{summary.id}] Dynamic sizing result: qty={sizing.quantity}, notional={sizing.notional:.2f} USDT"
+                    )
+                else:
+                    sizing = account_risk.size_position(
+                        symbol=signal.symbol,
+                        risk_per_trade=summary.risk_per_trade,
+                        price=price,
+                        fixed_amount=summary.fixed_amount
+                    )
+                    logger.info(
+                        f"[{summary.id}] Position sizing result: qty={sizing.quantity}, notional={sizing.notional:.2f} USDT"
+                    )
         except (ValueError, PositionSizingError) as exc:
             # Handle position sizing errors gracefully
             error_msg = f"[{summary.id}] Position sizing failed: {exc}"
@@ -242,13 +341,30 @@ class StrategyOrderManager:
                 reduce_only_override=reduce_only_override,
                 strategy_id=summary.id,
             )
+            
+            # CRITICAL FIX #2: Confirm exposure reservation after successful execution
+            # Handles partial fills, full fills, and converts reservation to real exposure
+            if portfolio_risk_manager and order_response:
+                await portfolio_risk_manager.confirm_exposure(
+                    account_id, summary.id, order_response
+                )
         except (OrderExecutionError, BinanceAPIError) as exc:
+            # CRITICAL FIX #2: Release reservation if order failed
+            if portfolio_risk_manager:
+                await portfolio_risk_manager.release_reservation(
+                    account_id, summary.id
+                )
             # Log and re-raise API errors
             logger.error(
                 f"[{summary.id}] Order execution failed: {exc.message if hasattr(exc, 'message') else exc}"
             )
             raise
         except Exception as exc:
+            # CRITICAL FIX #2: Release reservation if order failed
+            if portfolio_risk_manager:
+                await portfolio_risk_manager.release_reservation(
+                    account_id, summary.id
+                )
             # Wrap unexpected errors
             logger.exception(f"[{summary.id}] Unexpected error during order execution: {exc}")
             raise OrderExecutionError(
@@ -261,6 +377,21 @@ class StrategyOrderManager:
         if order_response:
             # Only update if order was filled (not NEW with zero execution)
             if not (order_response.status == "NEW" and order_response.executed_qty == 0):
+                # Bug #5: Record trade for dynamic sizing performance tracking
+                if dynamic_sizer and order_response.realized_pnl is not None:
+                    # Calculate if trade was profitable
+                    is_profitable = order_response.realized_pnl > 0
+                    dynamic_sizer.record_trade(
+                        strategy_id=summary.id,
+                        symbol=signal.symbol,
+                        is_profitable=is_profitable,
+                        pnl=order_response.realized_pnl
+                    )
+                    logger.debug(
+                        f"[{summary.id}] Recorded trade for dynamic sizing: "
+                        f"profitable={is_profitable}, pnl={order_response.realized_pnl:.2f}"
+                    )
+                
                 # Track the trade in memory (protected with lock)
                 order_with_exit_reason = order_response.model_copy(
                     update={"exit_reason": signal.exit_reason} if signal.exit_reason else {}

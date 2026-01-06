@@ -264,12 +264,22 @@ class StrategyExecutor:
             executor: Order executor
         """
         # Execute the order
+        # Bug #4: Get klines for dynamic sizing (ATR calculation)
+        # Try to get klines from strategy if available, otherwise None
+        klines = None
+        if hasattr(strategy, 'get_klines'):
+            try:
+                klines = await strategy.get_klines()
+            except Exception as e:
+                logger.debug(f"[{summary.id}] Could not get klines from strategy: {e}")
+        
         order_response = await self.order_manager.execute_order(
             signal=signal,
             summary=summary,
             strategy=strategy,
             risk=risk,
             executor=executor,
+            klines=klines,  # Bug #4: Pass klines for ATR calculation
         )
         
         if not order_response:

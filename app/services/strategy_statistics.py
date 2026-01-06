@@ -77,83 +77,126 @@ class StrategyStatistics:
         # Calculate basic stats
         total_trades = len(trades)
         
+        # Helper to get actual fee from order (same logic as report page)
+        def get_order_fee(order: OrderResponse, notional: float) -> float:
+            """Get actual commission from Binance order, with fallback estimate."""
+            if order.commission is not None:
+                # Convert commission to USDT if needed (assuming commission_asset is tracked)
+                # For now, assume commission is already in USDT or main quote currency
+                return float(order.commission)
+            # Fallback: estimate 0.04% of notional (Binance Futures typical fee)
+            return notional * 0.0004
+        
         # Track positions to calculate PnL correctly for both LONG and SHORT
         # In One-Way mode: net position can be LONG (positive), SHORT (negative), or flat (zero)
+        # Position queue: (quantity, entry_price, side, entry_fee)
         completed_trades = []
-        position_queue = []  # List of (quantity, entry_price, side) tuples
+        position_queue = []
         
         for trade in trades:
             entry_price = trade.avg_price or trade.price
             quantity = trade.executed_qty
             side = trade.side
             
+            # Get actual fee from Binance order
+            notional = entry_price * quantity
+            actual_fee = get_order_fee(trade, notional)
+            
             if side == "BUY":
                 if position_queue and position_queue[0][2] == "SHORT":
                     # Closing or reducing SHORT position
                     remaining_qty = quantity
+                    remaining_fee = actual_fee
+                    
                     while remaining_qty > 0 and position_queue and position_queue[0][2] == "SHORT":
                         short_entry = position_queue[0]
                         short_qty = short_entry[0]
                         short_price = short_entry[1]
+                        short_entry_fee = short_entry[3] if len(short_entry) > 3 else (short_price * short_qty * 0.0004)
                         
                         if short_qty <= remaining_qty:
                             # Close entire SHORT position
                             close_qty = short_qty
+                            close_fee_ratio = 1.0
                             position_queue.pop(0)
                         else:
                             # Partial close
                             close_qty = remaining_qty
-                            position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT")
+                            close_fee_ratio = remaining_qty / short_qty
+                            position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT", short_entry_fee)
                         
-                        # PnL for SHORT: entry_price - exit_price (profit when price drops)
-                        pnl = (short_price - entry_price) * close_qty
+                        # PnL for SHORT: (entry_price - exit_price) * quantity - fees
+                        gross_pnl = (short_price - entry_price) * close_qty
+                        # Use actual fees from orders (proportional to quantity)
+                        entry_fee_portion = short_entry_fee * close_fee_ratio
+                        exit_fee_portion = actual_fee * (close_qty / quantity) if quantity > 0 else 0
+                        total_fee = entry_fee_portion + exit_fee_portion
+                        net_pnl = gross_pnl - total_fee
+                        
                         completed_trades.append({
-                            "pnl": pnl,
+                            "pnl": net_pnl,
                             "quantity": close_qty,
-                            "side": "SHORT"
+                            "side": "SHORT",
+                            "fee": total_fee
                         })
                         remaining_qty -= close_qty
+                        remaining_fee -= exit_fee_portion
                     
                     # If remaining quantity after closing SHORT, open LONG
                     if remaining_qty > 0:
-                        position_queue.append((remaining_qty, entry_price, "LONG"))
+                        remaining_fee_portion = actual_fee * (remaining_qty / quantity) if quantity > 0 else 0
+                        position_queue.append((remaining_qty, entry_price, "LONG", remaining_fee_portion))
                 else:
                     # Opening or adding to LONG position
-                    position_queue.append((quantity, entry_price, "LONG"))
+                    position_queue.append((quantity, entry_price, "LONG", actual_fee))
             
             elif side == "SELL":
                 if position_queue and position_queue[0][2] == "LONG":
                     # Closing or reducing LONG position
                     remaining_qty = quantity
+                    remaining_fee = actual_fee
+                    
                     while remaining_qty > 0 and position_queue and position_queue[0][2] == "LONG":
                         long_entry = position_queue[0]
                         long_qty = long_entry[0]
                         long_price = long_entry[1]
+                        long_entry_fee = long_entry[3] if len(long_entry) > 3 else (long_price * long_qty * 0.0004)
                         
                         if long_qty <= remaining_qty:
                             # Close entire LONG position
                             close_qty = long_qty
+                            close_fee_ratio = 1.0
                             position_queue.pop(0)
                         else:
                             # Partial close
                             close_qty = remaining_qty
-                            position_queue[0] = (long_qty - remaining_qty, long_price, "LONG")
+                            close_fee_ratio = remaining_qty / long_qty
+                            position_queue[0] = (long_qty - remaining_qty, long_price, "LONG", long_entry_fee)
                         
-                        # PnL for LONG: exit_price - entry_price
-                        pnl = (entry_price - long_price) * close_qty
+                        # PnL for LONG: (exit_price - entry_price) * quantity - fees
+                        gross_pnl = (entry_price - long_price) * close_qty
+                        # Use actual fees from orders (proportional to quantity)
+                        entry_fee_portion = long_entry_fee * close_fee_ratio
+                        exit_fee_portion = actual_fee * (close_qty / quantity) if quantity > 0 else 0
+                        total_fee = entry_fee_portion + exit_fee_portion
+                        net_pnl = gross_pnl - total_fee
+                        
                         completed_trades.append({
-                            "pnl": pnl,
+                            "pnl": net_pnl,
                             "quantity": close_qty,
-                            "side": "LONG"
+                            "side": "LONG",
+                            "fee": total_fee
                         })
                         remaining_qty -= close_qty
+                        remaining_fee -= exit_fee_portion
                     
                     # If remaining quantity after closing LONG, open SHORT
                     if remaining_qty > 0:
-                        position_queue.append((remaining_qty, entry_price, "SHORT"))
+                        remaining_fee_portion = actual_fee * (remaining_qty / quantity) if quantity > 0 else 0
+                        position_queue.append((remaining_qty, entry_price, "SHORT", remaining_fee_portion))
                 else:
                     # Opening or adding to SHORT position
-                    position_queue.append((quantity, entry_price, "SHORT"))
+                    position_queue.append((quantity, entry_price, "SHORT", actual_fee))
         
         # Calculate PnL statistics
         total_pnl = sum(t["pnl"] for t in completed_trades)

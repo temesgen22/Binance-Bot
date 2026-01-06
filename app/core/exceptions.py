@@ -136,3 +136,30 @@ class ConfigurationError(BinanceBotException):
         super().__init__(message, details)
         self.config_key = config_key
 
+
+class RiskLimitExceededError(BinanceBotException):
+    """Exception raised when risk limit would be exceeded."""
+    
+    def __init__(self, message: str, account_id: str | None = None, strategy_id: str | None = None, details: dict | None = None):
+        super().__init__(message, details)
+        self.account_id = account_id
+        self.strategy_id = strategy_id
+
+
+class CircuitBreakerActiveError(BinanceBotException):
+    """Exception raised when circuit breaker is active."""
+    
+    def __init__(self, message: str, account_id: str | None = None, strategy_id: str | None = None, details: dict | None = None):
+        super().__init__(message, details)
+        self.account_id = account_id
+        self.strategy_id = strategy_id
+
+
+class DrawdownLimitExceededError(BinanceBotException):
+    """Exception raised when drawdown limit is exceeded."""
+    
+    def __init__(self, message: str, account_id: str | None = None, current_drawdown: float | None = None, max_drawdown: float | None = None, details: dict | None = None):
+        super().__init__(message, details)
+        self.account_id = account_id
+        self.current_drawdown = current_drawdown
+        self.max_drawdown = max_drawdown

@@ -10,6 +10,17 @@ from app.models.strategy import (
     StrategyType,
     OverallStats,
 )
+from app.models.risk_management import (
+    RiskManagementConfigBase,
+    RiskManagementConfigCreate,
+    RiskManagementConfigUpdate,
+    RiskManagementConfigResponse,
+    RiskMetricsResponse,
+    CircuitBreakerEventResponse,
+    PortfolioRiskStatusResponse,
+    OrderRiskCheckRequest,
+    OrderRiskCheckResponse,
+)
 
 __all__ = [
     "CreateStrategyRequest",
@@ -20,5 +31,15 @@ __all__ = [
     "StrategyType",
     "OverallStats",
     "OrderResponse",
+    # Risk Management Models
+    "RiskManagementConfigBase",
+    "RiskManagementConfigCreate",
+    "RiskManagementConfigUpdate",
+    "RiskManagementConfigResponse",
+    "RiskMetricsResponse",
+    "CircuitBreakerEventResponse",
+    "PortfolioRiskStatusResponse",
+    "OrderRiskCheckRequest",
+    "OrderRiskCheckResponse",
 ]
 

@@ -27,6 +27,7 @@ from app.api.routes.test_accounts import router as test_accounts_router
 from app.api.routes.market_analyzer import router as market_analyzer_router
 from app.api.routes.backtesting import router as backtesting_router
 from app.api.routes.auto_tuning import router as auto_tuning_router
+from app.api.routes.risk_metrics import router as risk_metrics_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -635,6 +636,7 @@ def create_app() -> FastAPI:
     app.include_router(market_analyzer_router)  # Market analyzer API
     app.include_router(backtesting_router)
     app.include_router(auto_tuning_router)  # Backtesting API
+    app.include_router(risk_metrics_router)  # Risk metrics and monitoring API
     
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)
@@ -704,6 +706,16 @@ def create_app() -> FastAPI:
         return await _serve_gui_file("strategy-register.html", "Strategy Registration GUI")
     
     # Keep /register route for backward compatibility (redirects to strategy-register)
+    @app.get("/risk-management", tags=["gui"], include_in_schema=False)
+    async def risk_management_gui():
+        """Serve the Risk Management Dashboard page."""
+        return await _serve_gui_file("risk-management.html", "Risk Management Dashboard")
+    
+    @app.get("/risk-management/", tags=["gui"], include_in_schema=False)
+    async def risk_management_gui_slash():
+        """Serve the Risk Management Dashboard page."""
+        return await _serve_gui_file("risk-management.html", "Risk Management Dashboard")
+    
     @app.get("/register", tags=["gui"], include_in_schema=False)
     async def register_gui_redirect():
         """Redirect /register to /strategy-register for backward compatibility."""
