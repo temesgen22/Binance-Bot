@@ -496,9 +496,9 @@ class TestStatsCalculationCaching:
         # First call - should calculate
         stats1 = runner.calculate_overall_stats(use_cache=True)
         
-        # Verify cache is set
-        assert hasattr(runner, '_overall_stats_cache')
-        cached_time, cached_stats = runner._overall_stats_cache
+        # Verify cache is set (cache is in statistics object, not runner)
+        assert hasattr(runner.statistics, '_overall_stats_cache')
+        cached_time, cached_stats = runner.statistics._overall_stats_cache
         assert cached_stats == stats1
         
         # Second call within cache window - should return cached
@@ -530,16 +530,16 @@ class TestStatsCalculationCaching:
         # First call
         stats1 = runner.calculate_overall_stats(use_cache=True)
         
-        # Manually expire cache by setting old timestamp
+        # Manually expire cache by setting old timestamp (cache is in statistics object)
         old_time = datetime.now(timezone.utc) - timedelta(seconds=31)
-        runner._overall_stats_cache = (old_time, stats1)
+        runner.statistics._overall_stats_cache = (old_time, stats1)
         
         # Second call - should recalculate
         stats2 = runner.calculate_overall_stats(use_cache=True)
         
         # Should be different (recalculated)
         # Note: stats might be equal in value but should be new object
-        cached_time, _ = runner._overall_stats_cache
+        cached_time, _ = runner.statistics._overall_stats_cache
         assert (datetime.now(timezone.utc) - cached_time).total_seconds() < 1
     
     def test_calculate_overall_stats_no_cache(

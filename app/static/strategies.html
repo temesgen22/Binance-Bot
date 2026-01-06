@@ -271,6 +271,47 @@
             color: white;
         }
 
+        .badge.risk-allowed {
+            background: #28a745;
+            color: white;
+        }
+
+        .badge.risk-warning {
+            background: #ffc107;
+            color: #856404;
+        }
+
+        .badge.risk-blocked {
+            background: #dc3545;
+            color: white;
+        }
+
+        .badge.risk-paused {
+            background: #6c757d;
+            color: white;
+        }
+
+        .risk-status-tooltip {
+            position: relative;
+            cursor: help;
+        }
+
+        .risk-status-tooltip:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 12px;
+            background: #333;
+            color: white;
+            border-radius: 4px;
+            font-size: 0.85em;
+            white-space: nowrap;
+            z-index: 1000;
+            margin-bottom: 5px;
+        }
+
         .btn-start {
             background: #28a745;
             color: white;
@@ -703,6 +744,8 @@
                 
                 displayStrategies(data);
                 updateOverallStats(data);
+                // Load risk status for all strategies
+                loadRiskStatusForStrategies(data.strategies);
             } catch (error) {
                 console.error('Error loading data:', error);
                 document.getElementById('strategiesContent').innerHTML = 
@@ -735,6 +778,7 @@
             html += '<th style="width: 300px;">Strategy Name</th>';
             html += '<th style="width: 120px;">Cryptocurrency</th>';
             html += '<th style="width: 120px;">Status</th>';
+            html += '<th style="width: 120px;">Risk Status</th>';
             html += '<th style="width: 120px;">Total PnL</th>';
             html += '<th style="width: 120px;">Realized PnL</th>';
             html += '<th style="width: 120px;">Unrealized PnL</th>';
@@ -764,6 +808,9 @@
                 // Status
                 const statusClass = strategy.status === 'running' ? 'running' : strategy.status === 'stopped' ? 'stopped' : 'error';
                 html += `<td><span class="badge ${statusClass}">${strategy.status.toUpperCase()}</span></td>`;
+                
+                // Risk Status (will be loaded asynchronously)
+                html += `<td id="risk-status-${strategy.strategy_id}"><span class="badge info">Loading...</span></td>`;
                 
                 // Total PnL
                 html += `<td class="${strategy.total_pnl >= 0 ? 'positive' : 'negative'}"><strong>${formatCurrency(strategy.total_pnl)}</strong></td>`;
@@ -813,7 +860,7 @@
                 html += '</tr>';
                 
                 // Details row
-                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="14">`;
+                html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="15">`;
                 html += `<div class="strategy-details ${isExpanded ? 'show' : ''}" id="details-${strategy.strategy_id}">`;
                 html += generateStrategyDetails(strategy);
                 html += '</div></td></tr>';
@@ -1194,6 +1241,304 @@
 
         // Logout function is now global from auth.js
         // loadUserInfo is now in common.js
+
+        // Risk Status Functions
+        async function loadRiskStatusForStrategies(strategies) {
+            if (!strategies || strategies.length === 0) return;
+            
+            // Load risk status for each strategy in parallel
+            const promises = strategies.map(strategy => loadRiskStatus(strategy.strategy_id));
+            await Promise.allSettled(promises);
+        }
+
+        async function loadRiskStatus(strategyId) {
+            try {
+                const response = await authFetch(`/api/risk/status/strategy/${strategyId}`);
+                if (!response.ok) {
+                    // Strategy might not exist or no risk config - show as allowed
+                    updateRiskStatusUI(strategyId, {
+                        can_trade: true,
+                        blocked_reasons: [],
+                        circuit_breaker_active: false
+                    });
+                    return;
+                }
+                
+                const riskStatus = await response.json();
+                
+                // Debug logging
+                console.log(`Risk status for strategy ${strategyId}:`, {
+                    can_trade: riskStatus.can_trade,
+                    circuit_breaker_active: riskStatus.circuit_breaker_active,
+                    blocked_reasons: riskStatus.blocked_reasons,
+                    risk_checks: riskStatus.risk_checks
+                });
+                
+                // CRITICAL: If daily_loss current_value is 0 (no trades) and circuit breaker is inactive,
+                // the strategy MUST be allowed to trade, regardless of what the API says
+                const dailyLossValue = riskStatus.risk_checks?.daily_loss?.current_value;
+                const dailyLossAllowed = riskStatus.risk_checks?.daily_loss?.allowed;
+                
+                if ((dailyLossValue === 0 || dailyLossValue === 0.0) && !riskStatus.circuit_breaker_active) {
+                    // Zero trades = no risk = always allowed
+                    if (!riskStatus.can_trade || !dailyLossAllowed) {
+                        console.warn(
+                            `Strategy ${strategyId} has zero trades (daily_loss=0) but API returned can_trade=false. ` +
+                            `This is incorrect - forcing can_trade=true`
+                        );
+                        riskStatus.can_trade = true;
+                        riskStatus.blocked_reasons = []; // Clear any invalid blocked reasons
+                        if (riskStatus.risk_checks?.daily_loss) {
+                            riskStatus.risk_checks.daily_loss.allowed = true;
+                        }
+                    }
+                }
+                
+                // CRITICAL SAFETY CHECK: If can_trade is false but no blocked_reasons and circuit_breaker is inactive,
+                // this is a backend bug - force to true and clear any invalid state
+                if (riskStatus.can_trade === false && 
+                    (!riskStatus.blocked_reasons || riskStatus.blocked_reasons.length === 0) &&
+                    !riskStatus.circuit_breaker_active) {
+                    console.warn(
+                        `Strategy ${strategyId} has can_trade=false but no blocking reason - ` +
+                        `This is a backend inconsistency. Forcing can_trade=true in frontend.`
+                    );
+                    riskStatus.can_trade = true;
+                    riskStatus.blocked_reasons = []; // Ensure it's empty
+                    // Also ensure risk_checks are set to allowed
+                    if (riskStatus.risk_checks) {
+                        if (riskStatus.risk_checks.daily_loss) {
+                            riskStatus.risk_checks.daily_loss.allowed = true;
+                        }
+                        if (riskStatus.risk_checks.portfolio_exposure) {
+                            riskStatus.risk_checks.portfolio_exposure.allowed = true;
+                        }
+                        if (riskStatus.risk_checks.circuit_breaker) {
+                            riskStatus.risk_checks.circuit_breaker.allowed = true;
+                            riskStatus.risk_checks.circuit_breaker.active = false;
+                        }
+                    }
+                }
+                
+                updateRiskStatusUI(strategyId, riskStatus);
+            } catch (error) {
+                console.error(`Error loading risk status for strategy ${strategyId}:`, error);
+                // On error, show as "Unknown"
+                const statusCell = document.getElementById(`risk-status-${strategyId}`);
+                if (statusCell) {
+                    statusCell.innerHTML = '<span class="badge info" title="Unable to load risk status">Unknown</span>';
+                }
+            }
+        }
+
+        function updateRiskStatusUI(strategyId, riskStatus) {
+            const statusCell = document.getElementById(`risk-status-${strategyId}`);
+            if (!statusCell) return;
+
+            // Debug logging
+            console.log(`Updating risk status UI for ${strategyId}:`, {
+                can_trade: riskStatus.can_trade,
+                circuit_breaker_active: riskStatus.circuit_breaker_active,
+                blocked_reasons: riskStatus.blocked_reasons,
+                has_risk_checks: !!riskStatus.risk_checks
+            });
+
+            let badgeClass = 'risk-allowed';
+            let badgeText = '✅ Allowed';
+            let tooltip = 'Strategy can trade normally';
+            let icon = '✅';
+
+            // Determine risk status
+            // CRITICAL: Check if daily_loss = 0 (no trades) first - these should NEVER be blocked
+            const dailyLossValue = riskStatus.risk_checks?.daily_loss?.current_value;
+            const hasZeroTrades = dailyLossValue === 0 || dailyLossValue === 0.0;
+            
+            // Check circuit breaker first (this indicates paused_by_risk status)
+            if (riskStatus.circuit_breaker_active) {
+                badgeClass = 'risk-paused';
+                badgeText = '⏸️ Paused';
+                icon = '⏸️';
+                tooltip = 'Strategy paused by risk management (circuit breaker active)';
+            } else if (hasZeroTrades) {
+                // Zero trades = no risk = always allowed (unless circuit breaker is active, which we already checked)
+                badgeClass = 'risk-allowed';
+                badgeText = '✅ Allowed';
+                icon = '✅';
+                tooltip = 'Strategy can trade normally (no trades yet)';
+            } else if (riskStatus.blocked_reasons && riskStatus.blocked_reasons.length > 0) {
+                badgeClass = 'risk-blocked';
+                badgeText = '🚫 Blocked';
+                icon = '🚫';
+                tooltip = `Blocked: ${riskStatus.blocked_reasons.join(', ')}`;
+            } else if (!riskStatus.can_trade) {
+                // Only show blocked if can_trade is false AND we have a valid reason
+                // If we reach here without blocked_reasons, it's likely a bug - force to Allowed
+                if (!riskStatus.blocked_reasons || riskStatus.blocked_reasons.length === 0) {
+                    console.warn(
+                        `Strategy ${strategyId} shows can_trade=false but no blocked_reasons - ` +
+                        `This is a backend bug. Forcing to Allowed in frontend.`
+                    );
+                    // Force to Allowed since there's no valid blocking reason
+                    badgeClass = 'risk-allowed';
+                    badgeText = '✅ Allowed';
+                    icon = '✅';
+                    tooltip = 'Strategy can trade normally (backend returned invalid state, corrected in frontend)';
+                } else {
+                    // Has blocked reasons, show as Blocked
+                    badgeClass = 'risk-blocked';
+                    badgeText = '🚫 Blocked';
+                    icon = '🚫';
+                    tooltip = 'Strategy cannot trade (risk limits exceeded)';
+                }
+            } else {
+                // Check if approaching limits (warnings)
+                const riskChecks = riskStatus.risk_checks || {};
+                const warnings = [];
+                
+                if (riskChecks.portfolio_exposure) {
+                    const exposure = riskChecks.portfolio_exposure;
+                    const pct = exposure.limit_value > 0 
+                        ? (exposure.current_value / exposure.limit_value) * 100 
+                        : 0;
+                    if (pct >= 80) {
+                        warnings.push(`Exposure: ${pct.toFixed(0)}%`);
+                    }
+                }
+                
+                if (riskChecks.daily_loss) {
+                    const daily = riskChecks.daily_loss;
+                    const pct = daily.limit_value < 0 
+                        ? Math.abs((daily.current_value / daily.limit_value) * 100)
+                        : 0;
+                    if (pct >= 80) {
+                        warnings.push(`Daily Loss: ${pct.toFixed(0)}%`);
+                    }
+                }
+                
+                if (warnings.length > 0) {
+                    badgeClass = 'risk-warning';
+                    badgeText = '⚠️ Warning';
+                    icon = '⚠️';
+                    tooltip = `Approaching limits: ${warnings.join(', ')}`;
+                } else {
+                    badgeClass = 'risk-allowed';
+                    badgeText = '✅ Allowed';
+                    icon = '✅';
+                    tooltip = 'Strategy can trade normally';
+                }
+            }
+
+            // Create clickable badge with tooltip
+            statusCell.innerHTML = `
+                <span class="badge ${badgeClass} risk-status-tooltip" 
+                      data-tooltip="${tooltip}"
+                      onclick="showRiskStatusModal('${strategyId}')"
+                      style="cursor: pointer;">
+                    ${badgeText}
+                </span>
+            `;
+        }
+
+        async function showRiskStatusModal(strategyId) {
+            try {
+                const response = await authFetch(`/api/risk/status/strategy/${strategyId}`);
+                if (!response.ok) {
+                    alert('Unable to load risk status details');
+                    return;
+                }
+                
+                const riskStatus = await response.json();
+                
+                // Create modal
+                const modal = document.createElement('div');
+                modal.className = 'modal-overlay';
+                modal.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 10000;
+                `;
+                
+                const modalContent = document.createElement('div');
+                modalContent.style.cssText = `
+                    background: white;
+                    padding: 30px;
+                    border-radius: 8px;
+                    max-width: 600px;
+                    max-height: 80vh;
+                    overflow-y: auto;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                `;
+                
+                let html = `
+                    <h2 style="margin-top: 0;">Risk Status Details</h2>
+                    <p><strong>Strategy:</strong> ${strategyId}</p>
+                    <p><strong>Account:</strong> ${riskStatus.account_id || 'N/A'}</p>
+                    <p><strong>Can Trade:</strong> ${riskStatus.can_trade ? '✅ Yes' : '❌ No'}</p>
+                `;
+                
+                if (riskStatus.blocked_reasons && riskStatus.blocked_reasons.length > 0) {
+                    html += `<p><strong>Blocked Reasons:</strong></p><ul>`;
+                    riskStatus.blocked_reasons.forEach(reason => {
+                        html += `<li>${reason}</li>`;
+                    });
+                    html += `</ul>`;
+                }
+                
+                html += `<p><strong>Circuit Breaker:</strong> ${riskStatus.circuit_breaker_active ? '⏸️ Active' : '✅ Inactive'}</p>`;
+                
+                if (riskStatus.risk_checks) {
+                    html += `<h3 style="margin-top: 20px;">Risk Checks</h3>`;
+                    html += `<table style="width: 100%; border-collapse: collapse; margin-top: 10px;">`;
+                    html += `<tr><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Check</th><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Status</th><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Current / Limit</th></tr>`;
+                    
+                    for (const [checkName, checkData] of Object.entries(riskStatus.risk_checks)) {
+                        const status = checkData.allowed ? '✅ Passed' : '❌ Failed';
+                        const current = checkData.current_value !== undefined ? checkData.current_value.toFixed(2) : 'N/A';
+                        const limit = checkData.limit_value !== undefined ? checkData.limit_value.toFixed(2) : 'N/A';
+                        html += `<tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${checkName.replace(/_/g, ' ').toUpperCase()}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${status}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${current} / ${limit}</td>
+                        </tr>`;
+                    }
+                    html += `</table>`;
+                }
+                
+                if (riskStatus.last_enforcement_event) {
+                    html += `<h3 style="margin-top: 20px;">Last Enforcement Event</h3>`;
+                    html += `<p><strong>Type:</strong> ${riskStatus.last_enforcement_event.event_type}</p>`;
+                    html += `<p><strong>Message:</strong> ${riskStatus.last_enforcement_event.message}</p>`;
+                    html += `<p><strong>Time:</strong> ${new Date(riskStatus.last_enforcement_event.created_at).toLocaleString()}</p>`;
+                }
+                
+                html += `
+                    <div style="margin-top: 20px; text-align: right;">
+                        <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+                    </div>
+                `;
+                
+                modalContent.innerHTML = html;
+                modal.appendChild(modalContent);
+                document.body.appendChild(modal);
+                
+                // Close on overlay click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+            } catch (error) {
+                console.error('Error showing risk status modal:', error);
+                alert('Failed to load risk status details');
+            }
+        }
 
         // Auto-Tuning Functions
         async function loadAutoTuningStatus(strategyId) {

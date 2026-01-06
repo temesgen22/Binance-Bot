@@ -32,6 +32,15 @@ class NotificationType(str, Enum):
     SERVER_RESTART = "SERVER_RESTART"
     DATABASE_CONNECTION_FAILED = "DATABASE_CONNECTION_FAILED"
     DATABASE_CONNECTION_RESTORED = "DATABASE_CONNECTION_RESTORED"
+    # Risk enforcement notifications
+    RISK_LIMIT_EXCEEDED = "RISK_LIMIT_EXCEEDED"
+    ORDER_BLOCKED_BY_RISK = "ORDER_BLOCKED_BY_RISK"
+    CIRCUIT_BREAKER_TRIGGERED = "CIRCUIT_BREAKER_TRIGGERED"
+    ORDER_SIZE_REDUCED = "ORDER_SIZE_REDUCED"
+    DAILY_LOSS_LIMIT_WARNING = "DAILY_LOSS_LIMIT_WARNING"
+    WEEKLY_LOSS_LIMIT_WARNING = "WEEKLY_LOSS_LIMIT_WARNING"
+    DRAWDOWN_LIMIT_WARNING = "DRAWDOWN_LIMIT_WARNING"
+    EXPOSURE_LIMIT_WARNING = "EXPOSURE_LIMIT_WARNING"
 
 
 class TelegramNotifier:
@@ -221,6 +230,54 @@ class TelegramNotifier:
                 message += f"Notional: ${additional_info['notional']:,.2f}\n"
             if additional_info.get("leverage"):
                 message += f"Leverage: {additional_info['leverage']}x\n"
+        
+        elif notification_type == NotificationType.ORDER_BLOCKED_BY_RISK:
+            message += "\n🚫 <b>Order BLOCKED by Risk</b>\n"
+            if additional_info.get("reason"):
+                message += f"Reason: {additional_info['reason']}\n"
+            if additional_info.get("limit_type"):
+                message += f"Limit Type: {additional_info['limit_type']}\n"
+            if additional_info.get("current_value") is not None and additional_info.get("limit_value") is not None:
+                message += f"Current: ${additional_info['current_value']:,.2f}\n"
+                message += f"Limit: ${additional_info['limit_value']:,.2f}\n"
+            if additional_info.get("symbol"):
+                message += f"Symbol: {additional_info['symbol']}\n"
+            if additional_info.get("account_id"):
+                message += f"Account: {additional_info['account_id']}\n"
+        
+        elif notification_type == NotificationType.CIRCUIT_BREAKER_TRIGGERED:
+            message += "\n⛔ <b>Circuit Breaker TRIGGERED</b>\n"
+            if additional_info.get("breaker_type"):
+                message += f"Type: {additional_info['breaker_type']}\n"
+            if additional_info.get("reason"):
+                message += f"Reason: {additional_info['reason']}\n"
+            if additional_info.get("account_id"):
+                message += f"Account: {additional_info['account_id']}\n"
+            if additional_info.get("strategies_affected"):
+                message += f"Strategies Affected: {additional_info['strategies_affected']}\n"
+        
+        elif notification_type == NotificationType.ORDER_SIZE_REDUCED:
+            message += "\n⚠️ <b>Order Size REDUCED</b>\n"
+            if additional_info.get("original_size") and additional_info.get("reduced_size"):
+                message += f"Original: {additional_info['original_size']:.8f}\n"
+                message += f"Reduced: {additional_info['reduced_size']:.8f}\n"
+            if additional_info.get("reason"):
+                message += f"Reason: {additional_info['reason']}\n"
+        
+        elif notification_type in [
+            NotificationType.DAILY_LOSS_LIMIT_WARNING,
+            NotificationType.WEEKLY_LOSS_LIMIT_WARNING,
+            NotificationType.DRAWDOWN_LIMIT_WARNING,
+            NotificationType.EXPOSURE_LIMIT_WARNING
+        ]:
+            limit_name = notification_type.value.replace("_LIMIT_WARNING", "").replace("_", " ").title()
+            message += f"\n⚠️ <b>{limit_name} Warning</b>\n"
+            if additional_info.get("current_value") is not None and additional_info.get("limit_value") is not None:
+                percentage = (additional_info['current_value'] / additional_info['limit_value']) * 100 if additional_info['limit_value'] != 0 else 0
+                message += f"Current: ${additional_info['current_value']:,.2f} ({percentage:.1f}%)\n"
+                message += f"Limit: ${additional_info['limit_value']:,.2f}\n"
+            if additional_info.get("account_id"):
+                message += f"Account: {additional_info['account_id']}\n"
         
         # Add timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -522,6 +579,127 @@ class TelegramNotifier:
         )
         
         return await self.send_message(message)
+    
+    async def notify_order_blocked_by_risk(
+        self,
+        summary: StrategySummary,
+        reason: str,
+        account_id: str,
+        limit_type: Optional[str] = None,
+        current_value: Optional[float] = None,
+        limit_value: Optional[float] = None,
+        symbol: Optional[str] = None,
+    ) -> bool:
+        """Send notification when an order is blocked by risk limits.
+        
+        Args:
+            summary: Strategy summary
+            reason: Reason why order was blocked
+            account_id: Account ID
+            limit_type: Type of limit that was exceeded (e.g., "PORTFOLIO_EXPOSURE")
+            current_value: Current value that exceeded limit
+            limit_value: Limit value that was exceeded
+            symbol: Trading symbol
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        additional_info = {
+            "reason": reason,
+            "account_id": account_id,
+            "limit_type": limit_type,
+            "current_value": current_value,
+            "limit_value": limit_value,
+            "symbol": symbol or summary.symbol,
+        }
+        
+        message = self.format_strategy_message(
+            NotificationType.ORDER_BLOCKED_BY_RISK,
+            summary,
+            additional_info,
+        )
+        
+        return await self.send_message(message, disable_notification=False)
+    
+    async def notify_circuit_breaker_triggered(
+        self,
+        account_id: str,
+        breaker_type: str,
+        reason: str,
+        strategies_affected: Optional[list[str]] = None,
+        summary: Optional[StrategySummary] = None,
+    ) -> bool:
+        """Send notification when circuit breaker is triggered.
+        
+        Args:
+            account_id: Account ID
+            breaker_type: Type of circuit breaker (e.g., "consecutive_losses")
+            reason: Reason why circuit breaker triggered
+            strategies_affected: List of strategy IDs affected
+            summary: Optional strategy summary if single strategy affected
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        if summary:
+            # Single strategy affected
+            additional_info = {
+                "breaker_type": breaker_type,
+                "reason": reason,
+                "account_id": account_id,
+            }
+            message = self.format_strategy_message(
+                NotificationType.CIRCUIT_BREAKER_TRIGGERED,
+                summary,
+                additional_info,
+            )
+        else:
+            # Account-level or multiple strategies
+            message = f"⛔ <b>Circuit Breaker TRIGGERED</b>\n\n"
+            message += f"Account: <b>{account_id}</b>\n"
+            message += f"Type: {breaker_type}\n"
+            message += f"Reason: {reason}\n"
+            if strategies_affected:
+                message += f"Strategies Affected: {len(strategies_affected)}\n"
+                if len(strategies_affected) <= 5:
+                    for sid in strategies_affected:
+                        message += f"• {sid[:8]}...\n"
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            message += f"\n⏰ {timestamp}"
+        
+        return await self.send_message(message, disable_notification=False)
+    
+    async def notify_order_size_reduced(
+        self,
+        summary: StrategySummary,
+        original_size: float,
+        reduced_size: float,
+        reason: str,
+    ) -> bool:
+        """Send notification when order size is reduced due to risk limits.
+        
+        Args:
+            summary: Strategy summary
+            original_size: Original order size
+            reduced_size: Reduced order size
+            reason: Reason why size was reduced
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        additional_info = {
+            "original_size": original_size,
+            "reduced_size": reduced_size,
+            "reason": reason,
+        }
+        
+        message = self.format_strategy_message(
+            NotificationType.ORDER_SIZE_REDUCED,
+            summary,
+            additional_info,
+        )
+        
+        return await self.send_message(message)
 
 
 class NotificationService:
@@ -685,5 +863,53 @@ class NotificationService:
                 order_response,
                 position_action,
                 exit_reason,
+            )
+    
+    async def notify_order_blocked_by_risk(
+        self,
+        summary: StrategySummary,
+        reason: str,
+        account_id: str,
+        limit_type: Optional[str] = None,
+        current_value: Optional[float] = None,
+        limit_value: Optional[float] = None,
+        symbol: Optional[str] = None,
+    ) -> None:
+        """Notify that an order was blocked by risk limits.
+        
+        Args:
+            summary: Strategy summary
+            reason: Reason why order was blocked
+            account_id: Account ID
+            limit_type: Type of limit that was exceeded
+            current_value: Current value that exceeded limit
+            limit_value: Limit value that was exceeded
+            symbol: Trading symbol
+        """
+        if self.telegram:
+            await self.telegram.notify_order_blocked_by_risk(
+                summary, reason, account_id, limit_type, current_value, limit_value, symbol
+            )
+    
+    async def notify_circuit_breaker_triggered(
+        self,
+        account_id: str,
+        breaker_type: str,
+        reason: str,
+        strategies_affected: Optional[list[str]] = None,
+        summary: Optional[StrategySummary] = None,
+    ) -> None:
+        """Notify that a circuit breaker was triggered.
+        
+        Args:
+            account_id: Account ID
+            breaker_type: Type of circuit breaker
+            reason: Reason why circuit breaker triggered
+            strategies_affected: List of strategy IDs affected
+            summary: Optional strategy summary if single strategy affected
+        """
+        if self.telegram:
+            await self.telegram.notify_circuit_breaker_triggered(
+                account_id, breaker_type, reason, strategies_affected, summary
             )
 

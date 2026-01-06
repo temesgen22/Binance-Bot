@@ -88,6 +88,7 @@ class StrategyState(str, Enum):
     stopped = "stopped"
     running = "running"
     error = "error"
+    paused_by_risk = "paused_by_risk"  # Paused by circuit breaker or risk management
 
 
 class StrategySummary(BaseModel):

@@ -505,14 +505,23 @@ class TestStateSynchronization:
         strategy_summary.status = StrategyState.running
         strategy_runner._strategies[strategy_summary.id] = strategy_summary
         
+        # Ensure state_manager uses the same strategies dict reference
+        # (StrategyPersistence should receive the same dict reference, but if not, sync it)
+        if strategy_runner.state_manager._strategies is not strategy_runner._strategies:
+            strategy_runner.state_manager._strategies = strategy_runner._strategies
+        
         # Mock database state (matches memory)
-        strategy_runner.strategy_service.db_service.get_strategy.return_value = MagicMock(
+        # get_strategy takes (user_id, strategy_id) as arguments
+        strategy_runner.state_manager.strategy_service.db_service.get_strategy.return_value = MagicMock(
             id="test-strategy-123",
             position_size=0.001,
             position_side="LONG",
             entry_price=40000.0,
             status="running",
         )
+        
+        # Ensure user_id is set on state_manager
+        strategy_runner.state_manager.user_id = "test-user-uuid"
         
         # Check consistency
         result = await strategy_runner.state_manager.check_state_consistency(strategy_summary.id)
@@ -532,14 +541,23 @@ class TestStateSynchronization:
         strategy_summary.status = StrategyState.running
         strategy_runner._strategies[strategy_summary.id] = strategy_summary
         
+        # Ensure state_manager uses the same strategies dict reference
+        # (StrategyPersistence should receive the same dict reference, but if not, sync it)
+        if strategy_runner.state_manager._strategies is not strategy_runner._strategies:
+            strategy_runner.state_manager._strategies = strategy_runner._strategies
+        
         # Mock database state (different from memory)
-        strategy_runner.strategy_service.db_service.get_strategy.return_value = MagicMock(
+        # get_strategy takes (user_id, strategy_id) as arguments
+        strategy_runner.state_manager.strategy_service.db_service.get_strategy.return_value = MagicMock(
             id="test-strategy-123",
             position_size=0.002,  # Different
             position_side="SHORT",  # Different
             entry_price=41000.0,  # Different
             status="running",
         )
+        
+        # Ensure user_id is set on state_manager
+        strategy_runner.state_manager.user_id = "test-user-uuid"
         
         # Check consistency
         result = await strategy_runner.state_manager.check_state_consistency(strategy_summary.id)

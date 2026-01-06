@@ -374,50 +374,48 @@ class TradeService:
         """
         # Get account UUID from account_id string
         from app.models.db_models import Account
+        account_id_lower = account_id.lower().strip()
+        
+        logger.debug(f"Getting trades for account_id: '{account_id}' (normalized: '{account_id_lower}'), user_id: {user_id}")
+        
+        # This method is sync-only (endpoint uses sync sessions via get_db_session_dependency)
         if self._is_async:
-            from sqlalchemy import select
-            stmt = select(Account).filter(
-                Account.user_id == user_id,
-                Account.account_id == account_id.lower(),
-                Account.is_active == True
-            )
-            result = self.db_service.db.execute(stmt)
-            account = result.scalar_one_or_none()
-        else:
-            account = self.db_service.db.query(Account).filter(
-                Account.user_id == user_id,
-                Account.account_id == account_id.lower(),
-                Account.is_active == True
-            ).first()
+            raise RuntimeError("get_trades_by_account is sync-only. Endpoint should use sync Session.")
+        
+        account = self.db_service.db.query(Account).filter(
+            Account.user_id == user_id,
+            Account.account_id == account_id_lower,
+            Account.is_active == True
+        ).first()
         
         if not account:
+            logger.warning(f"Account not found: account_id='{account_id}' (normalized: '{account_id_lower}'), user_id={user_id}")
             return []
+        
+        logger.debug(f"Found account: id={account.id}, account_id='{account.account_id}'")
         
         # Get all strategies for this account
         from app.models.db_models import Strategy
-        if self._is_async:
-            from sqlalchemy import select
-            stmt = select(Strategy).filter(
-                Strategy.user_id == user_id,
-                Strategy.account_id == account.id
-            )
-            result = self.db_service.db.execute(stmt)
-            strategies = list(result.scalars().all())
-        else:
-            strategies = self.db_service.db.query(Strategy).filter(
-                Strategy.user_id == user_id,
-                Strategy.account_id == account.id
-            ).all()
+        strategies = self.db_service.db.query(Strategy).filter(
+            Strategy.user_id == user_id,
+            Strategy.account_id == account.id
+        ).all()
+        
+        logger.debug(f"Found {len(strategies)} strategies for account {account_id}: {[s.name for s in strategies[:5]]}")
         
         if not strategies:
+            logger.info(f"No strategies found for account {account_id}, returning empty trades list")
             return []
         
         # Get strategy UUIDs
         strategy_ids = [s.id for s in strategies]
+        logger.debug(f"Getting trades for {len(strategy_ids)} strategies")
         
-        # Get trades for all strategies
-        # Note: get_trades_by_account is sync, so we use sync methods
+        # Get trades for all strategies (sync method)
         trades_dict = self.get_trades_batch(user_id, strategy_ids, limit_per_strategy=limit)
+        
+        total_trades = sum(len(t) for t in trades_dict.values())
+        logger.info(f"Retrieved {total_trades} trades for account {account_id} across {len(trades_dict)} strategies")
         
         # Flatten to single list
         all_trades = []

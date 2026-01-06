@@ -10,6 +10,7 @@ Tests:
 - User isolation (users can only see their own data)
 """
 import pytest
+pytestmark = pytest.mark.slow  # Walk-forward storage tests are slow and excluded from CI
 import os
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID

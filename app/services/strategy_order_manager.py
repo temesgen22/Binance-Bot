@@ -26,6 +26,7 @@ from app.strategies.base import Strategy, StrategySignal
 if TYPE_CHECKING:
     from app.services.trade_service import TradeService
     from app.services.strategy_service import StrategyService
+    from app.services.notifier import NotificationService
     from uuid import UUID
 
 
@@ -47,6 +48,7 @@ class StrategyOrderManager:
         portfolio_risk_manager_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account PortfolioRiskManager
         circuit_breaker_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account CircuitBreaker
         dynamic_sizing_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account DynamicPositionSizer
+        notification_service: Optional["NotificationService"] = None,  # Notification service for risk alerts
     ) -> None:
         """Initialize the order manager.
         
@@ -61,6 +63,10 @@ class StrategyOrderManager:
             strategies: Reference to strategies dictionary
             trades: Reference to trades dictionary
             lock: Async lock for thread safety
+            portfolio_risk_manager_factory: Factory for per-account PortfolioRiskManager
+            circuit_breaker_factory: Factory for per-account CircuitBreaker
+            dynamic_sizing_factory: Factory for per-account DynamicPositionSizer
+            notification_service: Notification service for risk alerts
         """
         self.account_manager = account_manager
         self.default_risk = default_risk
@@ -75,6 +81,12 @@ class StrategyOrderManager:
         self.portfolio_risk_manager_factory = portfolio_risk_manager_factory
         self.circuit_breaker_factory = circuit_breaker_factory
         self.dynamic_sizing_factory = dynamic_sizing_factory
+        self.notification_service = notification_service
+        
+        # Get database service from strategy_service if available
+        self.db_service: Optional["DatabaseService"] = None
+        if strategy_service and hasattr(strategy_service, 'db_service'):
+            self.db_service = strategy_service.db_service
     
     async def execute_order(
         self,
@@ -160,6 +172,46 @@ class StrategyOrderManager:
                 account_id=account_id
             )
             if not allowed:
+                # Extract limit type from reason for notification
+                limit_type = None
+                current_value = None
+                limit_value = None
+                if "exposure" in reason.lower():
+                    limit_type = "PORTFOLIO_EXPOSURE"
+                elif "daily loss" in reason.lower():
+                    limit_type = "DAILY_LOSS"
+                elif "weekly loss" in reason.lower():
+                    limit_type = "WEEKLY_LOSS"
+                elif "drawdown" in reason.lower():
+                    limit_type = "DRAWDOWN"
+                
+                # Send notification before raising exception
+                if self.notification_service:
+                    asyncio.create_task(
+                        self.notification_service.notify_order_blocked_by_risk(
+                            summary=summary,
+                            reason=reason,
+                            account_id=account_id,
+                            limit_type=limit_type,
+                            current_value=current_value,
+                            limit_value=limit_value,
+                            symbol=signal.symbol,
+                        )
+                    )
+                
+                # Log enforcement event to database
+                self._log_enforcement_event(
+                    event_type="ORDER_BLOCKED",
+                    event_level="WARNING",
+                    message=f"Order blocked: {reason}",
+                    account_id=account_id,
+                    strategy_id=summary.id,
+                    limit_type=limit_type,
+                    current_value=current_value,
+                    limit_value=limit_value,
+                    symbol=signal.symbol,
+                )
+                
                 # Option 1: Reject order
                 if not portfolio_risk_manager.config.auto_reduce_order_size:
                     raise RiskLimitExceededError(
@@ -200,6 +252,28 @@ class StrategyOrderManager:
         
         if circuit_breaker and hasattr(circuit_breaker, 'is_active'):
             if circuit_breaker.is_active(account_id, summary.id):
+                # Send notification before raising exception
+                if self.notification_service:
+                    asyncio.create_task(
+                        self.notification_service.notify_circuit_breaker_triggered(
+                            account_id=account_id,
+                            breaker_type="active",  # Will be more specific if available
+                            reason=f"Circuit breaker is active for account {account_id}",
+                            strategies_affected=[summary.id],
+                            summary=summary,
+                        )
+                    )
+                
+                # Log enforcement event to database
+                self._log_enforcement_event(
+                    event_type="CIRCUIT_BREAKER_ACTIVE",
+                    event_level="WARNING",
+                    message=f"Circuit breaker active for account {account_id}",
+                    account_id=account_id,
+                    strategy_id=summary.id,
+                    breaker_type="active",
+                )
+                
                 raise CircuitBreakerActiveError(
                     f"Circuit breaker active for {account_id}",
                     account_id=account_id,
@@ -784,4 +858,125 @@ class StrategyOrderManager:
             error_details["status_code"] = underlying_error.status_code
         
         return error_details
+    
+    def _log_enforcement_event(
+        self,
+        event_type: str,
+        event_level: str,
+        message: str,
+        account_id: str,
+        strategy_id: str,
+        limit_type: Optional[str] = None,
+        current_value: Optional[float] = None,
+        limit_value: Optional[float] = None,
+        symbol: Optional[str] = None,
+        breaker_type: Optional[str] = None,
+    ) -> None:
+        """Log risk enforcement event to database.
+        
+        Args:
+            event_type: Type of event (e.g., "ORDER_BLOCKED", "CIRCUIT_BREAKER_ACTIVE")
+            event_level: Event level ("INFO", "WARNING", "ERROR", "CRITICAL")
+            message: Event message
+            account_id: Account ID (string)
+            strategy_id: Strategy ID (string)
+            limit_type: Optional limit type that was exceeded
+            current_value: Optional current value
+            limit_value: Optional limit value
+            symbol: Optional trading symbol
+            breaker_type: Optional circuit breaker type
+        """
+        if not self.db_service or not self.user_id:
+            # No database access - skip logging
+            return
+        
+        try:
+            # Get account UUID from account_id string
+            account_uuid = None
+            if self.account_manager:
+                account_config = self.account_manager.get_account_config(account_id)
+                if account_config and hasattr(account_config, 'id'):
+                    account_uuid = account_config.id
+            
+            # Get strategy UUID from strategy_id string
+            strategy_uuid = None
+            if self.strategy_service and self.user_id:
+                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                if db_strategy:
+                    strategy_uuid = db_strategy.id
+            
+            # Create event metadata
+            event_metadata = {
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+            }
+            if limit_type:
+                event_metadata["limit_type"] = limit_type
+            if current_value is not None:
+                event_metadata["current_value"] = current_value
+            if limit_value is not None:
+                event_metadata["limit_value"] = limit_value
+            if symbol:
+                event_metadata["symbol"] = symbol
+            if breaker_type:
+                event_metadata["breaker_type"] = breaker_type
+            
+            # Log to database (non-blocking - fire and forget)
+            # Use asyncio.create_task if in async context, otherwise call directly
+            if self.db_service._is_async:
+                # Async context - create task
+                asyncio.create_task(
+                    self._async_log_event(
+                        event_type, event_level, message, strategy_uuid, account_uuid, event_metadata
+                    )
+                )
+            else:
+                # Sync context - call directly
+                self.db_service.create_system_event(
+                    event_type=event_type,
+                    event_level=event_level,
+                    message=message,
+                    strategy_id=strategy_uuid,
+                    account_id=account_uuid,
+                    event_metadata=event_metadata,
+                )
+        except Exception as e:
+            # Don't fail order execution if logging fails
+            logger.warning(f"Failed to log enforcement event to database: {e}")
+    
+    async def _async_log_event(
+        self,
+        event_type: str,
+        event_level: str,
+        message: str,
+        strategy_uuid: Optional["UUID"],
+        account_uuid: Optional["UUID"],
+        event_metadata: dict,
+    ) -> None:
+        """Async helper to log event."""
+        try:
+            # Note: DatabaseService.create_system_event is sync, but we're in async context
+            # We need to use async version if available, or wrap in to_thread
+            if hasattr(self.db_service, 'async_create_system_event'):
+                await self.db_service.async_create_system_event(
+                    event_type=event_type,
+                    event_level=event_level,
+                    message=message,
+                    strategy_id=strategy_uuid,
+                    account_id=account_uuid,
+                    event_metadata=event_metadata,
+                )
+            else:
+                # Fallback: use sync version in thread
+                await asyncio.to_thread(
+                    self.db_service.create_system_event,
+                    event_type=event_type,
+                    event_level=event_level,
+                    message=message,
+                    strategy_id=strategy_uuid,
+                    account_id=account_uuid,
+                    event_metadata=event_metadata,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to async log enforcement event: {e}")
 

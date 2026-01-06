@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 from loguru import logger
 
 from app.core.binance_client_manager import BinanceClientManager
+from app.core.exceptions import RiskLimitExceededError, CircuitBreakerActiveError
 from app.models.strategy import StrategyState, StrategySummary
 from app.risk.manager import RiskManager
 from app.services.notifier import NotificationService
@@ -101,6 +102,12 @@ class StrategyExecutor:
         
         try:
             while True:
+                # Check if strategy was paused by risk management
+                # If status is paused_by_risk, exit the loop (strategy is stopped)
+                if summary.status == StrategyState.paused_by_risk:
+                    logger.info(f"[{summary.id}] Strategy paused by risk management, exiting loop")
+                    break
+                
                 # CRITICAL ORDER: Sync with Binance BEFORE evaluating strategy
                 # This ensures strategy.evaluate() uses correct state, not stale state
                 # 
@@ -211,7 +218,21 @@ class StrategyExecutor:
             
             await strategy.teardown()
             raise
+        except (RiskLimitExceededError, CircuitBreakerActiveError) as exc:
+            # Risk enforcement errors - do NOT mark strategy as error
+            # These are expected behaviors when risk limits are enforced
+            account_id = summary.account_id or "default"
+            account_name = self.client_manager.get_account_config(account_id)
+            account_display = account_name.name if account_name else account_id
+            logger.warning(
+                f"⚠️ Order blocked by risk: {summary.id} ({summary.name}) | "
+                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
+                f"Reason: {exc.message}"
+            )
+            # Note: Notifications are already sent by StrategyOrderManager
+            # Do NOT send error notification - this is expected behavior
         except Exception as exc:
+            # Only mark as error for actual errors (not risk enforcement)
             summary.status = StrategyState.error
             self.state_manager.save_to_redis(summary.id, summary)
             

@@ -25,6 +25,9 @@ from app.core.exceptions import (
     OrderNotFilledError,
     RedisConnectionError,
     ConfigurationError,
+    RiskLimitExceededError,
+    CircuitBreakerActiveError,
+    DrawdownLimitExceededError,
 )
 
 
@@ -141,6 +144,52 @@ async def order_execution_handler(request: Request, exc: OrderExecutionError) ->
             "message": exc.message,
             "symbol": exc.symbol,
             "order_id": exc.order_id,
+            "details": exc.details,
+        },
+    )
+
+
+async def risk_limit_exceeded_handler(request: Request, exc: RiskLimitExceededError) -> JSONResponse:
+    """Handle risk limit exceeded errors."""
+    logger.warning(f"Risk limit exceeded: {exc.message} (account: {exc.account_id}, strategy: {exc.strategy_id})")
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "error": "Risk Limit Exceeded",
+            "message": exc.message,
+            "account_id": exc.account_id,
+            "strategy_id": exc.strategy_id,
+            "details": exc.details,
+        },
+    )
+
+
+async def circuit_breaker_active_handler(request: Request, exc: CircuitBreakerActiveError) -> JSONResponse:
+    """Handle circuit breaker active errors."""
+    logger.warning(f"Circuit breaker active: {exc.message} (account: {exc.account_id}, strategy: {exc.strategy_id})")
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "error": "Circuit Breaker Active",
+            "message": exc.message,
+            "account_id": exc.account_id,
+            "strategy_id": exc.strategy_id,
+            "details": exc.details,
+        },
+    )
+
+
+async def drawdown_limit_exceeded_handler(request: Request, exc: DrawdownLimitExceededError) -> JSONResponse:
+    """Handle drawdown limit exceeded errors."""
+    logger.warning(f"Drawdown limit exceeded: {exc.message} (account: {exc.account_id}, drawdown: {exc.current_drawdown})")
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "error": "Drawdown Limit Exceeded",
+            "message": exc.message,
+            "account_id": exc.account_id,
+            "current_drawdown": exc.current_drawdown,
+            "max_drawdown": exc.max_drawdown,
             "details": exc.details,
         },
     )

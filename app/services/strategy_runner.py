@@ -165,6 +165,8 @@ class StrategyRunner:
                 logger.warning("TradeService not initialized: strategy_service or user_id missing. Trades will not be saved to database.")
         
         # Initialize order manager
+        # Note: Factories will be created when needed (lazy initialization)
+        # They can be set later if factories are provided from main.py
         self.order_manager = StrategyOrderManager(
             account_manager=self.account_manager,
             default_risk=risk,
@@ -176,6 +178,11 @@ class StrategyRunner:
             strategies=self._strategies,
             trades=self._trades,
             lock=self._lock,
+            notification_service=notification_service,  # Pass notification service for risk alerts
+            # Factories can be set later if needed - they're optional
+            # portfolio_risk_manager_factory=...,
+            # circuit_breaker_factory=...,
+            # dynamic_sizing_factory=...,
         )
         
         # Initialize executor
@@ -235,6 +242,7 @@ class StrategyRunner:
                 sid for sid, summary in self.state_manager._strategies.items()
                 if summary.status == StrategyState.running
             ]
+            # Note: Strategies with status 'paused_by_risk' are NOT restored (they're effectively stopped)
             
             logger.info(f"Found {len(running_strategies)} strategies with status=running to restore")
             

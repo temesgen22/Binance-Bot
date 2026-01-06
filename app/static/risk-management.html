@@ -231,6 +231,16 @@
                 </div>
             </div>
 
+            <!-- Account Selector for Dashboard -->
+            <div style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 4px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">View Dashboard for Account:</label>
+                <select id="dashboardAccountSelector" style="width: 300px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" onchange="switchDashboardAccount(this.value)">
+                    <option value="">All Accounts</option>
+                    <option value="default">default</option>
+                </select>
+                <small style="color: #666; display: block; margin-top: 4px;">Select an account to filter dashboard metrics, or "All Accounts" for combined view</small>
+            </div>
+
             <!-- Portfolio Status -->
             <div id="portfolioStatus" class="loading">Loading portfolio status...</div>
 
@@ -243,6 +253,7 @@
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('portfolio')" id="tab-portfolio">Portfolio Metrics</button>
                 <button class="tab-btn" onclick="switchTab('strategies')" id="tab-strategies">Strategy Metrics</button>
+                <button class="tab-btn" onclick="switchTab('enforcement')" id="tab-enforcement">Enforcement History</button>
                 <button class="tab-btn" onclick="switchTab('reports')" id="tab-reports">Reports</button>
                 <button class="tab-btn" onclick="switchTab('config')" id="tab-config">Configuration</button>
             </div>
@@ -260,6 +271,51 @@
                 <div class="table-container">
                     <h3>Strategy Risk Metrics</h3>
                     <div id="strategyMetrics" class="loading">Loading strategy metrics...</div>
+                </div>
+            </div>
+
+            <!-- Enforcement History Tab -->
+            <div id="tab-content-enforcement" class="tab-content">
+                <div class="table-container">
+                    <h3>Risk Enforcement History</h3>
+                    <div style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 4px;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">Event Type:</label>
+                                <select id="enforcementEventType" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="">All Events</option>
+                                    <option value="ORDER_BLOCKED">Order Blocked</option>
+                                    <option value="CIRCUIT_BREAKER_TRIGGERED">Circuit Breaker</option>
+                                    <option value="ORDER_SIZE_REDUCED">Order Size Reduced</option>
+                                    <option value="RISK_LIMIT_EXCEEDED">Risk Limit Exceeded</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">Account:</label>
+                                <select id="enforcementAccountFilter" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="">All Accounts</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">Start Date:</label>
+                                <input type="datetime-local" id="enforcementStartDate" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">End Date:</label>
+                                <input type="datetime-local" id="enforcementEndDate" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="refresh-btn" onclick="loadEnforcementHistory()">🔍 Filter</button>
+                            <button class="refresh-btn" onclick="clearEnforcementFilters()" style="background: #666;">🔄 Clear</button>
+                        </div>
+                    </div>
+                    <div id="enforcementHistory" class="loading">Loading enforcement history...</div>
+                    <div id="enforcementPagination" style="margin-top: 20px; display: none;">
+                        <button class="refresh-btn" onclick="loadEnforcementHistoryPrev()" id="enforcementPrevBtn" disabled>← Previous</button>
+                        <span id="enforcementPageInfo" style="margin: 0 15px; color: #666;"></span>
+                        <button class="refresh-btn" onclick="loadEnforcementHistoryNext()" id="enforcementNextBtn" disabled>Next →</button>
+                    </div>
                 </div>
             </div>
 
@@ -329,6 +385,8 @@
                 loadPortfolioMetrics();
             } else if (tabName === 'strategies') {
                 loadStrategyMetrics();
+            } else if (tabName === 'enforcement') {
+                loadEnforcementHistory();
             } else if (tabName === 'config') {
                 loadRiskConfig();
             }
@@ -343,13 +401,18 @@
 
         async function loadPortfolioStatus() {
             try {
-                const response = await authFetch(`${API_BASE}/api/risk/status/portfolio`);
+                const accountSelector = document.getElementById('dashboardAccountSelector');
+                const accountId = accountSelector ? accountSelector.value : '';
+                const url = accountId 
+                    ? `${API_BASE}/api/risk/status/realtime?account_id=${accountId}`
+                    : `${API_BASE}/api/risk/status/realtime`;
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load portfolio status');
                 
                 const data = await response.json();
                 const statusDiv = document.getElementById('portfolioStatus');
                 
-                if (data.status === 'no_config') {
+                if (data.risk_status === 'no_config') {
                     statusDiv.innerHTML = `
                         <div class="error">
                             <strong>No Risk Configuration Found</strong><br>
@@ -359,20 +422,115 @@
                     return;
                 }
 
-                const statusClass = data.status === 'active' ? 'status-safe' : 
-                                   data.status === 'warning' ? 'status-warning' : 
-                                   data.status === 'danger' ? 'status-danger' : 'status-critical';
+                const statusClass = data.risk_status === 'normal' ? 'status-safe' : 
+                                   data.risk_status === 'warning' ? 'status-warning' : 
+                                   data.risk_status === 'breach' ? 'status-danger' : 
+                                   data.risk_status === 'paused' ? 'status-critical' : 'status-warning';
+
+                // Helper function to create progress bar
+                const createProgressBar = (label, current, limit, unit = '', isNegative = false) => {
+                    // Validate inputs
+                    if (limit === null || limit === undefined || limit === 0) return '';
+                    if (current === null || current === undefined) current = 0;
+                    
+                    let percentage = 0;
+                    if (isNegative && limit < 0) {
+                        // For negative limits (losses), calculate percentage based on how close we are to the limit
+                        // If limit is -500 and current is -400, we're at 80% of limit
+                        percentage = Math.abs((current / limit) * 100);
+                    } else if (!isNegative && limit > 0) {
+                        // For positive limits (exposure), calculate percentage
+                        percentage = (current / limit) * 100;
+                    } else {
+                        // Invalid limit (positive limit with negative current, or vice versa)
+                        return '';
+                    }
+                    
+                    percentage = Math.min(100, Math.max(0, percentage));
+                    
+                    let barColor = '#28a745'; // green
+                    if (percentage >= 90) barColor = '#dc3545'; // red
+                    else if (percentage >= 80) barColor = '#ffc107'; // yellow
+                    else if (percentage >= 60) barColor = '#ff9800'; // orange
+                    
+                    const formattedCurrent = typeof current === 'number' ? current.toFixed(2) : current;
+                    const formattedLimit = typeof limit === 'number' ? limit.toFixed(2) : limit;
+                    
+                    return `
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <strong>${label}:</strong>
+                                <span>${formattedCurrent}${unit} / ${formattedLimit}${unit} (${percentage.toFixed(0)}%)</span>
+                            </div>
+                            <div style="width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden;">
+                                <div style="width: ${percentage}%; height: 100%; background: ${barColor}; transition: width 0.3s ease;"></div>
+                            </div>
+                        </div>
+                    `;
+                };
+
+                let progressBars = '';
+                
+                // Portfolio Exposure
+                if (data.current_exposure) {
+                    const exp = data.current_exposure;
+                    progressBars += createProgressBar(
+                        'Portfolio Exposure',
+                        exp.total_exposure_usdt || 0,
+                        exp.limit_usdt || 0,
+                        ' USDT'
+                    );
+                }
+                
+                // Daily Loss
+                if (data.loss_limits && data.loss_limits.daily_loss_usdt !== undefined) {
+                    progressBars += createProgressBar(
+                        'Daily Loss',
+                        data.loss_limits.daily_loss_usdt || 0,
+                        data.loss_limits.daily_loss_limit_usdt || 0,
+                        ' USDT',
+                        true
+                    );
+                }
+                
+                // Weekly Loss
+                if (data.loss_limits && data.loss_limits.weekly_loss_usdt !== undefined) {
+                    progressBars += createProgressBar(
+                        'Weekly Loss',
+                        data.loss_limits.weekly_loss_usdt || 0,
+                        data.loss_limits.weekly_loss_limit_usdt || 0,
+                        ' USDT',
+                        true
+                    );
+                }
+                
+                // Drawdown
+                if (data.drawdown && data.drawdown.max_drawdown_pct !== null && data.drawdown.max_drawdown_pct !== undefined) {
+                    // Backend returns drawdown as percentage (0-100), not decimal (0-1)
+                    const currentDrawdown = data.drawdown.current_drawdown_pct || 0;
+                    const maxDrawdown = data.drawdown.max_drawdown_pct || 0;
+                    // Only multiply by 100 if value is less than 1 (indicating decimal format)
+                    const currentDrawdownPct = currentDrawdown < 1 ? currentDrawdown * 100 : currentDrawdown;
+                    const maxDrawdownPct = maxDrawdown < 1 ? maxDrawdown * 100 : maxDrawdown;
+                    progressBars += createProgressBar(
+                        'Drawdown',
+                        currentDrawdownPct,
+                        maxDrawdownPct,
+                        '%'
+                    );
+                }
 
                 statusDiv.innerHTML = `
                     <div class="metric-card">
                         <h3>Portfolio Risk Status</h3>
                         <div class="metric-value">
-                            <span class="risk-status-badge ${statusClass}">${data.status.toUpperCase()}</span>
+                            <span class="risk-status-badge ${statusClass}">${data.risk_status.toUpperCase()}</span>
                         </div>
                         <div class="metric-change">
                             Account: ${data.account_id || 'All Accounts'}<br>
-                            Last Updated: ${new Date(data.timestamp).toLocaleString()}
+                            Last Updated: ${data.timestamp ? (typeof data.timestamp === 'string' ? new Date(data.timestamp) : data.timestamp).toLocaleString() : 'N/A'}
                         </div>
+                        ${progressBars ? `<div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e9ecef;">${progressBars}</div>` : ''}
                     </div>
                 `;
             } catch (error) {
@@ -384,7 +542,12 @@
 
         async function loadPortfolioMetrics() {
             try {
-                const response = await authFetch(`${API_BASE}/api/risk/metrics/portfolio`);
+                const accountSelector = document.getElementById('dashboardAccountSelector');
+                const accountId = accountSelector ? accountSelector.value : '';
+                const url = accountId 
+                    ? `${API_BASE}/api/risk/metrics/portfolio?account_id=${accountId}`
+                    : `${API_BASE}/api/risk/metrics/portfolio`;
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load portfolio metrics');
                 
                 const data = await response.json();
@@ -490,12 +653,25 @@
 
         async function loadStrategyMetrics() {
             try {
+                // Get selected account from dashboard selector
+                const accountSelector = document.getElementById('dashboardAccountSelector');
+                const accountId = accountSelector ? accountSelector.value : '';
+                
                 // Get list of strategies first
-                const strategiesResponse = await authFetch(`${API_BASE}/api/strategies`);
+                const strategiesResponse = await authFetch(`${API_BASE}/strategies/list`);
                 if (!strategiesResponse.ok) throw new Error('Failed to load strategies');
                 
-                const strategies = await strategiesResponse.json();
+                let strategies = await strategiesResponse.json();
                 const strategiesDiv = document.getElementById('strategyMetrics');
+                
+                // Filter strategies by selected account if account is selected
+                if (accountId && accountId.trim()) {
+                    strategies = strategies.filter(s => s.account_id === accountId);
+                    if (strategies.length === 0) {
+                        strategiesDiv.innerHTML = `<div class="loading">No strategies found for account: ${accountId}</div>`;
+                        return;
+                    }
+                }
                 
                 if (!strategies || strategies.length === 0) {
                     strategiesDiv.innerHTML = '<div class="loading">No strategies found</div>';
@@ -504,6 +680,7 @@
 
                 // Load metrics for each strategy
                 let html = '<table><tr><th>Strategy</th><th>Total Trades</th><th>Win Rate</th><th>Total PnL</th><th>Profit Factor</th><th>Sharpe Ratio</th><th>Max DD</th></tr>';
+                let hasData = false;
                 
                 for (const strategy of strategies) {
                     try {
@@ -512,26 +689,64 @@
                             const metricsData = await metricsResponse.json();
                             if (metricsData.metrics) {
                                 const m = metricsData.metrics;
+                                hasData = true;
                                 html += `
                                     <tr>
                                         <td>${strategy.name || strategy.id}</td>
-                                        <td>${m.total_trades}</td>
-                                        <td>${m.win_rate.toFixed(2)}%</td>
-                                        <td class="${m.total_pnl >= 0 ? 'positive' : 'negative'}">${m.total_pnl.toFixed(2)} USDT</td>
-                                        <td>${m.profit_factor.toFixed(2)}</td>
+                                        <td>${m.total_trades || 0}</td>
+                                        <td>${(m.win_rate || 0).toFixed(2)}%</td>
+                                        <td class="${(m.total_pnl || 0) >= 0 ? 'positive' : 'negative'}">${(m.total_pnl || 0).toFixed(2)} USDT</td>
+                                        <td>${(m.profit_factor || 0).toFixed(2)}</td>
                                         <td>${m.sharpe_ratio ? m.sharpe_ratio.toFixed(2) : 'N/A'}</td>
-                                        <td class="negative">${m.max_drawdown_pct.toFixed(2)}%</td>
+                                        <td class="negative">${(m.max_drawdown_pct || 0).toFixed(2)}%</td>
+                                    </tr>
+                                `;
+                            } else if (metricsData.message) {
+                                // Strategy has no trades yet
+                                hasData = true;
+                                html += `
+                                    <tr>
+                                        <td>${strategy.name || strategy.id}</td>
+                                        <td colspan="6" style="text-align: center; color: #666;">${metricsData.message}</td>
                                     </tr>
                                 `;
                             }
+                        } else {
+                            // Response not OK - log the error
+                            const errorText = await metricsResponse.text();
+                            console.error(`Error loading metrics for strategy ${strategy.id}: ${metricsResponse.status} ${errorText}`);
+                            hasData = true;
+                            html += `
+                                <tr>
+                                    <td>${strategy.name || strategy.id}</td>
+                                    <td colspan="6" style="text-align: center; color: #f44336;">Error loading metrics (${metricsResponse.status})</td>
+                                </tr>
+                            `;
                         }
                     } catch (error) {
                         console.error(`Error loading metrics for strategy ${strategy.id}:`, error);
+                        hasData = true;
+                        html += `
+                            <tr>
+                                <td>${strategy.name || strategy.id}</td>
+                                <td colspan="6" style="text-align: center; color: #f44336;">Error: ${error.message}</td>
+                            </tr>
+                        `;
                     }
                 }
                 
+                if (!hasData) {
+                    html += '<tr><td colspan="7" style="text-align: center; color: #666;">No metrics available for any strategies</td></tr>';
+                }
+                
                 html += '</table>';
-                strategiesDiv.innerHTML = html;
+                
+                // Add account filter info
+                const accountInfo = accountId && accountId.trim() 
+                    ? `<p style="margin-top: 10px; color: #666; font-size: 12px;">Showing strategies for account: <strong>${accountId}</strong></p>`
+                    : `<p style="margin-top: 10px; color: #666; font-size: 12px;">Showing strategies for <strong>All Accounts</strong></p>`;
+                
+                strategiesDiv.innerHTML = html + accountInfo;
             } catch (error) {
                 document.getElementById('strategyMetrics').innerHTML = `
                     <div class="error">Error loading strategy metrics: ${error.message}</div>
@@ -541,14 +756,26 @@
 
         async function loadDailyReport() {
             try {
-                const response = await authFetch(`${API_BASE}/api/risk/reports/daily`);
+                // Get selected account from dashboard selector
+                const accountSelector = document.getElementById('dashboardAccountSelector');
+                const accountId = accountSelector ? accountSelector.value : '';
+                
+                // Build URL with account_id if selected
+                let url = `${API_BASE}/api/risk/reports/daily`;
+                if (accountId && accountId.trim()) {
+                    url += `?account_id=${encodeURIComponent(accountId)}`;
+                }
+                
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load daily report');
                 
                 const data = await response.json();
                 const reportsDiv = document.getElementById('reportsContent');
                 
+                const accountLabel = data.account_id && data.account_id !== 'all' ? ` (Account: ${data.account_id})` : ' (All Accounts)';
+                
                 reportsDiv.innerHTML = `
-                    <h4>Daily Report - ${data.date}</h4>
+                    <h4>Daily Report - ${data.date}${accountLabel}</h4>
                     <table>
                         <tr><th>Metric</th><th>Value</th></tr>
                         <tr><td>Total Trades</td><td>${data.summary.total_trades}</td></tr>
@@ -566,14 +793,26 @@
 
         async function loadWeeklyReport() {
             try {
-                const response = await authFetch(`${API_BASE}/api/risk/reports/weekly`);
+                // Get selected account from dashboard selector
+                const accountSelector = document.getElementById('dashboardAccountSelector');
+                const accountId = accountSelector ? accountSelector.value : '';
+                
+                // Build URL with account_id if selected
+                let url = `${API_BASE}/api/risk/reports/weekly`;
+                if (accountId && accountId.trim()) {
+                    url += `?account_id=${encodeURIComponent(accountId)}`;
+                }
+                
+                const response = await authFetch(url);
                 if (!response.ok) throw new Error('Failed to load weekly report');
                 
                 const data = await response.json();
                 const reportsDiv = document.getElementById('reportsContent');
                 
+                const accountLabel = data.account_id && data.account_id !== 'all' ? ` (Account: ${data.account_id})` : ' (All Accounts)';
+                
                 reportsDiv.innerHTML = `
-                    <h4>Weekly Report - ${data.week_start} to ${data.week_end}</h4>
+                    <h4>Weekly Report - ${data.week_start} to ${data.week_end}${accountLabel}</h4>
                     <table>
                         <tr><th>Metric</th><th>Value</th></tr>
                         <tr><td>Total Trades</td><td>${data.summary.total_trades}</td></tr>
@@ -595,7 +834,10 @@
             try {
                 // Get account_id from URL or default to "default"
                 const urlParams = new URLSearchParams(window.location.search);
-                const accountId = urlParams.get('account_id') || 'default';
+                let accountId = urlParams.get('account_id') || 'default';
+                
+                // Load accounts for dropdown
+                const accounts = await loadAccountsForSelectors();
                 
                 const response = await authFetch(`${API_BASE}/api/risk/config?account_id=${accountId}`);
                 const configDiv = document.getElementById('riskConfig');
@@ -603,14 +845,15 @@
                 if (!response.ok) {
                     if (response.status === 404) {
                         // No config exists, show create form
-                        configDiv.innerHTML = generateRiskConfigForm(null, accountId);
+                        configDiv.innerHTML = generateRiskConfigForm(null, accountId, accounts);
                         return;
                     }
                     throw new Error('Failed to load risk configuration');
                 }
                 
                 const config = await response.json();
-                configDiv.innerHTML = generateRiskConfigForm(config, accountId);
+                accountId = config.account_id || accountId; // Use account_id from config
+                configDiv.innerHTML = generateRiskConfigForm(config, accountId, accounts);
             } catch (error) {
                 document.getElementById('riskConfig').innerHTML = `
                     <div class="error">Error loading risk configuration: ${error.message}</div>
@@ -618,15 +861,45 @@
             }
         }
 
-        function generateRiskConfigForm(config, accountId) {
+        function generateRiskConfigForm(config, accountId, accounts = []) {
             const isEdit = config !== null;
             const formId = isEdit ? 'updateRiskConfigForm' : 'createRiskConfigForm';
             
+            // Format time for input (HH:MM:SS or HH:MM)
+            const formatTime = (timeStr) => {
+                if (!timeStr) return '';
+                if (typeof timeStr === 'string') {
+                    // Handle "HH:MM:SS" or "HH:MM" format
+                    return timeStr.substring(0, 5); // Take HH:MM part
+                }
+                return '';
+            };
+            
+            // Format weekly reset day (1=Monday, 7=Sunday)
+            const weeklyResetDay = config?.weekly_loss_reset_day || 1;
+            
             return `
                 <div style="max-width: 800px; margin: 0 auto;">
-                    <h4>${isEdit ? 'Edit' : 'Create'} Risk Configuration for Account: ${accountId}</h4>
-                    <form id="${formId}" onsubmit="saveRiskConfig(event, '${accountId}', ${isEdit})">
-                        <input type="hidden" name="account_id" value="${accountId}">
+                    <div style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 4px;">
+                        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Switch Account:</label>
+                        <select id="accountSelector" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" onchange="switchAccount(this.value)">
+                            <option value="default" ${accountId === 'default' ? 'selected' : ''}>default</option>
+                            ${Array.isArray(accounts) && accounts.length > 0 ? accounts.map(acc => {
+                                const accId = acc.account_id || acc.id || 'unknown';
+                                const accName = acc.name || acc.account_id || accId;
+                                const isTestnet = acc.testnet || false;
+                                const isSelected = accountId === accId;
+                                return `<option value="${accId}" ${isSelected ? 'selected' : ''}>${accName}${isTestnet ? ' (Testnet)' : ''}</option>`;
+                            }).join('') : ''}
+                        </select>
+                        ${Array.isArray(accounts) && accounts.length === 0 ? '<small style="color: #f44336; display: block; margin-top: 4px;">⚠️ No accounts found. Please create an account first.</small>' : ''}
+                        <small style="color: #666; display: block; margin-top: 4px;">Select an account to view or edit its risk configuration</small>
+                    </div>
+                    <h4>${isEdit ? 'Edit' : 'Create'} Risk Configuration for Account: <strong>${accountId}</strong></h4>
+                    <form id="${formId}" onsubmit="saveRiskConfig(event, ${isEdit})">
+                        ${!isEdit ? `
+                        <input type="hidden" name="account_id" id="formAccountId" value="${accountId}">
+                        ` : `<input type="hidden" name="account_id" id="formAccountId" value="${accountId}">`}
                         
                         <fieldset>
                             <legend>Portfolio Limits</legend>
@@ -664,6 +937,36 @@
                                 <label>Max Drawdown (%):</label>
                                 <input type="number" name="max_drawdown_pct" step="0.01" min="0" max="1" 
                                     value="${config?.max_drawdown_pct || ''}" placeholder="e.g., 0.2 (20%)">
+                            </div>
+                        </fieldset>
+
+                        <fieldset>
+                            <legend>Loss Reset Configuration</legend>
+                            <div class="form-group">
+                                <label>Daily Loss Reset Time (UTC):</label>
+                                <input type="time" name="daily_loss_reset_time" 
+                                    value="${formatTime(config?.daily_loss_reset_time || '00:00:00')}" 
+                                    placeholder="HH:MM">
+                                <small style="color: #666; display: block; margin-top: 4px;">Time when daily loss counter resets (24-hour format)</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Weekly Loss Reset Day:</label>
+                                <select name="weekly_loss_reset_day">
+                                    <option value="1" ${weeklyResetDay === 1 ? 'selected' : ''}>Monday</option>
+                                    <option value="2" ${weeklyResetDay === 2 ? 'selected' : ''}>Tuesday</option>
+                                    <option value="3" ${weeklyResetDay === 3 ? 'selected' : ''}>Wednesday</option>
+                                    <option value="4" ${weeklyResetDay === 4 ? 'selected' : ''}>Thursday</option>
+                                    <option value="5" ${weeklyResetDay === 5 ? 'selected' : ''}>Friday</option>
+                                    <option value="6" ${weeklyResetDay === 6 ? 'selected' : ''}>Saturday</option>
+                                    <option value="7" ${weeklyResetDay === 7 ? 'selected' : ''}>Sunday</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Timezone:</label>
+                                <input type="text" name="timezone" 
+                                    value="${config?.timezone || 'UTC'}" 
+                                    placeholder="e.g., UTC, America/New_York">
+                                <small style="color: #666; display: block; margin-top: 4px;">Timezone for loss reset calculations (default: UTC)</small>
                             </div>
                         </fieldset>
 
@@ -729,6 +1032,40 @@
                         </fieldset>
 
                         <fieldset>
+                            <legend>Correlation Limits</legend>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" name="correlation_limits_enabled" 
+                                        ${config?.correlation_limits_enabled ? 'checked' : ''}>
+                                    Enable Correlation-Based Exposure Limits
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Correlation Exposure (%):</label>
+                                <input type="number" name="max_correlation_exposure_pct" step="0.01" min="0" max="1" 
+                                    value="${config?.max_correlation_exposure_pct || 0.5}" placeholder="e.g., 0.5 (50%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum exposure to correlated assets</small>
+                            </div>
+                        </fieldset>
+
+                        <fieldset>
+                            <legend>Margin Protection</legend>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" name="margin_call_protection_enabled" 
+                                        ${config?.margin_call_protection_enabled !== false ? 'checked' : ''}>
+                                    Enable Margin Call Protection
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Minimum Margin Ratio (%):</label>
+                                <input type="number" name="min_margin_ratio" step="0.01" min="0" max="1" 
+                                    value="${config?.min_margin_ratio || 0.1}" placeholder="e.g., 0.1 (10%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Minimum margin ratio threshold before protection triggers</small>
+                            </div>
+                        </fieldset>
+
+                        <fieldset>
                             <legend>Other Settings</legend>
                             <div class="form-group">
                                 <label>
@@ -752,6 +1089,12 @@
                         <div style="margin-top: 20px;">
                             <button type="submit" class="refresh-btn">💾 ${isEdit ? 'Update' : 'Create'} Configuration</button>
                             <button type="button" class="refresh-btn" onclick="loadRiskConfig()" style="margin-left: 10px;">🔄 Cancel</button>
+                            ${isEdit ? `
+                            <button type="button" class="refresh-btn" onclick="deleteRiskConfig('${accountId}')" 
+                                style="margin-left: 10px; background: #f44336;" 
+                                onmouseover="this.style.background='#d32f2f'" 
+                                onmouseout="this.style.background='#f44336'">🗑️ Delete Configuration</button>
+                            ` : ''}
                         </div>
                     </form>
                 </div>
@@ -766,7 +1109,9 @@
                         color: #333;
                     }
                     .form-group input[type="number"],
-                    .form-group input[type="text"] {
+                    .form-group input[type="text"],
+                    .form-group input[type="time"],
+                    .form-group select {
                         width: 100%;
                         padding: 8px;
                         border: 1px solid #ddd;
@@ -775,6 +1120,9 @@
                     }
                     .form-group input[type="checkbox"] {
                         margin-right: 8px;
+                    }
+                    .form-group small {
+                        font-size: 12px;
                     }
                     fieldset {
                         border: 1px solid #ddd;
@@ -791,15 +1139,73 @@
             `;
         }
 
-        async function saveRiskConfig(event, accountId, isEdit) {
+        function switchAccount(accountId) {
+            // Update URL and reload config for selected account
+            window.history.replaceState({}, '', `?account_id=${accountId}`);
+            loadRiskConfig();
+        }
+
+        function switchDashboardAccount(accountId) {
+            // Reload dashboard with selected account filter
+            loadDashboard();
+        }
+
+        async function loadAccountsForSelectors() {
+            // Load accounts for both dashboard and config selectors
+            try {
+                const accountsResponse = await authFetch(`${API_BASE}/accounts/list`);
+                if (accountsResponse.ok) {
+                    const accounts = await accountsResponse.json();
+                    
+                    // Update dashboard selector
+                    const dashboardSelector = document.getElementById('dashboardAccountSelector');
+                    if (dashboardSelector) {
+                        const currentValue = dashboardSelector.value;
+                        dashboardSelector.innerHTML = `
+                            <option value="">All Accounts</option>
+                            <option value="default" ${currentValue === 'default' ? 'selected' : ''}>default</option>
+                            ${accounts.map(acc => {
+                                const accId = acc.account_id || acc.id || 'unknown';
+                                const accName = acc.name || acc.account_id || accId;
+                                const isTestnet = acc.testnet || false;
+                                const isSelected = currentValue === accId;
+                                return `<option value="${accId}" ${isSelected ? 'selected' : ''}>${accName}${isTestnet ? ' (Testnet)' : ''}</option>`;
+                            }).join('')}
+                        `;
+                    }
+                    
+                    return accounts;
+                }
+            } catch (e) {
+                console.error('Error loading accounts:', e);
+            }
+            return [];
+        }
+
+        async function saveRiskConfig(event, isEdit) {
             event.preventDefault();
             
             const form = event.target;
             const formData = new FormData(form);
             const configData = {};
             
+            // Get account_id from the account selector (always use current selection)
+            const accountSelector = document.getElementById('accountSelector');
+            const accountId = accountSelector ? accountSelector.value : (formData.get('account_id') || 'default');
+            
+            if (!isEdit) {
+                configData.account_id = accountId;
+            }
+            
+            // Also update the hidden form field
+            const formAccountId = document.getElementById('formAccountId');
+            if (formAccountId) {
+                formAccountId.value = accountId;
+            }
+            
             // Convert form data to JSON
             for (const [key, value] of formData.entries()) {
+                if (key === 'account_id') continue; // Already handled
                 if (value === '') continue; // Skip empty values
                 
                 // Handle checkboxes
@@ -807,15 +1213,30 @@
                     key === 'volatility_based_sizing_enabled' ||
                     key === 'performance_based_adjustment_enabled' ||
                     key === 'kelly_criterion_enabled' ||
-                    key === 'auto_reduce_order_size') {
+                    key === 'auto_reduce_order_size' ||
+                    key === 'correlation_limits_enabled' ||
+                    key === 'margin_call_protection_enabled') {
                     configData[key] = form.querySelector(`[name="${key}"]`).checked;
-                } else if (key === 'account_id') {
-                    // Skip account_id for update, include for create
-                    if (!isEdit) {
-                        configData[key] = value;
+                } else if (key === 'daily_loss_reset_time') {
+                    // Convert time input (HH:MM) to time string (HH:MM:SS)
+                    if (value) {
+                        configData[key] = value + ':00'; // Add seconds
                     }
+                } else if (key === 'weekly_loss_reset_day' || key === 'rapid_loss_timeframe_minutes' || 
+                          key === 'circuit_breaker_cooldown_minutes' || 
+                          key === 'max_consecutive_losses' ||
+                          key === 'max_trades_per_day_per_strategy' ||
+                          key === 'max_trades_per_day_total') {
+                    // Integer fields
+                    const intValue = parseInt(value);
+                    if (!isNaN(intValue)) {
+                        configData[key] = intValue;
+                    }
+                } else if (key === 'timezone') {
+                    // String field
+                    configData[key] = value;
                 } else {
-                    // Convert numbers
+                    // Convert numbers (float)
                     const numValue = parseFloat(value);
                     configData[key] = isNaN(numValue) ? value : numValue;
                 }
@@ -852,7 +1273,20 @@
             const checkbox = document.getElementById('autoRefresh');
             if (checkbox.checked) {
                 autoRefreshInterval = setInterval(() => {
+                    // Refresh dashboard
                     loadDashboard();
+                    // Refresh active tab if it's not portfolio (which is already refreshed)
+                    const activeTab = document.querySelector('.tab-btn.active');
+                    if (activeTab) {
+                        const tabName = activeTab.id.replace('tab-', '');
+                        if (tabName === 'strategies') {
+                            loadStrategyMetrics();
+                        } else if (tabName === 'reports') {
+                            // Don't auto-refresh reports (user needs to click button)
+                        } else if (tabName === 'config') {
+                            // Don't auto-refresh config (user is editing)
+                        }
+                    }
                 }, 30000); // 30 seconds
             } else {
                 if (autoRefreshInterval) {
@@ -864,9 +1298,154 @@
 
         document.getElementById('autoRefresh').addEventListener('change', setupAutoRefresh);
 
+        async function deleteRiskConfig(accountId) {
+            if (!confirm(`Are you sure you want to delete the risk configuration for account "${accountId}"? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await authFetch(`${API_BASE}/api/risk/config?account_id=${accountId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to delete configuration');
+                }
+                
+                alert(`✅ Risk configuration for account "${accountId}" deleted successfully!`);
+                // Reload config (will show create form since config is deleted)
+                loadRiskConfig();
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        let enforcementHistoryOffset = 0;
+        const enforcementHistoryLimit = 50;
+
+        async function loadEnforcementHistory() {
+            try {
+                const eventType = document.getElementById('enforcementEventType').value;
+                const accountId = document.getElementById('enforcementAccountFilter').value;
+                const startDate = document.getElementById('enforcementStartDate').value;
+                const endDate = document.getElementById('enforcementEndDate').value;
+                
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (eventType) params.append('event_type', eventType);
+                if (accountId) params.append('account_id', accountId);
+                if (startDate) params.append('start_date', new Date(startDate).toISOString());
+                if (endDate) params.append('end_date', new Date(endDate).toISOString());
+                params.append('limit', enforcementHistoryLimit);
+                params.append('offset', enforcementHistoryOffset);
+                
+                const response = await authFetch(`${API_BASE}/api/risk/enforcement/history?${params.toString()}`);
+                if (!response.ok) throw new Error('Failed to load enforcement history');
+                
+                const data = await response.json();
+                const historyDiv = document.getElementById('enforcementHistory');
+                
+                if (!data.events || data.events.length === 0) {
+                    historyDiv.innerHTML = '<div class="loading">No enforcement events found</div>';
+                    document.getElementById('enforcementPagination').style.display = 'none';
+                    return;
+                }
+                
+                // Build table
+                let html = '<table><tr><th>Timestamp</th><th>Event Type</th><th>Level</th><th>Message</th><th>Strategy</th><th>Account</th><th>Details</th></tr>';
+                
+                data.events.forEach(event => {
+                    const timestamp = new Date(event.created_at).toLocaleString();
+                    const levelClass = event.event_level === 'ERROR' || event.event_level === 'CRITICAL' ? 'negative' : 
+                                      event.event_level === 'WARNING' ? 'warning' : '';
+                    const metadata = event.event_metadata || {};
+                    
+                    html += `
+                        <tr>
+                            <td>${timestamp}</td>
+                            <td><strong>${event.event_type}</strong></td>
+                            <td><span class="${levelClass}">${event.event_level}</span></td>
+                            <td>${event.message}</td>
+                            <td>${event.strategy_id || 'N/A'}</td>
+                            <td>${event.account_id || 'N/A'}</td>
+                            <td>
+                                ${metadata.limit_type ? `<strong>Limit:</strong> ${metadata.limit_type}<br>` : ''}
+                                ${metadata.current_value !== undefined ? `<strong>Current:</strong> ${metadata.current_value}<br>` : ''}
+                                ${metadata.limit_value !== undefined ? `<strong>Limit:</strong> ${metadata.limit_value}<br>` : ''}
+                                ${metadata.symbol ? `<strong>Symbol:</strong> ${metadata.symbol}<br>` : ''}
+                                ${metadata.reason ? `<strong>Reason:</strong> ${metadata.reason}` : ''}
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</table>';
+                historyDiv.innerHTML = html;
+                
+                // Update pagination
+                const totalPages = Math.ceil(data.total / enforcementHistoryLimit);
+                const currentPage = Math.floor(enforcementHistoryOffset / enforcementHistoryLimit) + 1;
+                document.getElementById('enforcementPageInfo').textContent = 
+                    `Page ${currentPage} of ${totalPages} (${data.total} total events)`;
+                document.getElementById('enforcementPrevBtn').disabled = enforcementHistoryOffset === 0;
+                document.getElementById('enforcementNextBtn').disabled = enforcementHistoryOffset + enforcementHistoryLimit >= data.total;
+                document.getElementById('enforcementPagination').style.display = 'flex';
+            } catch (error) {
+                document.getElementById('enforcementHistory').innerHTML = `
+                    <div class="error">Error loading enforcement history: ${error.message}</div>
+                `;
+            }
+        }
+
+        function loadEnforcementHistoryPrev() {
+            if (enforcementHistoryOffset >= enforcementHistoryLimit) {
+                enforcementHistoryOffset -= enforcementHistoryLimit;
+                loadEnforcementHistory();
+            }
+        }
+
+        function loadEnforcementHistoryNext() {
+            enforcementHistoryOffset += enforcementHistoryLimit;
+            loadEnforcementHistory();
+        }
+
+        function clearEnforcementFilters() {
+            document.getElementById('enforcementEventType').value = '';
+            document.getElementById('enforcementAccountFilter').value = '';
+            document.getElementById('enforcementStartDate').value = '';
+            document.getElementById('enforcementEndDate').value = '';
+            enforcementHistoryOffset = 0;
+            loadEnforcementHistory();
+        }
+
+        // Update enforcement account filter when accounts are loaded
+        async function updateEnforcementAccountFilter() {
+            const accounts = await loadAccountsForSelectors();
+            const filterSelect = document.getElementById('enforcementAccountFilter');
+            if (filterSelect) {
+                const currentValue = filterSelect.value;
+                filterSelect.innerHTML = `
+                    <option value="">All Accounts</option>
+                    <option value="default" ${currentValue === 'default' ? 'selected' : ''}>default</option>
+                    ${accounts.map(acc => {
+                        const accId = acc.account_id || acc.id || 'unknown';
+                        const accName = acc.name || acc.account_id || accId;
+                        const isTestnet = acc.testnet || false;
+                        const isSelected = currentValue === accId;
+                        return `<option value="${accId}" ${isSelected ? 'selected' : ''}>${accName}${isTestnet ? ' (Testnet)' : ''}</option>`;
+                    }).join('')}
+                `;
+            }
+        }
+
         // Initial load
-        loadDashboard();
-        setupAutoRefresh();
+        (async function() {
+            await loadAccountsForSelectors();
+            await updateEnforcementAccountFilter();
+            loadDashboard();
+            setupAutoRefresh();
+        })();
     </script>
 </body>
 </html>

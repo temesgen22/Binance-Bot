@@ -119,8 +119,11 @@ def test_reverse_scalping_strategy_creation(test_db):
         id=account_id,
         user_id=user_id,
         account_id="test_account",
-        api_key="test_key",
-        api_secret="test_secret",
+        name="Test Account",
+        exchange_platform="binance",
+        api_key_encrypted="test_key",
+        api_secret_encrypted="test_secret",
+        testnet=True,
         is_active=True,
         is_default=True
     )
@@ -173,8 +176,11 @@ def test_reverse_scalping_trade_storage(test_db):
         id=account_id,
         user_id=user_id,
         account_id="test_account",
-        api_key="test_key",
-        api_secret="test_secret",
+        name="Test Account",
+        exchange_platform="binance",
+        api_key_encrypted="test_key",
+        api_secret_encrypted="test_secret",
+        testnet=True,
         is_active=True,
         is_default=True
     )

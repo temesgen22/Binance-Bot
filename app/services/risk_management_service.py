@@ -170,12 +170,34 @@ class RiskManagementService(BaseCacheService):
         if existing:
             raise ValueError(f"Risk config already exists for account: {config_data.account_id}")
         
+        # Prepare config data, converting time to datetime
+        config_dict = config_data.model_dump(exclude={"account_id"})
+        
+        # Convert daily_loss_reset_time from time to datetime if provided
+        if config_dict.get("daily_loss_reset_time"):
+            time_value = config_dict["daily_loss_reset_time"]
+            if isinstance(time_value, str):
+                # Parse time string (HH:MM:SS or HH:MM)
+                try:
+                    if len(time_value.split(':')) == 2:
+                        time_obj = datetime.strptime(time_value, "%H:%M").time()
+                    else:
+                        time_obj = datetime.strptime(time_value, "%H:%M:%S").time()
+                    # Convert to datetime (use today's date, timezone-naive as per DB schema)
+                    config_dict["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_obj)
+                except ValueError:
+                    logger.warning(f"Invalid time format: {time_value}, setting to None")
+                    config_dict["daily_loss_reset_time"] = None
+            elif isinstance(time_value, time):
+                # Convert time object to datetime
+                config_dict["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_value)
+        
         # Create new config
         db_config = DBRiskConfig(
             id=uuid4(),
             user_id=user_id,
             account_id=account.id,
-            **config_data.model_dump(exclude={"account_id"})
+            **config_dict
         )
         
         if self._is_async:
@@ -265,6 +287,26 @@ class RiskManagementService(BaseCacheService):
         
         # Update fields (only non-None values)
         update_data = config_data.model_dump(exclude_unset=True)
+        
+        # Convert daily_loss_reset_time from time to datetime if provided
+        if "daily_loss_reset_time" in update_data and update_data["daily_loss_reset_time"]:
+            time_value = update_data["daily_loss_reset_time"]
+            if isinstance(time_value, str):
+                # Parse time string (HH:MM:SS or HH:MM)
+                try:
+                    if len(time_value.split(':')) == 2:
+                        time_obj = datetime.strptime(time_value, "%H:%M").time()
+                    else:
+                        time_obj = datetime.strptime(time_value, "%H:%M:%S").time()
+                    # Convert to datetime (use today's date, timezone-naive as per DB schema)
+                    update_data["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_obj)
+                except ValueError:
+                    logger.warning(f"Invalid time format: {time_value}, setting to None")
+                    update_data["daily_loss_reset_time"] = None
+            elif isinstance(time_value, time):
+                # Convert time object to datetime
+                update_data["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_value)
+        
         for key, value in update_data.items():
             if hasattr(db_config, key):
                 setattr(db_config, key, value)
@@ -300,6 +342,26 @@ class RiskManagementService(BaseCacheService):
         
         # Update fields (only non-None values)
         update_data = config_data.model_dump(exclude_unset=True)
+        
+        # Convert daily_loss_reset_time from time to datetime if provided
+        if "daily_loss_reset_time" in update_data and update_data["daily_loss_reset_time"]:
+            time_value = update_data["daily_loss_reset_time"]
+            if isinstance(time_value, str):
+                # Parse time string (HH:MM:SS or HH:MM)
+                try:
+                    if len(time_value.split(':')) == 2:
+                        time_obj = datetime.strptime(time_value, "%H:%M").time()
+                    else:
+                        time_obj = datetime.strptime(time_value, "%H:%M:%S").time()
+                    # Convert to datetime (use today's date, timezone-naive as per DB schema)
+                    update_data["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_obj)
+                except ValueError:
+                    logger.warning(f"Invalid time format: {time_value}, setting to None")
+                    update_data["daily_loss_reset_time"] = None
+            elif isinstance(time_value, time):
+                # Convert time object to datetime
+                update_data["daily_loss_reset_time"] = datetime.combine(datetime.now().date(), time_value)
+        
         for key, value in update_data.items():
             if hasattr(db_config, key):
                 setattr(db_config, key, value)

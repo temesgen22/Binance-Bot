@@ -38,6 +38,9 @@ from app.api.exception_handlers import (
     invalid_leverage_handler,
     position_sizing_handler,
     order_execution_handler,
+    risk_limit_exceeded_handler,
+    circuit_breaker_active_handler,
+    drawdown_limit_exceeded_handler,
     binance_bot_exception_handler,
     validation_error_handler,
     general_exception_handler,
@@ -62,6 +65,9 @@ from app.core.exceptions import (
     InvalidLeverageError,
     PositionSizingError,
     OrderExecutionError,
+    RiskLimitExceededError,
+    CircuitBreakerActiveError,
+    DrawdownLimitExceededError,
     BinanceBotException,
 )
 from app.risk.manager import RiskManager
@@ -501,6 +507,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(InvalidLeverageError, invalid_leverage_handler)
     app.add_exception_handler(PositionSizingError, position_sizing_handler)
     app.add_exception_handler(OrderExecutionError, order_execution_handler)
+    app.add_exception_handler(RiskLimitExceededError, risk_limit_exceeded_handler)
+    app.add_exception_handler(CircuitBreakerActiveError, circuit_breaker_active_handler)
+    app.add_exception_handler(DrawdownLimitExceededError, drawdown_limit_exceeded_handler)
     app.add_exception_handler(BinanceBotException, binance_bot_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(Exception, general_exception_handler)

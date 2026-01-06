@@ -299,4 +299,53 @@ class OrderRiskCheckResponse(BaseModel):
     max_exposure: Optional[float] = None
 
 
+class EnforcementEventResponse(BaseModel):
+    """Response model for a single enforcement event."""
+    id: str
+    event_type: str
+    event_level: str
+    message: str
+    strategy_id: Optional[str] = None
+    account_id: Optional[str] = None
+    event_metadata: Optional[dict] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class EnforcementHistoryResponse(BaseModel):
+    """Response model for enforcement history."""
+    events: List[EnforcementEventResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class RealTimeRiskStatusResponse(BaseModel):
+    """Response model for real-time risk status."""
+    account_id: str
+    timestamp: datetime
+    risk_status: Literal["normal", "warning", "breach", "paused"]
+    
+    current_exposure: dict
+    loss_limits: dict
+    drawdown: dict
+    circuit_breakers: dict
+    recent_enforcement_events: List[dict]
+
+
+class StrategyRiskStatusResponse(BaseModel):
+    """Response model for strategy-specific risk status."""
+    strategy_id: str
+    account_id: str
+    can_trade: bool
+    blocked_reasons: List[str]
+    circuit_breaker_active: bool
+    risk_checks: dict
+    last_enforcement_event: Optional[dict] = None
+
+
+
+
 

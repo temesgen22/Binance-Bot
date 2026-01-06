@@ -291,7 +291,11 @@ class CircuitBreaker:
         return True
     
     def _pause_strategy(self, strategy_id: str, reason: str) -> None:
-        """Pause a strategy.
+        """Pause a strategy by stopping it and setting status to paused_by_risk.
+        
+        This actually STOPS the strategy (cancels the running task), not just pauses it.
+        The status 'paused_by_risk' indicates it was stopped by risk management,
+        not manually by the user.
         
         Args:
             strategy_id: Strategy ID
@@ -301,15 +305,32 @@ class CircuitBreaker:
             return
         
         try:
-            # Update strategy status to paused_by_risk
+            # Actually stop the strategy if it's running
+            # Cancel the running task (similar to StrategyRunner.stop())
+            if hasattr(self.strategy_runner, '_tasks') and strategy_id in self.strategy_runner._tasks:
+                task = self.strategy_runner._tasks.get(strategy_id)
+                if task and not task.done():
+                    # Cancel the running task - this will cause the strategy loop to exit
+                    task.cancel()
+                    # Remove from tasks dict
+                    self.strategy_runner._tasks.pop(strategy_id, None)
+                    logger.info(f"Cancelled running task for strategy {strategy_id} due to circuit breaker")
+            
+            # Update strategy status to paused_by_risk (which is effectively "stopped" but with reason)
+            from app.models.strategy import StrategyState
             if hasattr(self.strategy_runner, 'state_manager'):
                 self.strategy_runner.state_manager.update_strategy_in_db(
                     strategy_id,
                     save_to_redis=True,
-                    status='paused_by_risk',
+                    status=StrategyState.paused_by_risk.value,  # Use enum value
                     meta={'pause_reason': reason, 'paused_at': datetime.now(timezone.utc).isoformat()}
                 )
-            logger.info(f"Paused strategy {strategy_id} due to circuit breaker: {reason}")
+            
+            # Also update in-memory status if strategy is in memory
+            if hasattr(self.strategy_runner, '_strategies') and strategy_id in self.strategy_runner._strategies:
+                self.strategy_runner._strategies[strategy_id].status = StrategyState.paused_by_risk
+            
+            logger.info(f"Paused (stopped) strategy {strategy_id} due to circuit breaker: {reason}")
         except Exception as e:
             logger.error(f"Failed to pause strategy {strategy_id}: {e}")
     
@@ -334,7 +355,11 @@ class CircuitBreaker:
             logger.error(f"Failed to pause strategies for account {account_id}: {e}")
     
     def _resume_strategy(self, strategy_id: str) -> None:
-        """Resume a strategy.
+        """Resume a strategy that was paused by risk management.
+        
+        This changes status from 'paused_by_risk' back to 'stopped'.
+        The strategy will need to be manually started via StrategyRunner.start().
+        This is safer than auto-resuming.
         
         Args:
             strategy_id: Strategy ID
@@ -343,14 +368,16 @@ class CircuitBreaker:
             return
         
         try:
-            # Update strategy status back to running
+            # Update strategy status back to stopped (user can start it manually)
+            # This is safer than auto-resuming
             if hasattr(self.strategy_runner, 'state_manager'):
+                from app.models.strategy import StrategyState
                 self.strategy_runner.state_manager.update_strategy_in_db(
                     strategy_id,
                     save_to_redis=True,
-                    status='running'
+                    status=StrategyState.stopped.value
                 )
-            logger.info(f"Resumed strategy {strategy_id}")
+            logger.info(f"Resumed strategy {strategy_id} from paused_by_risk (status set to stopped, can be started manually)")
         except Exception as e:
             logger.error(f"Failed to resume strategy {strategy_id}: {e}")
     
@@ -527,6 +554,8 @@ class CircuitBreaker:
                     active.append(breaker_state)
         
         return active
+
+
 
 
 

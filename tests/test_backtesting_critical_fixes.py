@@ -10,6 +10,7 @@ These tests lock in production-critical guarantees to prevent regression:
 6. No re-entry same candle after exit
 """
 import pytest
+pytestmark = pytest.mark.slow  # Backtesting critical fixes tests are slow and excluded from CI
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 

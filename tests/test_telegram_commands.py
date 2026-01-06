@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
@@ -575,50 +576,84 @@ class TestUpdateProcessing:
     @pytest.mark.asyncio
     async def test_process_updates_with_command(self, command_handler):
         """Test processing updates with a command."""
-        with patch.object(command_handler, "get_updates") as mock_get_updates, \
+        import asyncio
+        
+        call_count = 0
+        async def mock_get_updates_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call returns the update, subsequent calls return empty (stops loop naturally)
+            if call_count == 1:
+                # Add small delay to prevent tight loop
+                await asyncio.sleep(0.01)
+                return {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 1,
+                            "message": {
+                                "chat": {"id": "123"},
+                                "text": "/help",
+                            },
+                        },
+                    ],
+                }
+            else:
+                # Return empty to allow loop to check _running flag
+                await asyncio.sleep(0.01)
+                return {"ok": True, "result": []}
+        
+        with patch.object(command_handler, "get_updates", side_effect=mock_get_updates_side_effect), \
              patch.object(command_handler, "send_message") as mock_send_message:
             
-            mock_get_updates.return_value = {
-                "ok": True,
-                "result": [
-                    {
-                        "update_id": 1,
-                        "message": {
-                            "chat": {"id": "123"},
-                            "text": "/help",
-                        },
-                    },
-                ],
-            }
             mock_send_message.return_value = True
             
             command_handler._running = True
-            # Run for a short time then stop
-            import asyncio
             task = asyncio.create_task(command_handler.process_updates())
-            await asyncio.sleep(0.1)
-            command_handler._running = False
-            task.cancel()
             
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            # Wait for the update to be processed (should happen quickly)
+            await asyncio.sleep(0.05)
+            
+            # Stop the loop
+            command_handler._running = False
+            
+            # Wait a bit more for the loop to exit naturally
+            await asyncio.sleep(0.05)
+            
+            # Cancel if still running
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             
             # Verify send_message was called
-            assert mock_send_message.called
+            assert mock_send_message.called, "send_message should have been called to respond to /help command"
 
 
 class TestHandlerLifecycle:
     """Test handler start/stop lifecycle."""
     
     @pytest.mark.slow
-    def test_start_handler(self, command_handler):
+    @pytest.mark.asyncio
+    async def test_start_handler(self, command_handler):
         """Test starting the handler."""
         assert command_handler._running is False
+        
+        # Start handler (creates async task, needs event loop)
         command_handler.start()
         assert command_handler._running is True
         assert command_handler._task is not None
+        
+        # Clean up - stop the handler
+        command_handler.stop()
+        # Wait for task to be cancelled
+        if command_handler._task and not command_handler._task.done():
+            try:
+                await command_handler._task
+            except asyncio.CancelledError:
+                pass
     
     @pytest.mark.slow
     def test_start_handler_already_running(self, command_handler):

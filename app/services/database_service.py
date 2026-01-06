@@ -438,6 +438,18 @@ class DatabaseService:
         )
         return result.scalar_one_or_none()
     
+    def get_strategy_by_uuid(self, strategy_uuid: UUID) -> Optional[Strategy]:
+        """Get strategy by UUID (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy_by_uuid() with AsyncSession")
+        return self.db.query(Strategy).filter(Strategy.id == strategy_uuid).first()
+    
+    def get_account_by_uuid(self, account_uuid: UUID) -> Optional[Account]:
+        """Get account by UUID (sync)."""
+        if self._is_async:
+            raise RuntimeError("Use async_get_account_by_uuid() with AsyncSession")
+        return self.db.query(Account).filter(Account.id == account_uuid).first()
+    
     def update_strategy(
         self,
         user_id: UUID,
@@ -1068,6 +1080,66 @@ class DatabaseService:
         with self._transaction(event, error_message="Failed to create system event"):
             pass
         return event
+    
+    def get_enforcement_events(
+        self,
+        user_id: UUID,
+        account_id: Optional[UUID] = None,
+        strategy_id: Optional[UUID] = None,
+        event_type: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> tuple[List[SystemEvent], int]:
+        """Get risk enforcement events with filters (sync).
+        
+        Args:
+            user_id: User UUID (required for user isolation)
+            account_id: Optional account UUID filter
+            strategy_id: Optional strategy UUID filter
+            event_type: Optional event type filter (e.g., 'ORDER_BLOCKED', 'CIRCUIT_BREAKER_TRIGGERED')
+            start_date: Optional start date filter
+            end_date: Optional end date filter
+            limit: Maximum number of events to return
+            offset: Pagination offset
+            
+        Returns:
+            Tuple of (list of SystemEvent instances, total count)
+        """
+        # Get strategies for user to filter events
+        user_strategies = self.get_user_strategies(user_id)
+        strategy_uuids = [s.id for s in user_strategies]
+        
+        # Get accounts for user to filter events
+        user_accounts = self.get_user_accounts(user_id)
+        account_uuids = [a.id for a in user_accounts]
+        
+        # Build query - filter by user's strategies and accounts
+        query = self.db.query(SystemEvent).filter(
+            (SystemEvent.strategy_id.in_(strategy_uuids)) | 
+            (SystemEvent.account_id.in_(account_uuids))
+        )
+        
+        # Apply filters
+        if account_id:
+            query = query.filter(SystemEvent.account_id == account_id)
+        if strategy_id:
+            query = query.filter(SystemEvent.strategy_id == strategy_id)
+        if event_type:
+            query = query.filter(SystemEvent.event_type == event_type)
+        if start_date:
+            query = query.filter(SystemEvent.created_at >= start_date)
+        if end_date:
+            query = query.filter(SystemEvent.created_at <= end_date)
+        
+        # Get total count
+        total = query.count()
+        
+        # Get paginated results
+        events = query.order_by(SystemEvent.created_at.desc()).offset(offset).limit(limit).all()
+        
+        return events, total
     
     def get_strategy_events(
         self,
