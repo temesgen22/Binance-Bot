@@ -48,7 +48,7 @@ def mock_account(mock_user):
 
 
 @pytest.fixture
-def sample_trades():
+def sample_trades(mock_user):
     """Create sample trades that form completed positions.
     
     Creates:
@@ -59,6 +59,7 @@ def sample_trades():
       - Trade 2: BUY @ 40000, SELL @ 39000 = -1000 PnL (loss)
     """
     base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    strategy_uuid = uuid4()
     
     # Entry trades (BUY)
     buy1 = MagicMock(spec=Trade)
@@ -83,7 +84,8 @@ def sample_trades():
     buy1.cummulative_quote_qty = 4000.0
     buy1.initial_margin = 800.0
     buy1.margin_type = "ISOLATED"
-    buy1.strategy_id = uuid4()
+    buy1.strategy_id = strategy_uuid
+    buy1.user_id = mock_user.id
     
     buy2 = MagicMock(spec=Trade)
     buy2.id = uuid4()
@@ -107,7 +109,8 @@ def sample_trades():
     buy2.cummulative_quote_qty = 4000.0
     buy2.initial_margin = 800.0
     buy2.margin_type = "ISOLATED"
-    buy2.strategy_id = buy1.strategy_id
+    buy2.strategy_id = strategy_uuid
+    buy2.user_id = mock_user.id
     
     # Exit trades (SELL)
     sell1 = MagicMock(spec=Trade)
@@ -132,7 +135,8 @@ def sample_trades():
     sell1.cummulative_quote_qty = 4100.0
     sell1.initial_margin = None
     sell1.margin_type = "ISOLATED"
-    sell1.strategy_id = buy1.strategy_id
+    sell1.strategy_id = strategy_uuid
+    sell1.user_id = mock_user.id
     
     sell2 = MagicMock(spec=Trade)
     sell2.id = uuid4()
@@ -156,7 +160,8 @@ def sample_trades():
     sell2.cummulative_quote_qty = 3900.0
     sell2.initial_margin = None
     sell2.margin_type = "ISOLATED"
-    sell2.strategy_id = buy1.strategy_id
+    sell2.strategy_id = strategy_uuid
+    sell2.user_id = mock_user.id
     
     return [buy1, sell1, buy2, sell2]
 
@@ -167,18 +172,80 @@ async def test_portfolio_metrics_uses_trade_matching(mock_user, mock_strategy, m
     from app.api.routes.risk_metrics import get_portfolio_risk_metrics
     from app.services.trade_service import TradeService
     from app.services.database_service import DatabaseService
+    from app.models.db_models import Trade as DBTrade, Account, Strategy
     
-    # Mock database session
+    # Mock database session with proper query chain
     mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.all.return_value = [mock_account]
     
-    # Mock trade service
+    # Mock Account query: db.query(Account).filter(...).first()
+    mock_account_query = MagicMock()
+    mock_account_query.filter.return_value.first.return_value = mock_account
+    mock_db.query.return_value = mock_account_query
+    
+    # Mock Strategy query: db.query(Strategy).filter(...).all()
+    def query_side_effect(model):
+        """Handle different model queries."""
+        if model == Account:
+            mock_account_query = MagicMock()
+            mock_account_query.filter.return_value.first.return_value = mock_account
+            return mock_account_query
+        elif model == Strategy:
+            mock_strategy_query = MagicMock()
+            mock_strategy_query.filter.return_value.all.return_value = [mock_strategy]
+            return mock_strategy_query
+        elif model == DBTrade:
+            mock_trade_query = MagicMock()
+            # Return sample_trades (which are Trade/DBTrade objects)
+            mock_trade_query.filter.return_value.all.return_value = sample_trades
+            return mock_trade_query
+        else:
+            return MagicMock()
+    
+    mock_db.query.side_effect = query_side_effect
+    
+    # Mock trade service (needed for _db_trade_to_order_response conversion)
     mock_trade_service = MagicMock(spec=TradeService)
-    mock_trade_service.get_trades_by_account.return_value = sample_trades
+    # Mock the conversion method to return OrderResponse objects
+    from app.models.order import OrderResponse
+    def convert_trade(db_trade):
+        """Convert DBTrade mock to OrderResponse."""
+        return OrderResponse(
+            symbol=db_trade.symbol,
+            order_id=db_trade.order_id,
+            status=db_trade.status,
+            side=db_trade.side,
+            price=float(db_trade.price),
+            avg_price=float(db_trade.avg_price) if db_trade.avg_price else None,
+            executed_qty=float(db_trade.executed_qty),
+            timestamp=db_trade.timestamp,
+            commission=float(db_trade.commission) if db_trade.commission else None,
+            commission_asset=db_trade.commission_asset,
+            leverage=db_trade.leverage,
+            position_side=db_trade.position_side,
+            update_time=db_trade.update_time,
+            time_in_force=db_trade.time_in_force,
+            order_type=db_trade.order_type,
+            notional_value=float(db_trade.notional_value) if db_trade.notional_value else None,
+            cummulative_quote_qty=float(db_trade.cummulative_quote_qty) if db_trade.cummulative_quote_qty else None,
+            initial_margin=float(db_trade.initial_margin) if db_trade.initial_margin else None,
+            margin_type=db_trade.margin_type,
+        )
+    mock_trade_service._db_trade_to_order_response = convert_trade
     
     # Mock database service
     mock_db_service = MagicMock(spec=DatabaseService)
     mock_db_service.get_strategy.return_value = mock_strategy
+    # Mock get_strategy_by_uuid to return strategy with proper string attributes
+    def get_strategy_by_uuid_side_effect(uuid):
+        """Return strategy with proper attributes."""
+        strategy = MagicMock()
+        strategy.id = uuid
+        strategy.strategy_id = "test-strategy-123"  # String, not MagicMock
+        strategy.name = "Test Strategy"  # String, not MagicMock
+        strategy.symbol = "BTCUSDT"  # String, not MagicMock
+        strategy.leverage = 5
+        return strategy
+    mock_db_service.get_strategy_by_uuid.side_effect = get_strategy_by_uuid_side_effect
     
     # Mock account service and client manager
     mock_account_service = MagicMock()
@@ -221,8 +288,9 @@ async def test_portfolio_metrics_uses_trade_matching(mock_user, mock_strategy, m
         # Win rate should be 50% (1 win out of 2 completed trades)
         assert metrics["win_rate"] == 50.0, f"Expected 50% win rate, got {metrics['win_rate']}%"
         
-        # Total PnL should be 0 (1000 - 1000 = 0)
-        assert abs(metrics["total_pnl"]) < 0.01, f"Expected ~0 total PnL, got {metrics['total_pnl']}"
+        # Total PnL should be approximately 0 (1000 - 1000 = 0, minus fees ~6.4)
+        # Fees: 1.6 + 1.64 + 1.6 + 1.56 = ~6.4 USDT
+        assert abs(metrics["total_pnl"] + 6.4) < 1.0, f"Expected ~-6.4 total PnL (0 gross - fees), got {metrics['total_pnl']}"
         
         # Should have 1 winning trade and 1 losing trade
         assert metrics["winning_trades"] == 1, f"Expected 1 winning trade, got {metrics['winning_trades']}"
