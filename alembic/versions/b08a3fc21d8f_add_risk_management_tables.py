@@ -161,7 +161,15 @@ def downgrade() -> None:
     op.create_index(op.f('idx_trades_user_timestamp'), 'trades', ['user_id', sa.literal_column('timestamp DESC')], unique=False)
     op.drop_index('idx_trades_strategy_timestamp', table_name='trades', postgresql_ops={'timestamp': 'DESC'})
     op.create_index(op.f('idx_trades_strategy_timestamp'), 'trades', ['strategy_id', sa.literal_column('timestamp DESC')], unique=False)
-    op.drop_constraint(None, 'strategy_parameter_history', type_='foreignkey')
+    # Find and drop the foreign key constraint by inspecting the table
+    from sqlalchemy import inspect
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    fks = inspector.get_foreign_keys('strategy_parameter_history')
+    for fk in fks:
+        if 'rollback_of_history_id' in fk.get('constrained_columns', []):
+            op.drop_constraint(fk['name'], 'strategy_parameter_history', type_='foreignkey')
+            break
     op.create_foreign_key(op.f('strategy_parameter_history_rollback_of_history_id_fkey'), 'strategy_parameter_history', 'strategy_parameter_history', ['rollback_of_history_id'], ['id'], ondelete='SET NULL')
     op.drop_index('idx_strategy_metrics_period_type', table_name='strategy_metrics', postgresql_ops={'period_start': 'DESC'})
     op.create_index(op.f('idx_strategy_metrics_period_type'), 'strategy_metrics', ['period_type', sa.literal_column('period_start DESC')], unique=False)
