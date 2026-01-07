@@ -119,9 +119,12 @@ class CircuitBreaker:
     ) -> Optional[CircuitBreakerState]:
         """Check for consecutive loss circuit breaker.
         
+        CRITICAL: Uses trade matching to count completed trade cycles, not individual trades.
+        This ensures we count wins/losses correctly (entry+exit pairs).
+        
         Args:
             strategy_id: Strategy ID
-            recent_trades: Recent trades (most recent first)
+            recent_trades: Recent trades (OrderResponse objects - will be matched to completed positions)
             
         Returns:
             CircuitBreakerState if triggered, None otherwise
@@ -131,22 +134,53 @@ class CircuitBreaker:
         
         max_consecutive = self.config.max_consecutive_losses or 5
         
-        # Count consecutive losses from most recent trades
+        # CRITICAL: Match trades to completed positions (same logic as reports page)
+        # This ensures we count completed trade cycles, not individual entry/exit trades
+        from app.services.trade_matcher import match_trades_to_completed_positions
+        from app.models.order import OrderResponse
+        
+        # Filter to only OrderResponse objects (raw trades)
+        order_responses = [t for t in recent_trades if isinstance(t, OrderResponse)]
+        
+        if not order_responses:
+            # If already completed trades, use them directly
+            completed_trades = [t for t in recent_trades if hasattr(t, 'net_pnl') or hasattr(t, 'pnl_usd')]
+        else:
+            # Match raw trades to completed positions
+            try:
+                completed_trades = match_trades_to_completed_positions(
+                    order_responses,
+                    include_fees=True
+                )
+            except Exception as e:
+                logger.warning(f"Error matching trades for consecutive loss check: {e}")
+                # Fallback: use raw trades if matching fails
+                completed_trades = order_responses
+        
+        # Count consecutive losses from most recent completed trades (most recent first)
+        # Sort by exit time (most recent first)
+        if completed_trades:
+            from app.risk.utils import get_timestamp_from_completed_trade
+            # Use get_timestamp_from_completed_trade for consistent timestamp extraction
+            # Ensure we always get a datetime object, not a Mock
+            def get_sort_key(trade):
+                timestamp = get_timestamp_from_completed_trade(trade, fallback=datetime.min.replace(tzinfo=timezone.utc))
+                # If timestamp is not a datetime (e.g., Mock), use fallback
+                if not isinstance(timestamp, datetime):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                return timestamp
+            
+            completed_trades.sort(key=get_sort_key, reverse=True)
+        
         consecutive_losses = 0
-        for trade in recent_trades:
-            # Determine if trade was a loss
-            # For completed trades, check net_pnl
-            if hasattr(trade, 'net_pnl'):
-                if trade.net_pnl < 0:
-                    consecutive_losses += 1
-                else:
-                    break  # Win breaks the streak
-            elif hasattr(trade, 'realized_pnl'):
-                if trade.realized_pnl < 0:
-                    consecutive_losses += 1
-                else:
-                    break
+        for trade in completed_trades:
+            # Determine if trade was a loss using shared utility function
+            from app.risk.utils import get_pnl_from_completed_trade
+            pnl = get_pnl_from_completed_trade(trade)
+            if pnl < 0:
+                consecutive_losses += 1
             else:
+                break  # Win breaks the streak
                 # Can't determine - skip
                 continue
         
@@ -405,17 +439,69 @@ class CircuitBreaker:
         account_id: str,
         start_time: datetime
     ) -> float:
-        """Get realized PnL from closed trades since start_time."""
+        """Get realized PnL from closed trades since start_time.
+        
+        CRITICAL: Uses trade matching to calculate PnL from completed trade cycles,
+        not individual entry/exit trades. This ensures accurate loss calculations.
+        """
         if not self.trade_service or not self.user_id:
             return 0.0
         
-        # TODO: Query trades from database filtered by:
-        # - account_id
-        # - timestamp >= start_time
-        # - closed trades only
-        # - Sum PnL from closed trades
-        
-        return 0.0
+        try:
+            # Get all trades for this account since start_time
+            trades = self.trade_service.get_trades_by_account(self.user_id, account_id)
+            
+            # Filter by timestamp
+            filtered_trades = [
+                t for t in trades
+                if t.timestamp and t.timestamp >= start_time
+            ]
+            
+            if not filtered_trades:
+                return 0.0
+            
+            # CRITICAL: Match trades to completed positions (same logic as reports page)
+            from app.services.trade_matcher import match_trades_to_completed_positions
+            from app.models.order import OrderResponse
+            
+            # Convert database trades to OrderResponse format
+            order_responses = []
+            for db_trade in filtered_trades:
+                order_responses.append(OrderResponse(
+                    symbol=db_trade.symbol or "",
+                    order_id=db_trade.order_id or 0,
+                    status=db_trade.status or "FILLED",
+                    side=db_trade.side or "BUY",
+                    price=float(db_trade.price or 0),
+                    avg_price=float(db_trade.avg_price or db_trade.price or 0),
+                    executed_qty=float(db_trade.executed_qty or 0),
+                    timestamp=db_trade.timestamp,
+                    commission=float(db_trade.commission) if db_trade.commission else None,
+                    commission_asset=db_trade.commission_asset,
+                    leverage=db_trade.leverage,
+                    position_side=db_trade.position_side,
+                    update_time=db_trade.update_time,
+                    time_in_force=db_trade.time_in_force,
+                    order_type=db_trade.order_type,
+                    notional_value=float(db_trade.notional_value) if db_trade.notional_value else None,
+                    cummulative_quote_qty=float(db_trade.cummulative_quote_qty) if db_trade.cummulative_quote_qty else None,
+                    initial_margin=float(db_trade.initial_margin) if db_trade.initial_margin else None,
+                    margin_type=db_trade.margin_type,
+                ))
+            
+            # Match trades to completed positions
+            completed_trades = match_trades_to_completed_positions(
+                order_responses,
+                include_fees=True
+            )
+            
+            # Sum net PnL from completed trades
+            total_pnl = sum(completed.net_pnl for completed in completed_trades)
+            
+            return total_pnl
+        except Exception as e:
+            logger.warning(f"Error calculating realized PnL for account {account_id}: {e}")
+            return 0.0
     
     def _get_account_balance(self, account_id: str) -> Optional[float]:
         """Get account balance in USDT."""

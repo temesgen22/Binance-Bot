@@ -453,14 +453,22 @@
                     else if (percentage >= 80) barColor = '#ffc107'; // yellow
                     else if (percentage >= 60) barColor = '#ff9800'; // orange
                     
-                    const formattedCurrent = typeof current === 'number' ? current.toFixed(2) : current;
-                    const formattedLimit = typeof limit === 'number' ? limit.toFixed(2) : limit;
+                    const safeFormat = (value, decimals = 2) => {
+                        if (value === null || value === undefined || isNaN(value)) {
+                            return 'N/A';
+                        }
+                        return typeof value === 'number' ? value.toFixed(decimals) : value;
+                    };
+                    
+                    const formattedCurrent = safeFormat(current, 2);
+                    const formattedLimit = safeFormat(limit, 2);
+                    const formattedPercentage = safeFormat(percentage, 0);
                     
                     return `
                         <div style="margin-bottom: 15px;">
                             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                                 <strong>${label}:</strong>
-                                <span>${formattedCurrent}${unit} / ${formattedLimit}${unit} (${percentage.toFixed(0)}%)</span>
+                                <span>${formattedCurrent}${unit} / ${formattedLimit}${unit} (${formattedPercentage}%)</span>
                             </div>
                             <div style="width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden;">
                                 <div style="width: ${percentage}%; height: 100%; background: ${barColor}; transition: width 0.3s ease;"></div>
@@ -559,6 +567,14 @@
                 }
 
                 const m = data.metrics;
+                // Helper function to safely format numbers
+                const safeFormat = (value, decimals = 2, suffix = '') => {
+                    if (value === null || value === undefined || isNaN(value)) {
+                        return 'N/A';
+                    }
+                    return value.toFixed(decimals) + suffix;
+                };
+                
                 metricsDiv.innerHTML = `
                     <table>
                         <tr>
@@ -567,39 +583,39 @@
                         </tr>
                         <tr>
                             <td>Total Trades</td>
-                            <td>${m.total_trades}</td>
+                            <td>${m.total_trades || 0}</td>
                         </tr>
                         <tr>
                             <td>Win Rate</td>
-                            <td>${m.win_rate.toFixed(2)}%</td>
+                            <td>${safeFormat(m.win_rate, 2, '%')}</td>
                         </tr>
                         <tr>
                             <td>Total PnL</td>
-                            <td class="${m.total_pnl >= 0 ? 'positive' : 'negative'}">${m.total_pnl.toFixed(2)} USDT</td>
+                            <td class="${(m.total_pnl || 0) >= 0 ? 'positive' : 'negative'}">${safeFormat(m.total_pnl, 2, ' USDT')}</td>
                         </tr>
                         <tr>
                             <td>Profit Factor</td>
-                            <td>${m.profit_factor.toFixed(2)}</td>
+                            <td>${safeFormat(m.profit_factor, 2)}</td>
                         </tr>
                         <tr>
                             <td>Sharpe Ratio</td>
-                            <td>${m.sharpe_ratio ? m.sharpe_ratio.toFixed(2) : 'N/A'}</td>
+                            <td>${safeFormat(m.sharpe_ratio, 2)}</td>
                         </tr>
                         <tr>
                             <td>Max Drawdown</td>
-                            <td class="negative">${m.max_drawdown_pct.toFixed(2)}% (${m.max_drawdown_usdt.toFixed(2)} USDT)</td>
+                            <td class="negative">${safeFormat(m.max_drawdown_pct, 2, '%')} (${safeFormat(m.max_drawdown_usdt, 2, ' USDT')})</td>
                         </tr>
                         <tr>
                             <td>Current Drawdown</td>
-                            <td class="negative">${m.current_drawdown_pct.toFixed(2)}% (${m.current_drawdown_usdt.toFixed(2)} USDT)</td>
+                            <td class="negative">${safeFormat(m.current_drawdown_pct, 2, '%')} (${safeFormat(m.current_drawdown_usdt, 2, ' USDT')})</td>
                         </tr>
                         <tr>
                             <td>Peak Balance</td>
-                            <td>${m.peak_balance.toFixed(2)} USDT</td>
+                            <td>${safeFormat(m.peak_balance, 2, ' USDT')}</td>
                         </tr>
                         <tr>
                             <td>Current Balance</td>
-                            <td>${m.current_balance.toFixed(2)} USDT</td>
+                            <td>${safeFormat(m.current_balance, 2, ' USDT')}</td>
                         </tr>
                     </table>
                 `;
@@ -614,39 +630,58 @@
         }
 
         function updateMetricsGrid(metrics) {
+            // Helper function to safely format numbers
+            const safeFormat = (value, decimals = 2, suffix = '') => {
+                if (value === null || value === undefined || isNaN(value)) {
+                    return 'N/A';
+                }
+                return value.toFixed(decimals) + suffix;
+            };
+            
             const grid = document.getElementById('metricsGrid');
+            if (!grid) return; // Safety check
+            
+            const totalPnl = metrics.total_pnl || 0;
+            const winRate = metrics.win_rate || 0;
+            const profitFactor = metrics.profit_factor || 0;
+            const grossProfit = metrics.gross_profit || 0;
+            const maxDrawdownPct = metrics.max_drawdown_pct || 0;
+            const maxDrawdownUsdt = metrics.max_drawdown_usdt || 0;
+            const currentBalance = metrics.current_balance || 0;
+            const peakBalance = metrics.peak_balance || 0;
+            
             grid.innerHTML = `
                 <div class="metric-card">
                     <h3>Total PnL</h3>
-                    <div class="metric-value ${metrics.total_pnl >= 0 ? 'positive' : 'negative'}">
-                        ${metrics.total_pnl >= 0 ? '+' : ''}${metrics.total_pnl.toFixed(2)} USDT
+                    <div class="metric-value ${totalPnl >= 0 ? 'positive' : 'negative'}">
+                        ${totalPnl >= 0 ? '+' : ''}${safeFormat(totalPnl, 2, ' USDT')}
                     </div>
                     <div class="metric-change">All Time</div>
                 </div>
                 <div class="metric-card">
                     <h3>Win Rate</h3>
-                    <div class="metric-value">${metrics.win_rate.toFixed(2)}%</div>
-                    <div class="metric-change">${metrics.winning_trades} wins / ${metrics.total_trades} trades</div>
+                    <div class="metric-value">${safeFormat(winRate, 2, '%')}</div>
+                    <div class="metric-change">${metrics.winning_trades || 0} wins / ${metrics.total_trades || 0} trades</div>
                 </div>
                 <div class="metric-card">
                     <h3>Profit Factor</h3>
-                    <div class="metric-value">${metrics.profit_factor.toFixed(2)}</div>
-                    <div class="metric-change">Gross Profit: ${metrics.gross_profit.toFixed(2)} USDT</div>
+                    <div class="metric-value">${safeFormat(profitFactor, 2)}</div>
+                    <div class="metric-change">Gross Profit: ${safeFormat(grossProfit, 2, ' USDT')}</div>
                 </div>
                 <div class="metric-card">
                     <h3>Sharpe Ratio</h3>
-                    <div class="metric-value">${metrics.sharpe_ratio ? metrics.sharpe_ratio.toFixed(2) : 'N/A'}</div>
+                    <div class="metric-value">${safeFormat(metrics.sharpe_ratio, 2)}</div>
                     <div class="metric-change">Risk-adjusted returns</div>
                 </div>
                 <div class="metric-card">
                     <h3>Max Drawdown</h3>
-                    <div class="metric-value negative">${metrics.max_drawdown_pct.toFixed(2)}%</div>
-                    <div class="metric-change">${metrics.max_drawdown_usdt.toFixed(2)} USDT</div>
+                    <div class="metric-value negative">${safeFormat(maxDrawdownPct, 2, '%')}</div>
+                    <div class="metric-change">${safeFormat(maxDrawdownUsdt, 2, ' USDT')}</div>
                 </div>
                 <div class="metric-card">
                     <h3>Current Balance</h3>
-                    <div class="metric-value">${metrics.current_balance.toFixed(2)} USDT</div>
-                    <div class="metric-change">Peak: ${metrics.peak_balance.toFixed(2)} USDT</div>
+                    <div class="metric-value">${safeFormat(currentBalance, 2, ' USDT')}</div>
+                    <div class="metric-change">Peak: ${safeFormat(peakBalance, 2, ' USDT')}</div>
                 </div>
             `;
         }
@@ -774,14 +809,23 @@
                 
                 const accountLabel = data.account_id && data.account_id !== 'all' ? ` (Account: ${data.account_id})` : ' (All Accounts)';
                 
+                // Helper function to safely format numbers
+                const safeFormat = (value, decimals = 2, suffix = '') => {
+                    if (value === null || value === undefined || isNaN(value)) {
+                        return 'N/A';
+                    }
+                    return value.toFixed(decimals) + suffix;
+                };
+                
+                const summary = data.summary || {};
                 reportsDiv.innerHTML = `
-                    <h4>Daily Report - ${data.date}${accountLabel}</h4>
+                    <h4>Daily Report - ${data.date || 'N/A'}${accountLabel}</h4>
                     <table>
                         <tr><th>Metric</th><th>Value</th></tr>
-                        <tr><td>Total Trades</td><td>${data.summary.total_trades}</td></tr>
-                        <tr><td>Win Rate</td><td>${data.summary.win_rate.toFixed(2)}%</td></tr>
-                        <tr><td>Total PnL</td><td class="${data.summary.total_pnl >= 0 ? 'positive' : 'negative'}">${data.summary.total_pnl.toFixed(2)} USDT</td></tr>
-                        <tr><td>Profit Factor</td><td>${data.summary.profit_factor.toFixed(2)}</td></tr>
+                        <tr><td>Total Trades</td><td>${summary.total_trades || 0}</td></tr>
+                        <tr><td>Win Rate</td><td>${safeFormat(summary.win_rate, 2, '%')}</td></tr>
+                        <tr><td>Total PnL</td><td class="${(summary.total_pnl || 0) >= 0 ? 'positive' : 'negative'}">${safeFormat(summary.total_pnl, 2, ' USDT')}</td></tr>
+                        <tr><td>Profit Factor</td><td>${safeFormat(summary.profit_factor, 2)}</td></tr>
                     </table>
                 `;
             } catch (error) {
@@ -811,16 +855,25 @@
                 
                 const accountLabel = data.account_id && data.account_id !== 'all' ? ` (Account: ${data.account_id})` : ' (All Accounts)';
                 
+                // Helper function to safely format numbers
+                const safeFormat = (value, decimals = 2, suffix = '') => {
+                    if (value === null || value === undefined || isNaN(value)) {
+                        return 'N/A';
+                    }
+                    return value.toFixed(decimals) + suffix;
+                };
+                
+                const summary = data.summary || {};
                 reportsDiv.innerHTML = `
-                    <h4>Weekly Report - ${data.week_start} to ${data.week_end}${accountLabel}</h4>
+                    <h4>Weekly Report - ${data.week_start || 'N/A'} to ${data.week_end || 'N/A'}${accountLabel}</h4>
                     <table>
                         <tr><th>Metric</th><th>Value</th></tr>
-                        <tr><td>Total Trades</td><td>${data.summary.total_trades}</td></tr>
-                        <tr><td>Win Rate</td><td>${data.summary.win_rate.toFixed(2)}%</td></tr>
-                        <tr><td>Total PnL</td><td class="${data.summary.total_pnl >= 0 ? 'positive' : 'negative'}">${data.summary.total_pnl.toFixed(2)} USDT</td></tr>
-                        <tr><td>Profit Factor</td><td>${data.summary.profit_factor.toFixed(2)}</td></tr>
-                        <tr><td>Max Drawdown</td><td class="negative">${data.summary.max_drawdown_pct.toFixed(2)}%</td></tr>
-                        <tr><td>Sharpe Ratio</td><td>${data.summary.sharpe_ratio ? data.summary.sharpe_ratio.toFixed(2) : 'N/A'}</td></tr>
+                        <tr><td>Total Trades</td><td>${summary.total_trades || 0}</td></tr>
+                        <tr><td>Win Rate</td><td>${safeFormat(summary.win_rate, 2, '%')}</td></tr>
+                        <tr><td>Total PnL</td><td class="${(summary.total_pnl || 0) >= 0 ? 'positive' : 'negative'}">${safeFormat(summary.total_pnl, 2, ' USDT')}</td></tr>
+                        <tr><td>Profit Factor</td><td>${safeFormat(summary.profit_factor, 2)}</td></tr>
+                        <tr><td>Max Drawdown</td><td class="negative">${safeFormat(summary.max_drawdown_pct, 2, '%')}</td></tr>
+                        <tr><td>Sharpe Ratio</td><td>${safeFormat(summary.sharpe_ratio, 2)}</td></tr>
                     </table>
                 `;
             } catch (error) {

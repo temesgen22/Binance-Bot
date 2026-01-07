@@ -256,6 +256,24 @@
             color: #856404;
         }
 
+        .health-indicator {
+            display: inline-block;
+            margin-left: 5px;
+            font-size: 0.75em;
+            font-weight: bold;
+            cursor: help;
+            line-height: 1;
+        }
+        .health-indicator.healthy {
+            color: #28a745;
+            display: none; /* Hide healthy indicator - only show X for problems */
+        }
+        .health-indicator.warning {
+            color: #ffc107;
+        }
+        .health-indicator.error {
+            color: #dc3545;
+        }
         .badge.running {
             background: #28a745;
             color: white;
@@ -746,6 +764,10 @@
                 updateOverallStats(data);
                 // Load risk status for all strategies
                 loadRiskStatusForStrategies(data.strategies);
+                // Load health status for running strategies
+                loadHealthStatusForStrategies(data.strategies);
+                // Load health status for running strategies
+                loadHealthStatusForStrategies(data.strategies);
             } catch (error) {
                 console.error('Error loading data:', error);
                 document.getElementById('strategiesContent').innerHTML = 
@@ -805,9 +827,12 @@
                 // Cryptocurrency
                 html += `<td><span class="badge info">${strategy.symbol}</span></td>`;
                 
-                // Status
+                // Status with health indicator
                 const statusClass = strategy.status === 'running' ? 'running' : strategy.status === 'stopped' ? 'stopped' : 'error';
-                html += `<td><span class="badge ${statusClass}">${strategy.status.toUpperCase()}</span></td>`;
+                html += `<td>
+                    <span class="badge ${statusClass}">${strategy.status.toUpperCase()}</span>
+                    ${strategy.status === 'running' ? `<span id="health-indicator-${strategy.strategy_id}" class="health-indicator" title="Checking health..."></span>` : ''}
+                </td>`;
                 
                 // Risk Status (will be loaded asynchronously)
                 html += `<td id="risk-status-${strategy.strategy_id}"><span class="badge info">Loading...</span></td>`;
@@ -1249,6 +1274,86 @@
             // Load risk status for each strategy in parallel
             const promises = strategies.map(strategy => loadRiskStatus(strategy.strategy_id));
             await Promise.allSettled(promises);
+        }
+
+        // Health Status Functions
+        async function loadHealthStatusForStrategies(strategies) {
+            if (!strategies || strategies.length === 0) return;
+            
+            // Load health status only for running strategies
+            const runningStrategies = strategies.filter(s => s.status === 'running');
+            if (runningStrategies.length === 0) return;
+            
+            // Load health status for each running strategy in parallel
+            const promises = runningStrategies.map(strategy => loadHealthStatus(strategy.strategy_id));
+            await Promise.allSettled(promises);
+        }
+
+        async function loadHealthStatus(strategyId) {
+            try {
+                const response = await authFetch(`/strategies/${strategyId}/health`);
+                if (!response.ok) {
+                    updateHealthIndicator(strategyId, 'error', ['Health check failed']);
+                    return;
+                }
+                
+                const health = await response.json();
+                updateHealthIndicator(strategyId, health.health_status, health.issues || []);
+            } catch (error) {
+                console.error(`Error loading health status for strategy ${strategyId}:`, error);
+                updateHealthIndicator(strategyId, 'error', ['Health check error']);
+            }
+        }
+
+        function updateHealthIndicator(strategyId, healthStatus, issues) {
+            const indicator = document.getElementById(`health-indicator-${strategyId}`);
+            if (!indicator) return;
+
+            let icon = '';
+            let className = '';
+            let tooltip = 'Health check in progress...';
+
+            // Clear any previous content first
+            indicator.textContent = '';
+            indicator.className = 'health-indicator';
+
+            if (healthStatus === 'healthy') {
+                icon = '';
+                className = 'healthy';
+                tooltip = 'Strategy is healthy and executing orders';
+            } else if (healthStatus === 'execution_stale') {
+                icon = 'X';
+                className = 'warning';
+                tooltip = `Execution is stale: ${issues && issues.length > 0 ? issues[0] : 'Last execution was too long ago'}`;
+            } else if (healthStatus === 'task_dead') {
+                icon = 'X';
+                className = 'error';
+                tooltip = `Task is dead: ${issues && issues.length > 0 ? issues[0] : 'Execution task is not running'}`;
+            } else if (healthStatus === 'no_execution_tracking') {
+                icon = 'X';
+                className = 'warning';
+                tooltip = 'No execution tracking found (strategy may not have executed yet)';
+            } else if (healthStatus === 'not_running') {
+                icon = '';
+                className = 'warning';
+                tooltip = 'Strategy is not running';
+            } else if (healthStatus === 'error') {
+                icon = 'X';
+                className = 'error';
+                tooltip = `Health check error: ${issues && issues.length > 0 ? issues[0] : 'Failed to check health status'}`;
+            } else {
+                icon = 'X';
+                className = 'warning';
+                tooltip = `Health status: ${healthStatus}${issues && issues.length > 0 ? '\n\nIssues:\n' + issues.join('\n') : ''}`;
+            }
+
+            if (issues && issues.length > 0 && healthStatus !== 'error') {
+                tooltip += '\n\nIssues:\n' + issues.join('\n');
+            }
+
+            indicator.textContent = icon;
+            indicator.className = `health-indicator ${className}`;
+            indicator.title = tooltip;
         }
 
         async function loadRiskStatus(strategyId) {

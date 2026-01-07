@@ -251,3 +251,175 @@ async def delete_strategy(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete strategy: {str(e)}"
         )
+
+
+@router.get("/{strategy_id}/health")
+async def get_strategy_health(
+    strategy_id: str,
+    current_user: User = Depends(get_current_user_async),
+    runner: StrategyRunner = Depends(get_strategy_runner),
+    db: Session = Depends(get_db_session_dependency),
+) -> dict:
+    """Get health status for a strategy.
+    
+    This endpoint verifies that a "running" strategy is actually:
+    1. Has an active execution task (not dead)
+    2. Is executing its loop (last_execution_time is recent)
+    3. Is placing orders on Binance (has recent trades)
+    
+    Returns:
+        Health status with detailed information about strategy execution
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.models.strategy import StrategyState
+    
+    try:
+        strategies = runner.list_strategies()
+        strategy = next((s for s in strategies if s.id == strategy_id), None)
+        
+        if not strategy:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Strategy {strategy_id} not found"
+            )
+        
+        # Check 1: Is task actually running?
+        task_running = False
+        task_done = True
+        if strategy_id in runner._tasks:
+            task = runner._tasks[strategy_id]
+            task_running = not task.done()
+            task_done = task.done()
+        
+        # Check 2: Last execution time (from meta)
+        last_execution_time = None
+        last_execution_age_seconds = None
+        execution_stale = False
+        if isinstance(strategy.meta, dict):
+            last_exec_time_str = strategy.meta.get('last_execution_time')
+            last_exec_timestamp = strategy.meta.get('last_execution_timestamp')
+            
+            if last_exec_time_str:
+                try:
+                    last_execution_time = datetime.fromisoformat(last_exec_time_str.replace('Z', '+00:00'))
+                except:
+                    pass
+            elif last_exec_timestamp:
+                last_execution_time = datetime.fromtimestamp(last_exec_timestamp, tz=timezone.utc)
+            
+            if last_execution_time:
+                age = (datetime.now(timezone.utc) - last_execution_time).total_seconds()
+                last_execution_age_seconds = age
+                # Consider stale if > 5x the interval (strategy should execute every interval_seconds)
+                interval = strategy.params.interval_seconds if hasattr(strategy.params, 'interval_seconds') else strategy.params.get('interval_seconds', 60)
+                execution_stale = age > (interval * 5)
+        
+        # Check 3: Recent orders (check database for recent trades)
+        from app.services.trade_service import TradeService
+        from app.services.database_service import DatabaseService
+        
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        db_service = DatabaseService(db=db)
+        trade_service = TradeService(db=db)
+        
+        # Get strategy UUID
+        db_strategy = db_service.get_strategy(user_id, strategy_id)
+        recent_orders_count = 0
+        last_order_time = None
+        last_order_id = None
+        
+        if db_strategy:
+            # Get trades from last hour
+            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+            trades = trade_service.get_strategy_trades(user_id, db_strategy.id, limit=100)
+            recent_trades = [t for t in trades if t.timestamp and t.timestamp >= one_hour_ago]
+            recent_orders_count = len(recent_trades)
+            
+            if recent_trades:
+                last_trade = max(recent_trades, key=lambda t: t.timestamp or datetime.min.replace(tzinfo=timezone.utc))
+                last_order_time = last_trade.timestamp
+                last_order_id = last_trade.order_id
+        
+        # Also check meta for last order info
+        if isinstance(strategy.meta, dict):
+            last_order_meta_time = strategy.meta.get('last_order_time')
+            if last_order_meta_time and (not last_order_time or last_order_meta_time > last_order_time.isoformat() if last_order_time else True):
+                try:
+                    last_order_time = datetime.fromisoformat(last_order_meta_time.replace('Z', '+00:00'))
+                except:
+                    pass
+            last_order_id = strategy.meta.get('last_order_id') or last_order_id
+        
+        # Determine overall health
+        is_healthy = True
+        health_status = "healthy"
+        issues = []
+        
+        if strategy.status != StrategyState.running:
+            is_healthy = False
+            health_status = "not_running"
+            issues.append(f"Strategy status is '{strategy.status.value}', not 'running'")
+        elif not task_running:
+            is_healthy = False
+            health_status = "task_dead"
+            issues.append("Strategy has 'running' status but execution task is not active (task is done/dead)")
+        elif execution_stale:
+            is_healthy = False
+            health_status = "execution_stale"
+            issues.append(f"Last execution was {last_execution_age_seconds:.0f} seconds ago (stale)")
+        elif last_execution_time is None:
+            is_healthy = False
+            health_status = "no_execution_tracking"
+            issues.append("No execution time tracking found (strategy may not have executed yet)")
+        
+        # Check if orders are being placed (optional warning, not error)
+        orders_healthy = True
+        if strategy.status == StrategyState.running:
+            # For running strategies, check if orders are being placed
+            if isinstance(strategy.meta, dict):
+                orders_executed = strategy.meta.get('orders_executed_count', 0)
+                orders_skipped = strategy.meta.get('orders_skipped_count', 0)
+                
+                # If strategy has been running for a while but no orders executed, it's suspicious
+                if strategy.started_at:
+                    running_duration = (datetime.now(timezone.utc) - strategy.started_at).total_seconds()
+                    if running_duration > 3600 and orders_executed == 0:  # Running > 1 hour, no orders
+                        orders_healthy = False
+                        issues.append(f"Strategy has been running for {running_duration/3600:.1f} hours but no orders executed")
+        
+        return {
+            "strategy_id": strategy_id,
+            "strategy_name": strategy.name,
+            "status": strategy.status.value,
+            "health_status": health_status,
+            "is_healthy": is_healthy,
+            "issues": issues,
+            "task_status": {
+                "has_task": strategy_id in runner._tasks,
+                "task_running": task_running,
+                "task_done": task_done,
+            },
+            "execution_status": {
+                "last_execution_time": last_execution_time.isoformat() if last_execution_time else None,
+                "last_execution_age_seconds": last_execution_age_seconds,
+                "execution_stale": execution_stale,
+            },
+            "order_status": {
+                "recent_orders_count": recent_orders_count,
+                "last_order_time": last_order_time.isoformat() if last_order_time else None,
+                "last_order_id": last_order_id,
+                "orders_healthy": orders_healthy,
+            },
+            "meta": {
+                "orders_executed_count": strategy.meta.get('orders_executed_count', 0) if isinstance(strategy.meta, dict) else 0,
+                "orders_skipped_count": strategy.meta.get('orders_skipped_count', 0) if isinstance(strategy.meta, dict) else 0,
+            } if isinstance(strategy.meta, dict) else {},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking strategy health for {strategy_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check strategy health: {str(e)}"
+        )

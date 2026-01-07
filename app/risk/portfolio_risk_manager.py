@@ -448,9 +448,10 @@ class PortfolioRiskManager:
                 include_fees=True
             )
             
-            # Sum net PnL from completed trades
+            # Sum net PnL from completed trades using shared utility
+            from app.risk.utils import get_pnl_from_completed_trade
             for completed in completed_trades:
-                total_pnl += completed.net_pnl
+                total_pnl += get_pnl_from_completed_trade(completed)
         
         return total_pnl
     

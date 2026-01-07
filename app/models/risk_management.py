@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import List, Literal, Optional
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RiskManagementConfigBase(BaseModel):
@@ -180,8 +180,7 @@ class RiskManagementConfigResponse(RiskManagementConfigBase):
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RiskMetricsResponse(BaseModel):
@@ -220,8 +219,7 @@ class RiskMetricsResponse(BaseModel):
     active_circuit_breakers: Optional[List[str]] = None
     meta_data: Optional[dict] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CircuitBreakerEventResponse(BaseModel):
@@ -239,8 +237,7 @@ class CircuitBreakerEventResponse(BaseModel):
     status: Literal["active", "resolved", "manual_override"]
     meta_data: Optional[dict] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PortfolioRiskStatusResponse(BaseModel):
@@ -310,8 +307,7 @@ class EnforcementEventResponse(BaseModel):
     event_metadata: Optional[dict] = None
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EnforcementHistoryResponse(BaseModel):

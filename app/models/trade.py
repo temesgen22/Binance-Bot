@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TradeWithTimestamp(BaseModel):
@@ -31,8 +31,7 @@ class TradeWithTimestamp(BaseModel):
     notional_value: Optional[float] = Field(default=None, description="Notional value in quote currency")
     client_order_id: Optional[str] = Field(default=None, description="Client order ID from Binance")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PositionSummary(BaseModel):

@@ -129,12 +129,63 @@ class RiskMetricsService:
             if not trades:
                 return None
             
-            # Convert trades to format expected by calculator
+            # CRITICAL: Match trades to completed positions (same logic as reports page)
+            # This ensures we calculate metrics from completed trade cycles, not individual trades
+            from app.services.trade_matcher import match_trades_to_completed_positions
+            from app.models.order import OrderResponse
+            
+            # Convert database trades to OrderResponse format
+            order_responses = []
+            for db_trade in trades:
+                order_responses.append(OrderResponse(
+                    symbol=db_trade.symbol or "",
+                    order_id=db_trade.order_id or 0,
+                    status=db_trade.status or "FILLED",
+                    side=db_trade.side or "BUY",
+                    price=float(db_trade.price or 0),
+                    avg_price=float(db_trade.avg_price or db_trade.price or 0),
+                    executed_qty=float(db_trade.executed_qty or 0),
+                    timestamp=db_trade.timestamp or db_trade.created_at,
+                    commission=float(db_trade.commission) if db_trade.commission else None,
+                    commission_asset=db_trade.commission_asset,
+                    leverage=db_trade.leverage,
+                    position_side=db_trade.position_side,
+                    update_time=db_trade.update_time,
+                    time_in_force=db_trade.time_in_force,
+                    order_type=db_trade.order_type,
+                    notional_value=float(db_trade.notional_value) if db_trade.notional_value else None,
+                    cummulative_quote_qty=float(db_trade.cummulative_quote_qty) if db_trade.cummulative_quote_qty else None,
+                    initial_margin=float(db_trade.initial_margin) if db_trade.initial_margin else None,
+                    margin_type=db_trade.margin_type,
+                ))
+            
+            # Match trades to completed positions
+            try:
+                completed_trades = match_trades_to_completed_positions(
+                    order_responses,
+                    include_fees=True
+                )
+            except Exception as e:
+                logger.warning(f"Error matching trades for metrics: {e}, using raw trades")
+                completed_trades = []
+                # Fallback: use realized_pnl from database if matching fails
+                for db_trade in trades:
+                    if db_trade.realized_pnl:
+                        completed_trades.append(type('obj', (object,), {
+                            'net_pnl': float(db_trade.realized_pnl),
+                            'exit_time': db_trade.timestamp or db_trade.created_at,
+                        })())
+            
+            # Convert completed trades to format expected by calculator
             trade_data = []
-            for trade in trades:
+            for completed_trade in completed_trades:
+                # Completed trades from matcher use net_pnl
+                pnl_value = getattr(completed_trade, 'net_pnl', getattr(completed_trade, 'pnl_usd', getattr(completed_trade, 'realized_pnl', 0)))
                 trade_data.append({
-                    "pnl": float(trade.realized_pnl or 0),
-                    "timestamp": trade.created_at or datetime.now(timezone.utc),
+                    "pnl": float(pnl_value or 0),
+                    "timestamp": getattr(completed_trade, 'exit_time', None) or 
+                                getattr(completed_trade, 'timestamp', None) or 
+                                datetime.now(timezone.utc),
                 })
             
             # Get balances (simplified - would fetch from account)
@@ -182,6 +233,7 @@ class RiskMetricsService:
         else:
             self._metrics_cache.clear()
         logger.info(f"Cleared metrics cache for {strategy_id or 'all strategies'}")
+
 
 
 

@@ -98,6 +98,9 @@ class BinanceClient:
         self._min_notional_cache: Dict[str, float] = {}
         # Time offset cache (difference between local time and Binance server time)
         self._time_offset_ms: int = 0
+        # Track last time sync to avoid too frequent syncs
+        self._last_time_sync: Optional[float] = None
+        self._time_sync_interval: float = 300.0  # Resync every 5 minutes if needed
         
         # Circuit breaker for Binance API calls
         # Protects against cascading failures when Binance API is down
@@ -560,6 +563,12 @@ class BinanceClient:
         logger.info(
             f"Submitting order {order_type} {side} {symbol} qty={rounded_quantity} (original={quantity}) reduce_only={reduce_only}"
         )
+        # CRITICAL: Proactive time sync before order execution to prevent -1021 errors
+        # Resync time if offset is large (>500ms) or if last sync was >5 minutes ago
+        if abs(self._time_offset_ms) > 500:
+            logger.debug(f"Large time offset detected ({self._time_offset_ms}ms), resyncing before order execution")
+            self._sync_time_with_binance()
+        
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
@@ -567,6 +576,11 @@ class BinanceClient:
             "quantity": rounded_quantity,
             "reduceOnly": reduce_only,  # python-binance expects boolean
         }
+        # CRITICAL: Add recvWindow to handle time differences (default 5000ms, we use 10000ms for safety)
+        # recvWindow allows up to 60 seconds, but we use 10 seconds to balance safety and security
+        # This helps prevent -1021 errors when there's small time drift
+        params["recvWindow"] = 10000  # 10 seconds tolerance for time differences
+        
         # Add client_order_id for idempotency (Binance will reject duplicates within 24 hours)
         if client_order_id:
             params["newClientOrderId"] = client_order_id
@@ -588,6 +602,49 @@ class BinanceClient:
             error_msg = str(exc)
             error_code = getattr(exc, 'code', None)
             status_code = getattr(exc, 'status_code', None)
+            
+            # CRITICAL: Handle timestamp synchronization error (-1021) for order execution
+            # This is critical because time drift can cause order rejections
+            if error_code == -1021:
+                logger.warning(
+                    f"Timestamp synchronization error (-1021) for order {symbol} {side}: {error_msg}. "
+                    f"Resyncing time and retrying..."
+                )
+                # Resync time to get current offset
+                self._sync_time_with_binance()
+                
+                # Wait for clock to catch up (non-blocking if in async context)
+                # If local time is ahead, wait for it to catch up
+                wait_time = max(1.5, (abs(self._time_offset_ms) / 1000.0) + 0.5)
+                logger.info(f"Waiting {wait_time:.1f} seconds for clock synchronization before retrying order...")
+                self._non_blocking_sleep(wait_time)
+                
+                # Retry the order with updated time sync and larger recvWindow
+                try:
+                    # Increase recvWindow for retry to handle larger time differences
+                    params["recvWindow"] = 20000  # 20 seconds for retry
+                    response = rest.futures_create_order(**params)
+                    logger.info(f"Order successfully placed after time sync retry: {symbol} {side}")
+                except ClientError as retry_exc:
+                    error_code_retry = getattr(retry_exc, 'code', None)
+                    if error_code_retry == -1021:
+                        logger.error(
+                            f"Timestamp error persists for order {symbol} {side} after time sync. "
+                            f"System clock offset: {self._time_offset_ms}ms. "
+                            f"Please sync your system clock:\n"
+                            f"  Windows: Settings > Time & Language > Date & Time > 'Set time automatically'\n"
+                            f"  Or run: w32tm /resync (as Administrator)"
+                        )
+                        raise BinanceAPIError(
+                            f"Timestamp synchronization error: {error_msg}. "
+                            f"System clock is {self._time_offset_ms}ms out of sync with Binance. "
+                            f"Please sync your system clock.",
+                            error_code=error_code,
+                            details={"symbol": symbol, "side": side, "time_offset_ms": self._time_offset_ms}
+                        ) from retry_exc
+                    else:
+                        # Re-raise the original exception if it's not a timestamp error
+                        raise
             
             # Handle specific Binance error codes
             if status_code == 429:
@@ -1068,6 +1125,11 @@ class BinanceClient:
         Returns:
             Order response dict with orderId, etc.
         """
+        # CRITICAL: Proactive time sync before TP/SL order execution
+        if abs(self._time_offset_ms) > 500:
+            logger.debug(f"Large time offset detected ({self._time_offset_ms}ms), resyncing before STOP_MARKET order")
+            self._sync_time_with_binance()
+        
         rest = self._ensure()
         
         params: Dict[str, Any] = {
@@ -1076,6 +1138,7 @@ class BinanceClient:
             "type": "STOP_MARKET",
             "stopPrice": stop_price,
             "reduceOnly": True,  # Stop-loss always reduces position
+            "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
         
         if close_position:
@@ -1135,6 +1198,11 @@ class BinanceClient:
         Returns:
             Order response dict with orderId, etc.
         """
+        # CRITICAL: Proactive time sync before TP/SL order execution
+        if abs(self._time_offset_ms) > 500:
+            logger.debug(f"Large time offset detected ({self._time_offset_ms}ms), resyncing before TAKE_PROFIT_MARKET order")
+            self._sync_time_with_binance()
+        
         rest = self._ensure()
         
         params: Dict[str, Any] = {
@@ -1143,6 +1211,7 @@ class BinanceClient:
             "type": "TAKE_PROFIT_MARKET",
             "stopPrice": stop_price,
             "reduceOnly": True,  # Take-profit always reduces position
+            "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
         
         if close_position:

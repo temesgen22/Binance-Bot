@@ -114,7 +114,22 @@ class StrategyExecutor:
                 # Flow: Binance → Database (source of truth) → Redis (cache) → Memory (cache) → Strategy
                 # 
                 # 1) First: Sync summary from Binance reality to database (source of truth)
-                await self.state_manager.update_position_info(summary)
+                # CRITICAL: Add timeout to prevent getting stuck on position sync
+                try:
+                    await asyncio.wait_for(
+                        self.state_manager.update_position_info(summary),
+                        timeout=30.0  # 30 second timeout for position sync
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[{summary.id}] Position sync TIMED OUT after 30 seconds. "
+                        f"Continuing with potentially stale position data."
+                    )
+                except Exception as sync_exc:
+                    logger.warning(
+                        f"[{summary.id}] Position sync failed: {sync_exc}. "
+                        f"Continuing with potentially stale position data."
+                    )
                 
                 # 2) Periodic position reconciliation (every 5 minutes)
                 # This ensures database state matches Binance reality even if updates were missed
@@ -123,12 +138,23 @@ class StrategyExecutor:
                 
                 if time_since_reconciliation >= reconciliation_interval:
                     try:
-                        await self.state_manager.reconcile_position_state(summary)
+                        # CRITICAL: Add timeout to prevent getting stuck on reconciliation
+                        await asyncio.wait_for(
+                            self.state_manager.reconcile_position_state(summary),
+                            timeout=30.0  # 30 second timeout for reconciliation
+                        )
                         last_reconciliation = current_time
                         logger.debug(
                             f"[{summary.id}] Periodic position reconciliation completed. "
                             f"Next reconciliation in {reconciliation_interval}s"
                         )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"[{summary.id}] Position reconciliation TIMED OUT after 30 seconds. "
+                            f"Skipping this reconciliation cycle."
+                        )
+                        # Update last_reconciliation to prevent immediate retry
+                        last_reconciliation = current_time
                     except Exception as recon_exc:
                         logger.warning(
                             f"[{summary.id}] Periodic position reconciliation failed: {recon_exc}"
@@ -152,6 +178,28 @@ class StrategyExecutor:
                 signal = await strategy.evaluate()
                 summary.last_signal = signal.action  # type: ignore[assignment]
                 
+                # CRITICAL: Track last execution time for health monitoring
+                # This allows us to detect "zombie" strategies (running but not executing)
+                current_time = datetime.now(timezone.utc)
+                if not isinstance(summary.meta, dict):
+                    summary.meta = {}
+                summary.meta['last_execution_time'] = current_time.isoformat()
+                summary.meta['last_execution_timestamp'] = current_time.timestamp()
+                
+                # Periodically save meta to database (every 10 executions to avoid too many DB writes)
+                execution_count = summary.meta.get('execution_count', 0) + 1
+                summary.meta['execution_count'] = execution_count
+                if execution_count % 10 == 0:
+                    # Save meta to database every 10 executions
+                    try:
+                        self.state_manager.update_strategy_in_db(
+                            summary.id,
+                            save_to_redis=True,
+                            meta=summary.meta
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to save meta to database: {e}")
+                
                 # Log signals (skip HOLD to reduce log noise)
                 if signal.action != "HOLD":
                     logger.info(
@@ -171,8 +219,14 @@ class StrategyExecutor:
                 
                 # 5) Update current price for UI/stats (not critical to logic)
                 # Wrap sync BinanceClient call in to_thread to avoid blocking event loop
+                # CRITICAL: Add timeout to prevent getting stuck on price fetch
                 try:
-                    summary.current_price = await asyncio.to_thread(account_client.get_price, summary.symbol)
+                    summary.current_price = await asyncio.wait_for(
+                        asyncio.to_thread(account_client.get_price, summary.symbol),
+                        timeout=10.0  # 10 second timeout for price fetch (not critical)
+                    )
+                except asyncio.TimeoutError:
+                    logger.debug(f"[{summary.id}] Price fetch timed out for {summary.symbol} (non-critical)")
                 except Exception as exc:
                     logger.warning(f"Failed to get current price for {summary.symbol}: {exc}")
                 
@@ -186,7 +240,30 @@ class StrategyExecutor:
                 # 7) Execute order based on synced state + fresh signal
                 # CRITICAL: Pass account-specific risk and executor to ensure orders go to correct account
                 # Also pass strategy instance so we can sync state immediately after order execution
-                await self._execute_order(signal, summary, strategy, account_risk, account_executor)
+                # CRITICAL: Add timeout to prevent strategy from getting stuck if order execution hangs
+                try:
+                    await asyncio.wait_for(
+                        self._execute_order(signal, summary, strategy, account_risk, account_executor),
+                        timeout=60.0  # 60 second timeout for order execution (prevents infinite hang)
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"[{summary.id}] Order execution TIMED OUT after 60 seconds. "
+                        f"Strategy loop will continue to prevent getting stuck. "
+                        f"Signal: {signal.action} | Symbol: {signal.symbol}"
+                    )
+                    # Continue loop instead of hanging - strategy will retry on next iteration
+                    # Mark in meta that order execution timed out
+                    if not isinstance(summary.meta, dict):
+                        summary.meta = {}
+                    summary.meta['last_order_timeout'] = current_time.isoformat()
+                    summary.meta['order_timeout_count'] = summary.meta.get('order_timeout_count', 0) + 1
+                except Exception as order_exc:
+                    # Log but don't crash the loop - allow strategy to continue
+                    logger.error(
+                        f"[{summary.id}] Order execution failed (non-timeout): {type(order_exc).__name__}: {order_exc}. "
+                        f"Strategy loop will continue."
+                    )
                 
                 await asyncio.sleep(strategy.context.interval_seconds)
         except asyncio.CancelledError:
@@ -302,6 +379,35 @@ class StrategyExecutor:
             executor=executor,
             klines=klines,  # Bug #4: Pass klines for ATR calculation
         )
+        
+        # CRITICAL: Track order execution for health monitoring
+        current_time = datetime.now(timezone.utc)
+        if not isinstance(summary.meta, dict):
+            summary.meta = {}
+        
+        if order_response:
+            # Order was executed - track it
+            summary.meta['last_order_time'] = current_time.isoformat()
+            summary.meta['last_order_timestamp'] = current_time.timestamp()
+            summary.meta['last_order_id'] = order_response.order_id
+            summary.meta['last_order_status'] = order_response.status
+            summary.meta['last_order_side'] = order_response.side
+            summary.meta['orders_executed_count'] = summary.meta.get('orders_executed_count', 0) + 1
+            logger.debug(f"[{summary.id}] Order executed: {order_response.order_id} ({order_response.side})")
+            
+            # Save meta immediately when order is executed (important for health checks)
+            try:
+                self.state_manager.update_strategy_in_db(
+                    summary.id,
+                    save_to_redis=True,
+                    meta=summary.meta
+                )
+            except Exception as e:
+                logger.debug(f"Failed to save order execution meta to database: {e}")
+        else:
+            # Order was skipped (HOLD signal, risk blocked, etc.)
+            summary.meta['last_skip_time'] = current_time.isoformat()
+            summary.meta['orders_skipped_count'] = summary.meta.get('orders_skipped_count', 0) + 1
         
         if not order_response:
             return  # Order was skipped (e.g., HOLD signal)
@@ -445,7 +551,16 @@ class StrategyExecutor:
         
         if is_opening:
             try:
-                await self.order_manager.place_tp_sl_orders(summary, order_response)
+                # CRITICAL: Add timeout to prevent getting stuck on TP/SL order placement
+                await asyncio.wait_for(
+                    self.order_manager.place_tp_sl_orders(summary, order_response),
+                    timeout=30.0  # 30 second timeout for TP/SL order placement
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{summary.id}] TP/SL order placement TIMED OUT after 30 seconds. "
+                    f"Strategy will still monitor TP/SL, but Binance native orders not active."
+                )
             except Exception as exc:
                 logger.warning(
                     f"[{summary.id}] Failed to place TP/SL orders on Binance: {exc}. "
@@ -457,7 +572,16 @@ class StrategyExecutor:
         has_order_ids = bool(tp_order_id or sl_order_id)
         if position_closed and has_order_ids:
             try:
-                await self.order_manager.cancel_tp_sl_orders(summary)
+                # CRITICAL: Add timeout to prevent getting stuck on TP/SL order cancellation
+                await asyncio.wait_for(
+                    self.order_manager.cancel_tp_sl_orders(summary),
+                    timeout=30.0  # 30 second timeout for TP/SL order cancellation
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{summary.id}] TP/SL order cancellation TIMED OUT after 30 seconds. "
+                    f"Orders may still exist on Binance."
+                )
             except Exception as exc:
                 logger.warning(f"[{summary.id}] Failed to cancel TP/SL orders: {exc}")
         
@@ -466,7 +590,17 @@ class StrategyExecutor:
         if strategy:
             try:
                 # Update position info from Binance to ensure summary is accurate
-                await self.state_manager.update_position_info(summary)
+                # CRITICAL: Add timeout to prevent getting stuck on position update
+                try:
+                    await asyncio.wait_for(
+                        self.state_manager.update_position_info(summary),
+                        timeout=30.0  # 30 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[{summary.id}] Position update after order execution timed out. "
+                        f"Continuing with potentially stale position data."
+                    )
                 # Sync strategy's internal state with updated summary
                 strategy.sync_position_state(
                     position_side=summary.position_side,
@@ -503,7 +637,13 @@ class StrategyExecutor:
         else:
             # Fallback: update position info, strategy will sync at start of next loop
             try:
-                await self.state_manager.update_position_info(summary)
+                # CRITICAL: Add timeout to prevent getting stuck on fallback position update
+                await asyncio.wait_for(
+                    self.state_manager.update_position_info(summary),
+                    timeout=30.0  # 30 second timeout
+                )
+            except asyncio.TimeoutError:
+                logger.debug(f"[{summary.id}] Fallback position update timed out (non-critical)")
             except Exception as exc:
                 logger.debug(f"[{summary.id}] Failed to update position info after order execution: {exc}")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OrderResponse(BaseModel):
@@ -91,6 +91,5 @@ class OrderResponse(BaseModel):
         description="Exit reason from strategy signal: TP, SL, TP_TRAILING, SL_TRAILING, EMA_CROSS, MANUAL, etc."
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 

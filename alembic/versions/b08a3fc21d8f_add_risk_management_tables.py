@@ -117,7 +117,13 @@ def upgrade() -> None:
     op.create_index(op.f('ix_circuit_breaker_events_account_id'), 'circuit_breaker_events', ['account_id'], unique=False)
     op.create_index(op.f('ix_circuit_breaker_events_strategy_id'), 'circuit_breaker_events', ['strategy_id'], unique=False)
     op.create_index(op.f('ix_circuit_breaker_events_user_id'), 'circuit_breaker_events', ['user_id'], unique=False)
-    op.drop_index(op.f('idx_accounts_exchange_platform'), table_name='accounts')
+    # Check if index exists before dropping (it may not exist in some database states)
+    from sqlalchemy import inspect
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    indexes = [idx['name'] for idx in inspector.get_indexes('accounts')]
+    if 'idx_accounts_exchange_platform' in indexes:
+        op.drop_index(op.f('idx_accounts_exchange_platform'), table_name='accounts')
     op.create_index(op.f('ix_accounts_exchange_platform'), 'accounts', ['exchange_platform'], unique=False)
     op.create_index(op.f('ix_sensitivity_analyses_created_at'), 'sensitivity_analyses', ['created_at'], unique=False)
     op.create_index(op.f('ix_sensitivity_analyses_strategy_type'), 'sensitivity_analyses', ['strategy_type'], unique=False)

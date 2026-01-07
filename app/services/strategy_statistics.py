@@ -211,8 +211,36 @@ class StrategyStatistics:
         # Get last trade timestamp - try to get from order_id or use current time
         last_trade_at = None
         if trades:
-            # If trades have timestamps, use the latest; otherwise use current time
-            last_trade_at = datetime.now(timezone.utc)
+            # Find the most recent trade timestamp from actual trades
+            # Trades are OrderResponse objects which have a timestamp attribute
+            trade_timestamps = []
+            for trade in trades:
+                if hasattr(trade, 'timestamp') and trade.timestamp:
+                    # timestamp can be datetime or float (unix timestamp)
+                    if isinstance(trade.timestamp, datetime):
+                        trade_timestamps.append(trade.timestamp)
+                    elif isinstance(trade.timestamp, (int, float)):
+                        # Convert unix timestamp to datetime
+                        trade_timestamps.append(datetime.fromtimestamp(trade.timestamp, tz=timezone.utc))
+                    else:
+                        # Try to parse string timestamp
+                        try:
+                            if isinstance(trade.timestamp, str):
+                                trade_timestamps.append(datetime.fromisoformat(trade.timestamp.replace('Z', '+00:00')))
+                        except:
+                            pass
+            
+            if trade_timestamps:
+                # Use the latest trade timestamp (from trades that belong to this strategy_id)
+                last_trade_at = max(trade_timestamps)
+                logger.debug(
+                    f"Last trade timestamp for {strategy_id}: {last_trade_at.isoformat()} "
+                    f"(from {len(trade_timestamps)} trades with valid timestamps out of {len(trades)} total trades)"
+                )
+            else:
+                # No valid timestamps found, set to None
+                last_trade_at = None
+                logger.debug(f"No valid timestamps found in {len(trades)} trades for {strategy_id}")
         
         logger.debug(
             f"Stats for {strategy_id}: {len(completed_trades)} completed trades, "
