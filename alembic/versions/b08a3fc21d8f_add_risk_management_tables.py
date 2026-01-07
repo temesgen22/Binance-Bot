@@ -161,15 +161,27 @@ def downgrade() -> None:
     op.create_index(op.f('idx_trades_user_timestamp'), 'trades', ['user_id', sa.literal_column('timestamp DESC')], unique=False)
     op.drop_index('idx_trades_strategy_timestamp', table_name='trades', postgresql_ops={'timestamp': 'DESC'})
     op.create_index(op.f('idx_trades_strategy_timestamp'), 'trades', ['strategy_id', sa.literal_column('timestamp DESC')], unique=False)
-    # Find and drop the foreign key constraint by inspecting the table
-    from sqlalchemy import inspect
+    # Drop the foreign key constraint by name (it was created with None in upgrade, but PostgreSQL auto-generates a name)
+    # Try to find and drop the constraint that references rollback_of_history_id
+    from sqlalchemy import inspect, text
     bind = op.get_bind()
     inspector = inspect(bind)
-    fks = inspector.get_foreign_keys('strategy_parameter_history')
-    for fk in fks:
-        if 'rollback_of_history_id' in fk.get('constrained_columns', []):
-            op.drop_constraint(fk['name'], 'strategy_parameter_history', type_='foreignkey')
-            break
+    fk_constraints = [fk['name'] for fk in inspector.get_foreign_keys('strategy_parameter_history') 
+                      if 'rollback_of_history_id' in [col['name'] for col in fk.get('constrained_columns', [])]]
+    if fk_constraints:
+        op.drop_constraint(fk_constraints[0], 'strategy_parameter_history', type_='foreignkey')
+    else:
+        # Fallback: try to find constraint by querying information_schema
+        result = bind.execute(text("""
+            SELECT conname FROM pg_constraint 
+            WHERE conrelid = 'strategy_parameter_history'::regclass 
+            AND contype = 'f' 
+            AND conkey::text LIKE '%rollback_of_history_id%'
+            LIMIT 1;
+        """))
+        constraint_name = result.scalar()
+        if constraint_name:
+            op.drop_constraint(constraint_name, 'strategy_parameter_history', type_='foreignkey')
     op.create_foreign_key(op.f('strategy_parameter_history_rollback_of_history_id_fkey'), 'strategy_parameter_history', 'strategy_parameter_history', ['rollback_of_history_id'], ['id'], ondelete='SET NULL')
     op.drop_index('idx_strategy_metrics_period_type', table_name='strategy_metrics', postgresql_ops={'period_start': 'DESC'})
     op.create_index(op.f('idx_strategy_metrics_period_type'), 'strategy_metrics', ['period_type', sa.literal_column('period_start DESC')], unique=False)

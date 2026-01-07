@@ -244,14 +244,15 @@ pipeline {
         # If Alembic version is at head but tables don't exist, we need to fix this
         if [ "$CURRENT_VERSION_BEFORE" = "$EXPECTED_HEAD" ] && [ "$RISK_TABLES_BEFORE" != "3" ]; then
           echo "⚠️  Detected mismatch: Alembic version is at head but tables are missing"
-          echo "   This indicates a previous migration failure. Fixing by resetting version and re-running..."
+          echo "   This indicates a previous migration failure. Fixing by stamping to previous version and re-running..."
           
-          # Reset to previous version using stamp (safer than downgrade)
+          # Stamp to previous version to allow re-running (safer than downgrade which may have bugs)
           PREV_REV="a1b2c3d4e5f6"
-          echo "   Resetting Alembic version to previous revision: $PREV_REV"
+          echo "   Stamping database to previous revision: $PREV_REV"
           docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic stamp "$PREV_REV" || {
-            echo "   ⚠️  Stamp failed, trying direct database update..."
-            docker exec binance-bot-postgres psql -U postgres -d binance_bot -c "UPDATE alembic_version SET version_num = '$PREV_REV';" 2>/dev/null || echo "   Note: Version reset may have failed"
+            echo "   ⚠️  Stamping failed, trying alternative approach..."
+            # Alternative: directly update alembic_version table
+            docker exec binance-bot-postgres psql -U postgres -d binance_bot -c "UPDATE alembic_version SET version_num = '$PREV_REV';" || echo "   ⚠️  Direct update also failed"
           }
         fi
         
@@ -261,21 +262,6 @@ pipeline {
         echo "🔄 Running alembic upgrade head..."
         MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
         echo "$MIGRATION_OUTPUT"
-        
-        # Check if migration actually ran or was skipped
-        if echo "$MIGRATION_OUTPUT" | grep -qE "(Running upgrade|Running downgrade)"; then
-          echo "   ✅ Migration executed (not skipped)"
-        elif echo "$MIGRATION_OUTPUT" | grep -qE "(b08a3fc21d8f.*head)"; then
-          echo "   ⚠️  Migration may have been skipped (already at head)"
-          # If we're at head but tables don't exist, force a re-run
-          if [ "$RISK_TABLES_BEFORE" != "3" ]; then
-            echo "   Forcing migration re-run by checking current state..."
-            CURRENT_AFTER_UPGRADE=$(docker exec binance-bot-api alembic current 2>&1 | grep -oE '[a-f0-9]{12}' || echo "")
-            if [ "$CURRENT_AFTER_UPGRADE" = "$EXPECTED_HEAD" ]; then
-              echo "   Version is at head but tables missing - this is the mismatch we're fixing"
-            fi
-          fi
-        fi
         
         if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
           echo "✅ Migrations completed successfully"
@@ -310,13 +296,13 @@ pipeline {
           elif [ "$RISK_TABLES" = "0" ]; then
             echo "❌ Risk management tables still not found after migration"
             echo "   This indicates the migration may have failed silently"
-            echo "   Attempting to force re-run by resetting version and upgrading..."
+            echo "   Attempting to force re-run by stamping to previous version and upgrading..."
             
-            # Force re-run: reset version and upgrade again
+            # Force re-run: stamp to previous version and upgrade again
             PREV_REV="a1b2c3d4e5f6"
-            echo "   Step 1: Resetting Alembic version to: $PREV_REV"
+            echo "   Step 1: Stamping to previous revision: $PREV_REV"
             docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic stamp "$PREV_REV" 2>&1 || {
-              echo "   Trying direct database update..."
+              echo "   ⚠️  Stamping failed, trying direct database update..."
               docker exec binance-bot-postgres psql -U postgres -d binance_bot -c "UPDATE alembic_version SET version_num = '$PREV_REV';" 2>&1 || true
             }
             
@@ -334,17 +320,8 @@ pipeline {
               echo "✅ Tables created after retry (3/3)"
             else
               echo "❌ Tables still missing after retry ($RISK_TABLES_AFTER_RETRY/3 found)"
-              echo "   Attempting to check migration execution logs..."
-              echo "   Current Alembic version:"
-              docker exec binance-bot-api alembic current 2>&1 || true
-              echo "   Checking if migration file exists and is valid..."
-              docker exec binance-bot-api test -f /app/alembic/versions/b08a3fc21d8f_add_risk_management_tables.py && echo "   ✅ Migration file exists" || echo "   ❌ Migration file missing"
-              echo ""
-              echo "   Manual intervention may be required:"
-              echo "   1. SSH to server: ssh user@95.216.216.26"
-              echo "   2. Check logs: docker logs binance-bot-api | grep -i migration"
-              echo "   3. Try manual migration: docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head"
-              echo "   4. Or reset and retry: docker exec binance-bot-api alembic stamp a1b2c3d4e5f6 && docker exec binance-bot-api alembic upgrade head"
+              echo "   Manual intervention may be required"
+              echo "   Check migration logs: docker logs binance-bot-api | grep -i migration"
             fi
           else
             echo "⚠️  Only $RISK_TABLES/3 risk management tables found. Some tables may be missing."
