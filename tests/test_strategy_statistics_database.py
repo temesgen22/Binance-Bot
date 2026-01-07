@@ -6,7 +6,7 @@ from the database when they're not in memory or Redis, ensuring statistics
 show correct values even after server restarts.
 """
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID
 from unittest.mock import MagicMock, patch, Mock
 
@@ -186,7 +186,7 @@ def sample_trades():
             price=51000.0,
             avg_price=51000.0,
             executed_qty=0.001,
-            timestamp=base_time.replace(second=base_time.second + 10),
+            timestamp=base_time + timedelta(seconds=10),
         ),
     ]
 
