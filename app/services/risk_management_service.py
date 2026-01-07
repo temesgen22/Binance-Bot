@@ -73,9 +73,16 @@ class RiskManagementService(BaseCacheService):
         logger.debug(f"Cache MISS for risk config: {cache_key}, querying database")
         
         # Get account UUID first
-        account = self.db_service.get_account_by_id(user_id, account_id)
-        if not account:
-            logger.warning(f"Account not found: user_id={user_id}, account_id={account_id}")
+        try:
+            account = self.db_service.get_account_by_id(user_id, account_id)
+            if not account:
+                logger.warning(f"Account not found: user_id={user_id}, account_id={account_id}")
+                return None
+        except AttributeError as e:
+            logger.error(f"AttributeError accessing db_service: {e}. db_service may not be initialized.")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting account by ID: user_id={user_id}, account_id={account_id}, error={e}")
             return None
         
         if self._is_async:
@@ -83,7 +90,14 @@ class RiskManagementService(BaseCacheService):
             # For now, raise an error - async support should be handled at the API level
             raise RuntimeError("Async get_risk_config not supported. Use async method directly.")
         else:
-            return self._get_risk_config_sync(user_id, account.id, account_id, cache_key)
+            try:
+                return self._get_risk_config_sync(user_id, account.id, account_id, cache_key)
+            except AttributeError as e:
+                logger.error(f"AttributeError accessing account.id: {e}. Account may be None or invalid.")
+                return None
+            except Exception as e:
+                logger.error(f"Error in _get_risk_config_sync: {e}")
+                return None
     
     def _get_risk_config_sync(
         self, 
@@ -93,25 +107,37 @@ class RiskManagementService(BaseCacheService):
         cache_key: str
     ) -> Optional[RiskManagementConfigResponse]:
         """Get risk config (sync version)."""
-        db_config = self.db_service.db.query(DBRiskConfig).filter(
-            DBRiskConfig.user_id == user_id,
-            DBRiskConfig.account_id == account_uuid
-        ).first()
-        
-        if not db_config:
-            return None
-        
-        # Convert to response model
-        response = self._db_to_response(db_config, account_id)
-        
-        # Cache the result
-        if self.redis and self.redis.enabled:
-            try:
-                self.redis.set(cache_key, json.dumps(response.model_dump(), default=str), ex=self.cache_ttl)
-            except Exception as e:
-                logger.warning(f"Failed to cache risk config: {e}")
-        
-        return response
+        try:
+            db_config = self.db_service.db.query(DBRiskConfig).filter(
+                DBRiskConfig.user_id == user_id,
+                DBRiskConfig.account_id == account_uuid
+            ).first()
+            
+            if not db_config:
+                return None
+            
+            # Convert to response model
+            response = self._db_to_response(db_config, account_id)
+            
+            # Cache the result
+            if self.redis and self.redis.enabled:
+                try:
+                    self.redis.set(cache_key, json.dumps(response.model_dump(), default=str), ex=self.cache_ttl)
+                except Exception as e:
+                    logger.warning(f"Failed to cache risk config: {e}")
+            
+            return response
+        except Exception as e:
+            # Check if it's a table doesn't exist error
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "undefinedtable" in error_str or "relation" in error_str:
+                logger.warning(
+                    f"Risk management table does not exist. Migration may not have been run. "
+                    f"Error: {e}. Returning None to allow graceful degradation."
+                )
+                return None
+            # Re-raise other exceptions
+            raise
     
     async def _get_risk_config_async(
         self, 

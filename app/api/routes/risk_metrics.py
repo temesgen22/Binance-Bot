@@ -1038,24 +1038,70 @@ async def get_risk_config(
     try:
         user_id = current_user.id if hasattr(current_user, 'id') else current_user
         
+        # Normalize account_id (lowercase, strip whitespace)
+        account_id_normalized = account_id.lower().strip() if account_id else "default"
+        
         risk_service = RiskManagementService(
             db=db,
             redis_storage=None  # Can be injected if needed
         )
         
-        config = risk_service.get_risk_config(user_id, account_id)
+        # Check if account exists first
+        db_service = DatabaseService(db=db)
+        try:
+            account = db_service.get_account_by_id(user_id, account_id_normalized)
+            if not account:
+                logger.warning(f"Account not found: user_id={user_id}, account_id={account_id_normalized}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Account not found: {account_id_normalized}. Please ensure the account exists before accessing risk configuration."
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error checking account existence: {e}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account not found or error accessing account: {account_id_normalized}"
+            )
+        
+        # Try to get risk config, but handle table not existing gracefully
+        try:
+            config = risk_service.get_risk_config(user_id, account_id_normalized)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "undefinedtable" in error_str or "relation" in error_str:
+                logger.warning(
+                    f"Risk management table does not exist. Migration may not have been run. "
+                    f"Error: {e}. Returning 503 Service Unavailable."
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Risk management database tables have not been created yet. "
+                        f"Please run database migrations: alembic upgrade head"
+                    )
+                )
+            # Re-raise other exceptions
+            raise
+        
         if not config:
             raise HTTPException(
                 status_code=404,
-                detail=f"Risk configuration not found for account: {account_id}"
+                detail=f"Risk configuration not found for account: {account_id_normalized}. Please create a risk configuration first."
             )
         
         return config
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting risk config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Error getting risk config for account '{account_id}': {e}\n{error_traceback}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting risk configuration: {str(e)}"
+        )
 
 
 @router.post("/config", response_model=RiskManagementConfigResponse, status_code=201)
@@ -1243,16 +1289,113 @@ async def get_realtime_risk_status(
         user_id = current_user.id if hasattr(current_user, 'id') else current_user
         db_service = DatabaseService(db=db)
         
-        # Normalize account_id
-        account_id_normalized = account_id.strip() if account_id and account_id.strip() else None
+        # Normalize account_id (lowercase, strip whitespace)
+        account_id_normalized = account_id.lower().strip() if account_id and account_id.strip() else None
         
         # Get risk configuration
         risk_service = RiskManagementService(db=db)
         if account_id_normalized:
-            risk_config = risk_service.get_risk_config(user_id, account_id_normalized)
+            # Check if account exists first
+            try:
+                account = db_service.get_account_by_id(user_id, account_id_normalized)
+                if not account:
+                    logger.warning(f"Account not found for realtime status: user_id={user_id}, account_id={account_id_normalized}")
+                    # Return empty response if account doesn't exist
+                    return RealTimeRiskStatusResponse(
+                        account_id=account_id_normalized,
+                        timestamp=datetime.now(timezone.utc),
+                        risk_status="normal",
+                        current_exposure={
+                            "total_exposure_usdt": 0.0,
+                            "total_exposure_pct": 0.0,
+                            "limit_usdt": None,
+                            "limit_pct": None,
+                            "status": "normal"
+                        },
+                        loss_limits={
+                            "daily_loss_usdt": 0.0,
+                            "daily_loss_limit_usdt": None,
+                            "daily_loss_pct": 0.0,
+                            "daily_loss_limit_pct": None,
+                            "weekly_loss_usdt": 0.0,
+                            "weekly_loss_limit_usdt": None,
+                            "status": "normal"
+                        },
+                        drawdown={
+                            "current_drawdown_pct": 0.0,
+                            "max_drawdown_pct": None,
+                            "status": "normal"
+                        },
+                        circuit_breakers={
+                            "active": False,
+                            "breakers": []
+                        },
+                        recent_enforcement_events=[]
+                    )
+            except Exception as e:
+                logger.warning(f"Error checking account existence for realtime status: {e}, continuing with empty response")
+                # Return empty response if account check fails
+                return RealTimeRiskStatusResponse(
+                    account_id=account_id_normalized or "all",
+                    timestamp=datetime.now(timezone.utc),
+                    risk_status="normal",
+                    current_exposure={
+                        "total_exposure_usdt": 0.0,
+                        "total_exposure_pct": 0.0,
+                        "limit_usdt": None,
+                        "limit_pct": None,
+                        "status": "normal"
+                    },
+                    loss_limits={
+                        "daily_loss_usdt": 0.0,
+                        "daily_loss_limit_usdt": None,
+                        "daily_loss_pct": 0.0,
+                        "daily_loss_limit_pct": None,
+                        "weekly_loss_usdt": 0.0,
+                        "weekly_loss_limit_usdt": None,
+                        "status": "normal"
+                    },
+                    drawdown={
+                        "current_drawdown_pct": 0.0,
+                        "max_drawdown_pct": None,
+                        "status": "normal"
+                    },
+                    circuit_breakers={
+                        "active": False,
+                        "breakers": []
+                    },
+                    recent_enforcement_events=[]
+                )
+            
+            # Try to get risk config, but handle table not existing gracefully
+            try:
+                risk_config = risk_service.get_risk_config(user_id, account_id_normalized)
+            except Exception as e:
+                error_str = str(e).lower()
+                if "does not exist" in error_str or "undefinedtable" in error_str or "relation" in error_str:
+                    logger.warning(
+                        f"Risk management table does not exist. Migration may not have been run. "
+                        f"Error: {e}. Returning empty response."
+                    )
+                    risk_config = None
+                else:
+                    # Re-raise other exceptions
+                    raise
         else:
             # For "all accounts", try to get default config
-            risk_config = risk_service.get_risk_config(user_id, "default")
+            try:
+                risk_config = risk_service.get_risk_config(user_id, "default")
+            except Exception as e:
+                error_str = str(e).lower()
+                if "does not exist" in error_str or "undefinedtable" in error_str or "relation" in error_str:
+                    logger.warning(
+                        f"Risk management table does not exist. Migration may not have been run. "
+                        f"Error: {e}. Returning empty response."
+                    )
+                    risk_config = None
+                else:
+                    # Re-raise other exceptions
+                    raise
         
         if not risk_config:
             # Return empty response if no config

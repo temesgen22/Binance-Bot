@@ -225,26 +225,80 @@ pipeline {
                 fi
 
         echo "🔄 Running migrations..."
+        # Check current migration version before upgrade
+        echo "📋 Current migration version:"
+        docker exec binance-bot-api alembic current || echo "⚠️  Could not determine current version"
+        
         # Run migrations and capture output
         # Set ALEMBIC_MIGRATION env var to allow default JWT secret during migrations
-        # This includes new migrations for walk-forward analysis features (fixed_amount, optimization_results)
+        # This includes new migrations for risk management tables (risk_management_config, risk_metrics, circuit_breaker_events)
         MIGRATION_OUTPUT=$(docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head 2>&1) || MIGRATION_STATUS=$?
-                echo "$MIGRATION_OUTPUT"
-                
-                if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
-                  echo "✅ Migrations completed successfully"
-                  echo "   Includes: walk-forward analysis enhancements (fixed_amount, optimization_results)"
-                else
-                  # Check if error is due to existing tables
-                  if echo "$MIGRATION_OUTPUT" | grep -qE "(already exists|DuplicateTable)"; then
-                    echo "⚠️ Tables already exist, syncing Alembic version table..."
-                    docker exec binance-bot-api alembic stamp head
-                    echo "✅ Database stamped to current head"
-                  else
-                    echo "❌ Migration failed with unexpected error"
-                    exit 1
-                  fi
-                fi
+        echo "$MIGRATION_OUTPUT"
+        
+        if [ "${MIGRATION_STATUS:-0}" -eq 0 ]; then
+          echo "✅ Migrations completed successfully"
+          echo "   Includes: risk management tables (risk_management_config, risk_metrics, circuit_breaker_events)"
+          
+          # Verify critical tables were created
+          echo "🔍 Verifying risk management tables were created..."
+          RISK_TABLES=$(docker exec binance-bot-postgres psql -U postgres -d binance_bot -tAc "
+            SELECT COUNT(*) FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name IN ('risk_management_config', 'risk_metrics', 'circuit_breaker_events');
+          " 2>/dev/null || echo "0")
+          
+          if [ "$RISK_TABLES" = "3" ]; then
+            echo "✅ All risk management tables verified (3/3)"
+          elif [ "$RISK_TABLES" = "0" ]; then
+            echo "⚠️  Risk management tables not found. Checking migration status..."
+            docker exec binance-bot-api alembic current
+            echo "⚠️  Tables may need to be created manually or migration needs to be re-run"
+          else
+            echo "⚠️  Only $RISK_TABLES/3 risk management tables found. Some tables may be missing."
+          fi
+        else
+          # Check if error is due to existing tables
+          if echo "$MIGRATION_OUTPUT" | grep -qE "(already exists|DuplicateTable)"; then
+            echo "⚠️ Tables already exist, syncing Alembic version table..."
+            docker exec binance-bot-api alembic stamp head
+            echo "✅ Database stamped to current head"
+            
+            # Still verify tables exist
+            echo "🔍 Verifying risk management tables exist..."
+            RISK_TABLES=$(docker exec binance-bot-postgres psql -U postgres -d binance_bot -tAc "
+              SELECT COUNT(*) FROM information_schema.tables 
+              WHERE table_schema = 'public' 
+              AND table_name IN ('risk_management_config', 'risk_metrics', 'circuit_breaker_events');
+            " 2>/dev/null || echo "0")
+            
+            if [ "$RISK_TABLES" = "3" ]; then
+              echo "✅ All risk management tables verified (3/3)"
+            else
+              echo "⚠️  Risk management tables missing ($RISK_TABLES/3 found). Migration may need to be re-run."
+              echo "   Attempting to re-run migration..."
+              docker exec -e ALEMBIC_MIGRATION=true binance-bot-api alembic upgrade head || true
+            fi
+          else
+            echo "❌ Migration failed with unexpected error"
+            echo "📋 Migration output:"
+            echo "$MIGRATION_OUTPUT"
+            exit 1
+          fi
+        fi
+        
+        # Final verification: Check migration version after upgrade
+        echo "📋 Final migration version:"
+        docker exec binance-bot-api alembic current || echo "⚠️  Could not determine final version"
+        
+        # Additional verification: Check if alembic_version matches expected head
+        EXPECTED_HEAD="b08a3fc21d8f"
+        CURRENT_VERSION=$(docker exec binance-bot-postgres psql -U postgres -d binance_bot -tAc "SELECT version_num FROM alembic_version LIMIT 1;" 2>/dev/null || echo "")
+        if [ "$CURRENT_VERSION" = "$EXPECTED_HEAD" ]; then
+          echo "✅ Alembic version matches expected head: $EXPECTED_HEAD"
+        else
+          echo "⚠️  Alembic version mismatch. Current: $CURRENT_VERSION, Expected: $EXPECTED_HEAD"
+          echo "   This may indicate the migration didn't complete successfully"
+        fi
 
                 # Wait for FastAPI service to fully initialize (lifespan startup can take time)
                 echo "⏳ Waiting for FastAPI service to initialize (180 seconds)..."
