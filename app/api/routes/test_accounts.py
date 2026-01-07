@@ -1,6 +1,7 @@
 """API routes for testing Binance API key accounts."""
 
 from __future__ import annotations
+import traceback
 
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -17,6 +18,7 @@ from app.core.exceptions import (
 )
 from app.api.deps import get_client_manager, get_current_user, get_db_session_dependency, get_account_service
 from app.models.db_models import User
+from loguru import logger
 
 
 router = APIRouter(tags=["test-accounts"])
@@ -92,26 +94,95 @@ def _test_binance_account_credentials(
     Raises:
         Exception: Any exception from Binance API calls
     """
-    # Create client with provided credentials
-    client = BinanceClient(
-        api_key=api_key,
-        api_secret=api_secret,
-        testnet=testnet
-    )
+    api_env = "TESTNET" if testnet else "PRODUCTION"
+    api_key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
     
-    # Test connection and authentication
-    rest = client._ensure()
-    account_info = rest.futures_account()
+    logger.info(f"Testing Binance account credentials ({api_env}) - API Key: {api_key_preview}")
     
-    # Extract account balance (may not be available)
+    # Step 1: Create client with provided credentials
+    try:
+        logger.debug(f"Step 1: Creating BinanceClient for {api_env}")
+        client = BinanceClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            testnet=testnet
+        )
+        logger.debug(f"Step 1: ✅ BinanceClient created successfully")
+    except Exception as e:
+        # Extract error details from BinanceAPIException if available
+        error_code = getattr(e, 'code', None)
+        status_code = getattr(e, 'status_code', None)
+        error_type = type(e).__name__
+        
+        logger.error(
+            f"❌ Step 1 FAILED: Client creation failed for {api_env} account\n"
+            f"   Step: Creating BinanceClient (this includes connection test via ping())\n"
+            f"   Error Type: {error_type}\n"
+            f"   Error Message: {str(e)}\n"
+            f"   Error Code: {error_code}\n"
+            f"   HTTP Status: {status_code}\n"
+            f"   Traceback:\n{traceback.format_exc()}"
+        )
+        raise
+    
+    # Step 2: Test connection and authentication
+    try:
+        logger.debug(f"Step 2: Testing connection and authentication")
+        rest = client._ensure()
+        logger.debug(f"Step 2: ✅ Connection established, testing futures account access")
+        account_info = rest.futures_account()
+        logger.debug(f"Step 2: ✅ Futures account access successful")
+    except Exception as e:
+        error_details = {
+            "step": "connection_authentication",
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+            "testnet": testnet
+        }
+        # Extract detailed error information
+        error_code = None
+        status_code = None
+        if hasattr(e, 'error_code'):
+            error_code = e.error_code
+        if hasattr(e, 'status_code'):
+            status_code = e.status_code
+        
+        logger.error(
+            f"❌ Step 2 FAILED: Connection/Authentication failed for {api_env} account\n"
+            f"   Step: Testing futures account access\n"
+            f"   Error Type: {type(e).__name__}\n"
+            f"   Error Message: {str(e)}\n"
+            f"   Error Code: {error_code}\n"
+            f"   HTTP Status: {status_code}\n"
+            f"   Traceback: {traceback.format_exc()}"
+        )
+        raise
+    
+    # Step 3: Extract account balance (may not be available)
     account_balance = None
     try:
+        logger.debug(f"Step 3: Retrieving account balance")
         account_balance = client.futures_account_balance()
-    except Exception:
-        pass  # Balance might not be available
+        logger.debug(f"Step 3: ✅ Account balance retrieved: {account_balance}")
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Step 3: Balance retrieval failed (non-critical): {str(e)}\n"
+            f"   This is usually not a problem - balance may not be available for this account type"
+        )
+        # Balance might not be available - this is not critical
     
-    # Extract permissions from account info
-    permissions = _extract_permissions(account_info)
+    # Step 4: Extract permissions from account info
+    try:
+        logger.debug(f"Step 4: Extracting account permissions")
+        permissions = _extract_permissions(account_info)
+        logger.info(
+            f"✅ Account test SUCCESSFUL for {api_env}\n"
+            f"   Permissions: {', '.join(permissions)}\n"
+            f"   Balance: {account_balance if account_balance else 'N/A'}"
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Step 4: Permission extraction failed: {str(e)}, using defaults")
+        permissions = ["BASIC_ACCESS"]
     
     return {
         "account_info": account_info,
@@ -180,74 +251,277 @@ def _handle_test_account_error(
     """
     error_msg = str(exc)
     
+    # Extract detailed error information
+    error_code = None
+    status_code = None
+    error_type = type(exc).__name__
+    
+    if hasattr(exc, 'error_code'):
+        error_code = exc.error_code
+    if hasattr(exc, 'status_code'):
+        status_code = exc.status_code
+    
+    # Get full traceback for logging
+    full_traceback = traceback.format_exc()
+    
+    # Log detailed error information
+    api_env = "TESTNET" if testnet else "PRODUCTION"
+    account_display = account_name or "Unknown Account"
+    
+    logger.error(
+        f"❌ Account test FAILED for '{account_display}' ({api_env})\n"
+        f"   Error Type: {error_type}\n"
+        f"   Error Message: {error_msg}\n"
+        f"   Error Code: {error_code}\n"
+        f"   HTTP Status: {status_code}\n"
+        f"   Full Traceback:\n{full_traceback}"
+    )
+    
     # Handle specific exception types
     if isinstance(exc, BinanceNetworkError):
+        detailed_error = f"Network error: {error_msg}"
+        if status_code:
+            detailed_error += f" (HTTP {status_code})"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="❌ Connection Failed",
             authentication_status="❓ Not Tested",
-            error=f"Network error: {error_msg}",
-            details={"error_type": "NETWORK_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "NETWORK_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "testnet": testnet
+            }
+        )
+    
+    # Handle 502 Bad Gateway specifically (Binance server unavailable)
+    elif status_code == 502 or "502 Bad Gateway" in error_msg or "Bad Gateway" in error_msg:
+        api_env = "TESTNET" if testnet else "PRODUCTION"
+        detailed_error = (
+            f"Binance {api_env} API is temporarily unavailable (HTTP 502 Bad Gateway). "
+            f"This is NOT an authentication issue - Binance's servers are down or unreachable. "
+            f"Please try again in a few minutes."
+        )
+        
+        logger.warning(
+            f"⚠️ Binance {api_env} API returned 502 Bad Gateway - this indicates Binance server issues, "
+            f"not a problem with the API credentials. The account credentials may be valid, "
+            f"but we cannot verify them right now due to Binance infrastructure problems."
+        )
+        
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="❌ Binance Server Unavailable",
+            authentication_status="❓ Cannot Test (Server Down)",
+            error=detailed_error,
+            details={
+                "error_type": "BINANCE_SERVER_UNAVAILABLE",
+                "error_code": error_code,
+                "status_code": 502,
+                "full_error": error_msg,
+                "testnet": testnet,
+                "explanation": (
+                    "HTTP 502 Bad Gateway means Binance's API servers are temporarily unavailable. "
+                    "This is NOT a problem with your API credentials. Your credentials may be valid, "
+                    "but Binance's infrastructure is experiencing issues. Common causes:"
+                ),
+                "common_causes": [
+                    "Binance API servers are temporarily down or overloaded",
+                    "Binance load balancer/nginx is experiencing issues",
+                    "Network connectivity problems between your server and Binance",
+                    "Binance is performing maintenance",
+                    "Regional API endpoint issues"
+                ],
+                "solutions": [
+                    "Wait a few minutes and try again",
+                    "Check Binance status page or Twitter for service updates",
+                    "Try switching between testnet and production (if applicable)",
+                    "Check your internet connection and firewall settings",
+                    "If the problem persists, contact Binance support"
+                ]
+            }
         )
     
     elif isinstance(exc, BinanceAuthenticationError):
+        detailed_error = f"Authentication error: {error_msg}"
+        if status_code:
+            detailed_error += f" (HTTP {status_code})"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="✅ Connected",
             authentication_status="❌ Authentication Failed",
-            error=f"Authentication error: {error_msg}",
-            details={"error_type": "AUTHENTICATION_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "AUTHENTICATION_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "testnet": testnet,
+                "common_causes": [
+                    "Invalid API key or secret",
+                    "API key does not have futures trading permissions",
+                    "IP address not whitelisted (if IP restriction is enabled)",
+                    "API key is restricted to spot trading only"
+                ]
+            }
         )
     
     elif isinstance(exc, BinanceAPIError):
+        detailed_error = f"Binance API error: {error_msg}"
+        if status_code:
+            detailed_error += f" (HTTP {status_code})"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="✅ Connected",
             authentication_status="❌ API Error",
-            error=f"Binance API error: {error_msg}",
-            details={"error_type": "API_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "API_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "testnet": testnet
+            }
         )
     
     # Handle generic authentication errors (check for specific error messages)
     elif "Invalid API-key" in error_msg or "Signature" in error_msg:
+        detailed_error = f"Invalid API credentials: {error_msg}"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="✅ Connected",
             authentication_status="❌ Authentication Failed",
-            error=f"Invalid API credentials: {error_msg}",
-            details={"error_type": "AUTHENTICATION_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "AUTHENTICATION_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "testnet": testnet,
+                "common_causes": [
+                    "API key is incorrect or has been deleted",
+                    "API secret is incorrect",
+                    "API key signature is invalid"
+                ]
+            }
         )
     
     # Generic authentication error (other authentication failures)
     elif "authentication" in error_msg.lower() or "auth" in error_msg.lower():
+        detailed_error = f"Authentication error: {error_msg}"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="✅ Connected",
             authentication_status="❌ Authentication Failed",
-            error=f"Authentication error: {error_msg}",
-            details={"error_type": "AUTHENTICATION_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "AUTHENTICATION_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "testnet": testnet
+            }
+        )
+    
+    # Check for 502 Bad Gateway in generic errors (catch-all for BinanceAPIException with 502)
+    elif status_code == 502 or "502" in str(status_code) or "Bad Gateway" in error_msg:
+        api_env = "TESTNET" if testnet else "PRODUCTION"
+        detailed_error = (
+            f"Binance {api_env} API is temporarily unavailable (HTTP 502 Bad Gateway). "
+            f"This is NOT an authentication issue - Binance's servers are down or unreachable. "
+            f"Please try again in a few minutes."
+        )
+        
+        logger.warning(
+            f"⚠️ Binance {api_env} API returned 502 Bad Gateway - this indicates Binance server issues, "
+            f"not a problem with the API credentials."
+        )
+        
+        return TestAccountResponse(
+            success=False,
+            account_name=account_name,
+            testnet=testnet,
+            connection_status="❌ Binance Server Unavailable",
+            authentication_status="❓ Cannot Test (Server Down)",
+            error=detailed_error,
+            details={
+                "error_type": "BINANCE_SERVER_UNAVAILABLE",
+                "error_code": error_code,
+                "status_code": 502,
+                "full_error": error_msg,
+                "testnet": testnet,
+                "explanation": (
+                    "HTTP 502 Bad Gateway means Binance's API servers are temporarily unavailable. "
+                    "This is NOT a problem with your API credentials."
+                ),
+                "common_causes": [
+                    "Binance API servers are temporarily down or overloaded",
+                    "Binance load balancer/nginx is experiencing issues",
+                    "Network connectivity problems",
+                    "Binance is performing maintenance"
+                ],
+                "solutions": [
+                    "Wait a few minutes and try again",
+                    "Check Binance status page for service updates",
+                    "Try switching between testnet and production",
+                    "Check your internet connection"
+                ]
+            }
         )
     
     # Generic fallback for unexpected errors
     else:
+        detailed_error = f"Unexpected error: {error_msg}"
+        if error_code:
+            detailed_error += f" [Error Code: {error_code}]"
+        if status_code:
+            detailed_error += f" (HTTP {status_code})"
+        
         return TestAccountResponse(
             success=False,
             account_name=account_name,
             testnet=testnet,
             connection_status="❌ Unknown Error",
             authentication_status="❓ Not Tested",
-            error=f"Unexpected error: {error_msg}",
-            details={"error_type": "UNKNOWN_ERROR"}
+            error=detailed_error,
+            details={
+                "error_type": "UNKNOWN_ERROR",
+                "error_code": error_code,
+                "status_code": status_code,
+                "full_error": error_msg,
+                "error_class": error_type,
+                "testnet": testnet,
+                "traceback": full_traceback
+            }
         )
 
 

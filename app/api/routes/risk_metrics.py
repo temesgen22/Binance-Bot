@@ -626,51 +626,6 @@ async def get_portfolio_risk_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/status/strategy/{strategy_id}")
-async def get_strategy_risk_status(
-    strategy_id: str,
-    current_user = Depends(get_current_user),
-    db: Session = Depends(get_db_session_dependency),
-) -> dict:
-    """Get real-time risk status for a strategy.
-    
-    Args:
-        strategy_id: Strategy ID
-        user_id: Current user ID
-        db: Database session
-        
-    Returns:
-        Strategy risk status dictionary
-    """
-    try:
-        # Get strategy
-        user_id = current_user.id if hasattr(current_user, 'id') else current_user
-        strategy_service = StrategyService(db=db)
-        strategy = strategy_service.get_strategy(user_id, strategy_id)  # strategy_id is already a string
-        
-        if not strategy:
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        
-        # Get risk configuration
-        risk_service = RiskManagementService(db=db)
-        risk_config = risk_service.get_risk_config(user_id, strategy.account_id or "default")
-        
-        return {
-            "strategy_id": strategy_id,
-            "status": strategy.status,
-            "risk_config": {
-                "circuit_breaker_enabled": risk_config.circuit_breaker_enabled if risk_config else False,
-                "max_consecutive_losses": risk_config.max_consecutive_losses if risk_config else None,
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting strategy risk status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/reports/daily")
 async def get_daily_risk_report(
     request: Request,
@@ -1615,34 +1570,49 @@ async def get_strategy_risk_status(
         # Get account
         account_id = None
         if db_strategy.account_id:
-            db_account = db_service.get_account_by_uuid(db_strategy.account_id)
-            if db_account:
-                account_id = db_account.account_id
+            try:
+                db_account = db_service.get_account_by_uuid(db_strategy.account_id)
+                if db_account:
+                    account_id = db_account.account_id
+            except Exception as e:
+                logger.warning(f"Error getting account for strategy {strategy_id}: {e}")
+                account_id = None
         
         # Get recent enforcement events for this strategy
-        events, _ = db_service.get_enforcement_events(
-            user_id=user_id,
-            strategy_id=db_strategy.id,
-            limit=1,
-            offset=0
-        )
-        
         last_event = None
-        if events:
-            event = events[0]
-            last_event = {
-                "event_type": event.event_type,
-                "message": event.message,
-                "created_at": event.created_at.isoformat()
-            }
+        try:
+            events, _ = db_service.get_enforcement_events(
+                user_id=user_id,
+                strategy_id=db_strategy.id,
+                limit=1,
+                offset=0
+            )
+            
+            if events:
+                event = events[0]
+                last_event = {
+                    "event_type": event.event_type,
+                    "message": event.message,
+                    "created_at": event.created_at.isoformat()
+                }
+        except Exception as e:
+            logger.warning(f"Error getting enforcement events for strategy {strategy_id}: {e}")
+            last_event = None
         
         # Check if strategy is paused by risk (circuit breaker active)
-        is_paused_by_risk = db_strategy.status == "paused_by_risk"
+        # Handle status as string or enum
+        strategy_status = str(db_strategy.status) if hasattr(db_strategy, 'status') and db_strategy.status else None
+        is_paused_by_risk = strategy_status == "paused_by_risk"
         circuit_breaker_active = is_paused_by_risk
         
         # Get risk config to check limits
-        risk_service = RiskManagementService(db=db, redis_storage=None)
-        risk_config = risk_service.get_risk_config(user_id, account_id or "default")
+        risk_config = None
+        try:
+            risk_service = RiskManagementService(db=db, redis_storage=None)
+            risk_config = risk_service.get_risk_config(user_id, account_id or "default")
+        except Exception as e:
+            logger.warning(f"Error getting risk config for strategy {strategy_id}: {e}")
+            risk_config = None
         
         # Build risk checks and determine if strategy can trade
         # Default: strategy can trade unless explicitly blocked
@@ -1667,19 +1637,32 @@ async def get_strategy_risk_status(
             today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             daily_loss_usdt = 0.0  # Default to 0 (no loss) if we can't get trades
             try:
-                today_trades = trade_service.get_trades_by_account(user_id, account_id or "default")
-                today_trades = [t for t in today_trades if t.timestamp and t.timestamp >= today_start]
+                # Only get trades if we have a valid account_id
+                today_trades = []
+                if account_id:
+                    try:
+                        today_trades = trade_service.get_trades_by_account(user_id, account_id) or []
+                    except Exception as e:
+                        logger.warning(f"Error getting trades by account for strategy {strategy_id}: {e}")
+                        today_trades = []
+                else:
+                    # If no account_id, get trades for this specific strategy instead
+                    try:
+                        today_trades = trade_service.get_strategy_trades(user_id, db_strategy.id, limit=10000) or []
+                    except Exception as e:
+                        logger.warning(f"Error getting strategy trades for strategy {strategy_id}: {e}")
+                        today_trades = []
+                today_trades = [t for t in today_trades if t and t.timestamp and t.timestamp >= today_start] if today_trades else []
                 if today_trades:
                     # CRITICAL: Match trades to completed positions (same logic as reports page)
                     from app.api.routes.reports import _match_trades_to_completed_positions
                     from app.models.order import OrderResponse
                     
-                    # Convert database trades to OrderResponse format using helper
-                    order_responses = _convert_db_trades_to_order_responses(today_trades, trade_service)
-                    
                     # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
                     trades_by_strategy_uuid = {}
                     for db_trade in today_trades:
+                        if not db_trade:
+                            continue
                         strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
                         if not strategy_uuid:
                             continue
@@ -1692,9 +1675,16 @@ async def get_strategy_risk_status(
                     # Convert and group OrderResponse objects by strategy
                     trades_by_strategy = {}
                     for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
-                        # Convert database trades to OrderResponse format using helper
-                        order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
-                        trades_by_strategy[strategy_uuid_str] = order_responses
+                        if not db_trades:
+                            continue
+                        try:
+                            # Convert database trades to OrderResponse format using helper
+                            order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
+                            if order_responses:
+                                trades_by_strategy[strategy_uuid_str] = order_responses
+                        except Exception as e:
+                            logger.warning(f"Error converting trades to OrderResponse for strategy {strategy_uuid_str}: {e}")
+                            continue
                     
                     # Match trades for each strategy
                     all_completed_trades = []
@@ -1962,6 +1952,8 @@ async def get_strategy_risk_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting strategy risk status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Error getting strategy risk status for {strategy_id}: {e}\n{error_traceback}")
+        raise HTTPException(status_code=500, detail=f"Error getting strategy risk status: {str(e)}")
 

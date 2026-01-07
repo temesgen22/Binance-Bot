@@ -121,19 +121,38 @@ def create_app() -> FastAPI:
                 "Please configure a valid account in the database or set BINANCE_API_KEY and BINANCE_API_SECRET in .env file."
             )
         # Fallback: create default client if no accounts configured
-        default_client = BinanceClient(
-            api_key=settings.binance_api_key,
-            api_secret=settings.binance_api_secret,
-            testnet=settings.binance_testnet,
-        )
-        # Add to manager
-        client_manager._clients["default"] = default_client
+        # Wrap in try-except to handle temporary Binance API unavailability
+        try:
+            default_client = BinanceClient(
+                api_key=settings.binance_api_key,
+                api_secret=settings.binance_api_secret,
+                testnet=settings.binance_testnet,
+            )
+            # Add to manager
+            client_manager._clients["default"] = default_client
+        except Exception as e:
+            logger.error(
+                f"⚠️ Failed to initialize default Binance client during startup: {e}\n"
+                f"   This may be due to temporary Binance API unavailability (502 Bad Gateway).\n"
+                f"   The application will continue to start, but Binance operations may fail until the API is available.\n"
+                f"   Clients will be created on-demand when accounts are accessed."
+            )
+            # Set to None - clients will be created on-demand when needed
+            default_client = None
     
     # Create default risk manager and executor for backward compatibility
     # Note: OrderExecutor doesn't have trade_service/user_id in main.py (single-user mode)
     # This is fine - idempotency will work with in-memory cache only
-    risk = RiskManager(client=default_client)
-    executor = OrderExecutor(client=default_client, trade_service=None, user_id=None)
+    # If default_client is None (e.g., Binance API unavailable), create with None
+    # They will be recreated when clients become available
+    risk = RiskManager(client=default_client) if default_client else None
+    executor = OrderExecutor(client=default_client, trade_service=None, user_id=None) if default_client else None
+    
+    if not default_client:
+        logger.warning(
+            "⚠️ Default Binance client not available. Risk manager and order executor not initialized.\n"
+            "   They will be created on-demand when accounts are accessed."
+        )
     
     # Initialize Redis storage if enabled
     redis_storage = None
