@@ -36,14 +36,9 @@ def db_session():
     if not os.getenv("DATABASE_URL"):
         pytest.skip("DATABASE_URL not set - skipping database test")
     
-    # Get a database session
-    session_gen = get_db_session()
-    session = next(session_gen)
-    
-    try:
+    # Get a database session using context manager
+    with get_db_session() as session:
         yield session
-    finally:
-        session.close()
 
 
 @pytest.fixture
@@ -185,9 +180,11 @@ def mock_walk_forward_request():
 
 def test_walk_forward_analysis_model_creation(db_session: Session):
     """Test that WalkForwardAnalysis model can be created."""
+    from uuid import uuid4
+    unique_email = f"test_{uuid4().hex[:8]}@example.com"
     user = User(
-        username="testuser",
-        email="test@example.com",
+        username=f"testuser_{uuid4().hex[:8]}",
+        email=unique_email,
         password_hash="hashed_password",
         is_active=True
     )
@@ -228,9 +225,11 @@ def test_walk_forward_analysis_model_creation(db_session: Session):
 
 def test_save_walk_forward_analysis_sync(db_session: Session, mock_walk_forward_result, mock_walk_forward_request):
     """Test saving walk-forward analysis (sync)."""
+    from uuid import uuid4
+    unique_email = f"test_{uuid4().hex[:8]}@example.com"
     user = User(
-        username="testuser",
-        email="test@example.com",
+        username=f"testuser_{uuid4().hex[:8]}",
+        email=unique_email,
         password_hash="hashed_password",
         is_active=True
     )
@@ -280,16 +279,18 @@ def test_save_walk_forward_analysis_sync(db_session: Session, mock_walk_forward_
 
 def test_get_walk_forward_analysis_with_ownership(db_session: Session):
     """Test that get_walk_forward_analysis enforces ownership."""
+    from uuid import uuid4
+    unique_id = uuid4().hex[:8]
     # Create two users
     user1 = User(
-        username="user1",
-        email="user1@example.com",
+        username=f"user1_{unique_id}",
+        email=f"user1_{unique_id}@example.com",
         password_hash="hash1",
         is_active=True
     )
     user2 = User(
-        username="user2",
-        email="user2@example.com",
+        username=f"user2_{unique_id}",
+        email=f"user2_{unique_id}@example.com",
         password_hash="hash2",
         is_active=True
     )
@@ -324,28 +325,33 @@ def test_get_walk_forward_analysis_with_ownership(db_session: Session):
     
     db_service = DatabaseService(db_session)
     
-    # User1 should be able to get their analysis
-    result1 = db_service.get_walk_forward_analysis(analysis.id, user1.id)
+    # User1 should be able to get their analysis (sync query since db_session is Session, not AsyncSession)
+    # The method is async but when _is_async=False, it uses sync query internally
+    # However, since it's defined as async, we need to handle it properly
+    import asyncio
+    result1 = asyncio.run(db_service.get_walk_forward_analysis(analysis.id, user1.id))
     assert result1 is not None
     assert result1.id == analysis.id
     
     # User2 should NOT be able to get user1's analysis
-    result2 = db_service.get_walk_forward_analysis(analysis.id, user2.id)
+    result2 = asyncio.run(db_service.get_walk_forward_analysis(analysis.id, user2.id))
     assert result2 is None  # Should return None due to ownership check
 
 
 def test_list_walk_forward_analyses_user_isolation(db_session: Session):
     """Test that list_walk_forward_analyses only returns current user's analyses."""
+    from uuid import uuid4
+    unique_id = uuid4().hex[:8]
     # Create two users
     user1 = User(
-        username="user1",
-        email="user1@example.com",
+        username=f"user1_{unique_id}",
+        email=f"user1_{unique_id}@example.com",
         password_hash="hash1",
         is_active=True
     )
     user2 = User(
-        username="user2",
-        email="user2@example.com",
+        username=f"user2_{unique_id}",
+        email=f"user2_{unique_id}@example.com",
         password_hash="hash2",
         is_active=True
     )
@@ -408,7 +414,11 @@ def test_list_walk_forward_analyses_user_isolation(db_session: Session):
     analyses1, total1 = db_service._sync_list_walk_forward_analyses(
         user_id=user1.id,
         limit=50,
-        offset=0
+        offset=0,
+        symbol=None,
+        strategy_type=None,
+        start_date=None,
+        end_date=None
     )
     assert total1 == 1
     assert len(analyses1) == 1
@@ -419,7 +429,11 @@ def test_list_walk_forward_analyses_user_isolation(db_session: Session):
     analyses2, total2 = db_service._sync_list_walk_forward_analyses(
         user_id=user2.id,
         limit=50,
-        offset=0
+        offset=0,
+        symbol=None,
+        strategy_type=None,
+        start_date=None,
+        end_date=None
     )
     assert total2 == 1
     assert len(analyses2) == 1
@@ -429,16 +443,18 @@ def test_list_walk_forward_analyses_user_isolation(db_session: Session):
 
 def test_delete_walk_forward_analysis_with_ownership(db_session: Session):
     """Test that delete_walk_forward_analysis enforces ownership."""
+    from uuid import uuid4
+    unique_id = uuid4().hex[:8]
     # Create two users
     user1 = User(
-        username="user1",
-        email="user1@example.com",
+        username=f"user1_{unique_id}",
+        email=f"user1_{unique_id}@example.com",
         password_hash="hash1",
         is_active=True
     )
     user2 = User(
-        username="user2",
-        email="user2@example.com",
+        username=f"user2_{unique_id}",
+        email=f"user2_{unique_id}@example.com",
         password_hash="hash2",
         is_active=True
     )
@@ -475,7 +491,8 @@ def test_delete_walk_forward_analysis_with_ownership(db_session: Session):
     db_service = DatabaseService(db_session)
     
     # User2 should NOT be able to delete user1's analysis
-    success = db_service.delete_walk_forward_analysis(analysis_id, user2.id)
+    import asyncio
+    success = asyncio.run(db_service.delete_walk_forward_analysis(analysis_id, user2.id))
     assert success is False
     
     # Verify analysis still exists
@@ -485,7 +502,7 @@ def test_delete_walk_forward_analysis_with_ownership(db_session: Session):
     assert analysis_still_exists is not None
     
     # User1 should be able to delete their own analysis
-    success = db_service.delete_walk_forward_analysis(analysis_id, user1.id)
+    success = asyncio.run(db_service.delete_walk_forward_analysis(analysis_id, user1.id))
     assert success is True
     
     # Verify analysis was deleted
@@ -497,9 +514,11 @@ def test_delete_walk_forward_analysis_with_ownership(db_session: Session):
 
 def test_list_walk_forward_analyses_with_filters(db_session: Session):
     """Test that list_walk_forward_analyses filters work correctly."""
+    from uuid import uuid4
+    unique_email = f"test_{uuid4().hex[:8]}@example.com"
     user = User(
-        username="testuser",
-        email="test@example.com",
+        username=f"testuser_{uuid4().hex[:8]}",
+        email=unique_email,
         password_hash="hashed_password",
         is_active=True
     )
@@ -563,7 +582,10 @@ def test_list_walk_forward_analyses_with_filters(db_session: Session):
         user_id=user.id,
         limit=50,
         offset=0,
-        symbol="BTCUSDT"
+        symbol="BTCUSDT",
+        strategy_type=None,
+        start_date=None,
+        end_date=None
     )
     assert total == 1
     assert len(analyses) == 1
@@ -573,7 +595,11 @@ def test_list_walk_forward_analyses_with_filters(db_session: Session):
     analyses, total = db_service._sync_list_walk_forward_analyses(
         user_id=user.id,
         limit=50,
-        offset=0
+        offset=0,
+        symbol=None,
+        strategy_type=None,
+        start_date=None,
+        end_date=None
     )
     assert total == 2
     assert len(analyses) == 2
@@ -581,15 +607,17 @@ def test_list_walk_forward_analyses_with_filters(db_session: Session):
 
 def test_get_walk_forward_equity_curve_with_ownership(db_session: Session):
     """Test that get_walk_forward_equity_curve enforces ownership."""
+    from uuid import uuid4
+    unique_id = uuid4().hex[:8]
     user1 = User(
-        username="user1",
-        email="user1@example.com",
+        username=f"user1_{unique_id}",
+        email=f"user1_{unique_id}@example.com",
         password_hash="hash1",
         is_active=True
     )
     user2 = User(
-        username="user2",
-        email="user2@example.com",
+        username=f"user2_{unique_id}",
+        email=f"user2_{unique_id}@example.com",
         password_hash="hash2",
         is_active=True
     )
@@ -639,10 +667,11 @@ def test_get_walk_forward_equity_curve_with_ownership(db_session: Session):
     db_service = DatabaseService(db_session)
     
     # User1 should be able to get equity curve
-    equity_curve1 = db_service.get_walk_forward_equity_curve(analysis.id, user1.id)
+    import asyncio
+    equity_curve1 = asyncio.run(db_service.get_walk_forward_equity_curve(analysis.id, user1.id))
     assert len(equity_curve1) == 2
     
     # User2 should NOT be able to get equity curve (returns empty list)
-    equity_curve2 = db_service.get_walk_forward_equity_curve(analysis.id, user2.id)
+    equity_curve2 = asyncio.run(db_service.get_walk_forward_equity_curve(analysis.id, user2.id))
     assert len(equity_curve2) == 0  # Returns empty list due to ownership check
 

@@ -484,8 +484,180 @@ class StrategyPersistence:
                     f"[{summary.id}] Position state reconciled: "
                     f"Database and memory updated to match Binance"
                 )
+            
+            # Also reconcile order statuses for partially filled orders
+            await self.reconcile_order_statuses(summary, account_client)
         except Exception as exc:
             logger.warning(f"Failed to reconcile position state for {summary.id}: {exc}")
+    
+    async def reconcile_order_statuses(
+        self,
+        summary: StrategySummary,
+        account_client: "BinanceClient"
+    ) -> None:
+        """Reconcile order statuses for partially filled orders.
+        
+        Checks Binance for order status updates and updates database records.
+        This detects manually closed/canceled orders.
+        
+        Args:
+            summary: Strategy summary to reconcile orders for
+            account_client: Binance client for the account
+        """
+        if not self.strategy_service or not self.user_id:
+            logger.debug(f"Cannot reconcile order statuses: strategy_service or user_id not available")
+            return
+        
+        try:
+            from app.models.db_models import Trade as DBTrade
+            
+            db_service = self.strategy_service.db_service
+            
+            # Get all PARTIALLY_FILLED orders for this strategy that have remaining quantity
+            partial_orders = db_service.db.query(DBTrade).filter(
+                DBTrade.strategy_id == summary.id,
+                DBTrade.status == "PARTIALLY_FILLED",
+                DBTrade.remaining_qty > 0
+            ).limit(50).all()  # Limit to 50 orders per reconciliation to avoid timeout
+            
+            if not partial_orders:
+                return  # No partially filled orders to reconcile
+            
+            logger.debug(
+                f"[{summary.id}] Reconciling {len(partial_orders)} partially filled orders..."
+            )
+            
+            updated_count = 0
+            error_count = 0
+            
+            for db_order in partial_orders:
+                try:
+                    # Query Binance for current order status (non-blocking)
+                    binance_status = await asyncio.to_thread(
+                        account_client.get_order_status,
+                        db_order.symbol,
+                        db_order.order_id
+                    )
+                    
+                    binance_status_str = binance_status.get("status", "UNKNOWN")
+                    binance_executed_qty_str = binance_status.get("executedQty", "0")
+                    binance_orig_qty_str = binance_status.get("origQty")
+                    
+                    # Parse quantities
+                    try:
+                        binance_executed_qty = float(binance_executed_qty_str) if binance_executed_qty_str else 0.0
+                    except (ValueError, TypeError):
+                        binance_executed_qty = 0.0
+                    
+                    binance_orig_qty = None
+                    if binance_orig_qty_str:
+                        try:
+                            binance_orig_qty = float(binance_orig_qty_str)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Check if status or executed quantity changed
+                    status_changed = binance_status_str != db_order.status
+                    qty_changed = abs(float(db_order.executed_qty) - binance_executed_qty) > 0.0001
+                    
+                    if status_changed or qty_changed:
+                        logger.info(
+                            f"[{summary.id}] Order {db_order.order_id} status changed: "
+                            f"{db_order.status} -> {binance_status_str}, "
+                            f"executed_qty: {db_order.executed_qty} -> {binance_executed_qty}"
+                        )
+                        
+                        # Update order record
+                        db_order.status = binance_status_str
+                        db_order.executed_qty = binance_executed_qty
+                        db_order.update_time = datetime.now(timezone.utc)
+                        
+                        # Update orig_qty if provided (may not be in first response)
+                        if binance_orig_qty is not None:
+                            db_order.orig_qty = binance_orig_qty
+                        
+                        # Recalculate remaining_qty
+                        if db_order.orig_qty is not None:
+                            db_order.remaining_qty = max(
+                                0.0,
+                                float(db_order.orig_qty) - binance_executed_qty
+                            )
+                        else:
+                            db_order.remaining_qty = None
+                        
+                        # Update other fields if available
+                        if binance_status.get("avgPrice"):
+                            try:
+                                avg_price = float(binance_status["avgPrice"])
+                                if avg_price > 0:
+                                    db_order.avg_price = avg_price
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Update commission if available
+                        if binance_status.get("commission"):
+                            try:
+                                commission = float(binance_status["commission"])
+                                db_order.commission = commission
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        if binance_status.get("commissionAsset"):
+                            db_order.commission_asset = binance_status["commissionAsset"]
+                        
+                        # Commit the update
+                        try:
+                            db_service.db.commit()
+                            updated_count += 1
+                            
+                            logger.info(
+                                f"[{summary.id}] Updated order {db_order.order_id}: "
+                                f"status={binance_status_str}, "
+                                f"executed_qty={binance_executed_qty}, "
+                                f"remaining_qty={db_order.remaining_qty}"
+                            )
+                        except Exception as commit_exc:
+                            db_service.db.rollback()
+                            logger.error(
+                                f"[{summary.id}] Failed to commit order {db_order.order_id} update: {commit_exc}"
+                            )
+                            error_count += 1
+                    else:
+                        # Status unchanged, but log at debug level for monitoring
+                        logger.debug(
+                            f"[{summary.id}] Order {db_order.order_id} status unchanged: "
+                            f"{binance_status_str} (executed_qty={binance_executed_qty})"
+                        )
+                        
+                except Exception as order_exc:
+                    error_count += 1
+                    logger.warning(
+                        f"[{summary.id}] Failed to reconcile order {db_order.order_id}: {order_exc}",
+                        exc_info=False  # Don't log full traceback for individual order failures
+                    )
+                    continue
+            
+            if updated_count > 0:
+                logger.info(
+                    f"[{summary.id}] Order status reconciliation completed: "
+                    f"{updated_count} orders updated, {error_count} errors"
+                )
+            elif error_count > 0:
+                logger.warning(
+                    f"[{summary.id}] Order status reconciliation completed with errors: "
+                    f"{error_count} orders failed to reconcile"
+                )
+            else:
+                logger.debug(
+                    f"[{summary.id}] Order status reconciliation completed: "
+                    f"All {len(partial_orders)} orders are up to date"
+                )
+                
+        except Exception as exc:
+            logger.warning(
+                f"[{summary.id}] Failed to reconcile order statuses: {exc}",
+                exc_info=True
+            )
     
     async def check_state_consistency(self, strategy_id: str) -> dict:
         """Check consistency between database, Redis, and memory state.

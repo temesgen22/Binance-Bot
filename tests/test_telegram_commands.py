@@ -656,7 +656,8 @@ class TestHandlerLifecycle:
                 pass
     
     @pytest.mark.slow
-    def test_start_handler_already_running(self, command_handler):
+    @pytest.mark.asyncio
+    async def test_start_handler_already_running(self, command_handler):
         """Test starting handler when already running."""
         command_handler.start()
         assert command_handler._running is True
@@ -664,15 +665,31 @@ class TestHandlerLifecycle:
         # Should not raise error
         command_handler.start()
         assert command_handler._running is True
+        
+        # Clean up
+        command_handler.stop()
+        if command_handler._task and not command_handler._task.done():
+            try:
+                await command_handler._task
+            except asyncio.CancelledError:
+                pass
     
     @pytest.mark.slow
-    def test_stop_handler(self, command_handler):
+    @pytest.mark.asyncio
+    async def test_stop_handler(self, command_handler):
         """Test stopping the handler."""
         command_handler.start()
         assert command_handler._running is True
         
         command_handler.stop()
         assert command_handler._running is False
+        
+        # Clean up
+        if command_handler._task and not command_handler._task.done():
+            try:
+                await command_handler._task
+            except asyncio.CancelledError:
+                pass
     
     @pytest.mark.slow
     def test_stop_handler_not_running(self, command_handler):

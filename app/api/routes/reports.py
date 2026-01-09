@@ -116,6 +116,92 @@ def _fetch_klines_for_strategy(
         return (strategy.id, None)
 
 
+def _get_completed_trades_from_database(
+    db_service: DatabaseService,
+    user_id: UUID,
+    strategy_uuid: UUID,
+    strategy_id: str,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None,
+) -> List[TradeReport]:
+    """Get completed trades from CompletedTrade table (pre-computed, ON-WRITE).
+    
+    This is much faster than on-demand matching because trades are pre-computed
+    when positions close.
+    
+    Args:
+        db_service: Database service
+        user_id: User UUID
+        strategy_uuid: Strategy UUID (from database)
+        strategy_id: Strategy ID string (for TradeReport)
+        start_datetime: Optional start date filter
+        end_datetime: Optional end date filter
+    
+    Returns:
+        List of TradeReport objects
+    """
+    try:
+        from app.models.db_models import CompletedTrade
+        
+        # Build query
+        query = db_service.db.query(CompletedTrade).filter(
+            CompletedTrade.user_id == user_id,
+            CompletedTrade.strategy_id == strategy_uuid,
+        )
+        
+        # Apply date filters
+        if start_datetime:
+            query = query.filter(CompletedTrade.exit_time >= start_datetime)
+        if end_datetime:
+            query = query.filter(CompletedTrade.exit_time <= end_datetime)
+        
+        # Order by exit time (most recent first)
+        query = query.order_by(CompletedTrade.exit_time.desc())
+        
+        # Execute query
+        completed_trades = query.all()
+        
+        # Convert to TradeReport
+        trade_reports = []
+        for ct in completed_trades:
+            trade_report = TradeReport(
+                trade_id=str(ct.entry_order_id),  # Use entry_order_id as trade_id
+                strategy_id=strategy_id,
+                symbol=ct.symbol,
+                side=ct.side,  # "LONG" or "SHORT"
+                entry_time=ct.entry_time,
+                entry_price=float(ct.entry_price),
+                exit_time=ct.exit_time,
+                exit_price=float(ct.exit_price),
+                quantity=float(ct.quantity),
+                leverage=ct.leverage or 1,
+                fee_paid=float(ct.fee_paid),
+                funding_fee=float(ct.funding_fee),
+                pnl_usd=float(ct.pnl_usd),
+                pnl_pct=float(ct.pnl_pct),
+                exit_reason=ct.exit_reason,
+                initial_margin=float(ct.initial_margin) if ct.initial_margin else None,
+                margin_type=ct.margin_type,
+                notional_value=float(ct.notional_value) if ct.notional_value else None,
+                entry_order_id=ct.entry_order_id,
+                exit_order_id=ct.exit_order_id,
+            )
+            trade_reports.append(trade_report)
+        
+        logger.info(
+            f"_get_completed_trades_from_database: Found {len(trade_reports)} completed trades "
+            f"for strategy {strategy_id} (UUID {strategy_uuid})"
+        )
+        return trade_reports
+        
+    except Exception as e:
+        logger.warning(
+            f"Failed to get completed trades from database for strategy {strategy_id}: {e}",
+            exc_info=True
+        )
+        return []
+
+
 def _match_trades_to_completed_positions(
     trades: List[OrderResponse],
     strategy_id: str,
@@ -587,37 +673,93 @@ def get_trading_report(
         
         for strategy in filtered_strategies:
             try:
-                # Get trades for this strategy (from batch-loaded data)
-                trades = trades_by_strategy.get(strategy.id, [])
-                logger.info(f"Reports: Strategy {strategy.id} ({strategy.name}) has {len(trades)} raw trades from database")
+                # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+                # This is much faster than on-demand matching
+                completed_trades_list: List[TradeReport] = []
                 
-                # Match trades to form completed positions
-                completed_trades_list = _match_trades_to_completed_positions(
-                    trades,
-                    strategy.id,
-                    strategy.name,
-                    strategy.symbol,
-                    strategy.leverage,
-                )
-                logger.info(f"Reports: Strategy {strategy.id} has {len(completed_trades_list)} completed trades after matching")
+                if current_user and db_service:
+                    try:
+                        # Get strategy UUID from database
+                        from app.services.strategy_service import StrategyService
+                        settings = get_settings()
+                        redis_storage = None
+                        if settings.redis_enabled:
+                            redis_storage = RedisStorage(
+                                redis_url=settings.redis_url,
+                                enabled=settings.redis_enabled
+                            )
+                        strategy_service = StrategyService(db_service.db, redis_storage)
+                        db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy.id)
+                        
+                        if db_strategy:
+                            # Query from CompletedTrade table (pre-computed)
+                            completed_trades_list = _get_completed_trades_from_database(
+                                db_service=db_service,
+                                user_id=current_user.id,
+                                strategy_uuid=db_strategy.id,
+                                strategy_id=strategy.id,
+                                start_datetime=start_datetime,
+                                end_datetime=end_datetime,
+                            )
+                            logger.info(
+                                f"Reports: Strategy {strategy.id} has {len(completed_trades_list)} "
+                                f"completed trades from CompletedTrade table (pre-computed)"
+                            )
+                    except Exception as db_exc:
+                        logger.warning(
+                            f"Reports: Failed to get completed trades from database for strategy {strategy.id}: {db_exc}. "
+                            f"Falling back to on-demand matching."
+                        )
                 
-                # Apply date filters to trades
-                if start_datetime or end_datetime:
-                    filtered_trades = []
-                    for trade in completed_trades_list:
-                        trade_time = trade.entry_time or trade.exit_time
-                        if trade_time:
-                            # Ensure trade_time is timezone-aware for comparison
-                            if trade_time.tzinfo is None:
-                                trade_time = trade_time.replace(tzinfo=timezone.utc)
-                            
-                            if start_datetime and trade_time < start_datetime:
-                                continue
-                            if end_datetime and trade_time > end_datetime:
-                                continue
-                        filtered_trades.append(trade)
-                    logger.info(f"Reports: Strategy {strategy.id} has {len(filtered_trades)} trades after date filtering (from {len(completed_trades_list)} completed trades)")
-                    completed_trades_list = filtered_trades
+                # ✅ FALLBACK: If no completed trades from database, use on-demand matching
+                # This handles cases where:
+                # - CompletedTrade table is empty (migration not run, or old data)
+                # - Some trades haven't been matched yet (edge cases)
+                if not completed_trades_list:
+                    # Get trades for this strategy (from batch-loaded data)
+                    trades = trades_by_strategy.get(strategy.id, [])
+                    logger.info(
+                        f"Reports: Strategy {strategy.id} ({strategy.name}) has {len(trades)} raw trades. "
+                        f"Using on-demand matching (fallback)."
+                    )
+                    
+                    # Match trades to form completed positions (on-demand)
+                    completed_trades_list = _match_trades_to_completed_positions(
+                        trades,
+                        strategy.id,
+                        strategy.name,
+                        strategy.symbol,
+                        strategy.leverage,
+                    )
+                    logger.info(
+                        f"Reports: Strategy {strategy.id} has {len(completed_trades_list)} "
+                        f"completed trades after on-demand matching"
+                    )
+                
+                # Note: Date filtering is already applied in _get_completed_trades_from_database
+                # For on-demand matching, we apply date filters here
+                if not completed_trades_list or (start_datetime or end_datetime):
+                    # Only apply date filters if we used on-demand matching (fallback)
+                    # Database query already filters by date
+                    if start_datetime or end_datetime:
+                        filtered_trades = []
+                        for trade in completed_trades_list:
+                            trade_time = trade.entry_time or trade.exit_time
+                            if trade_time:
+                                # Ensure trade_time is timezone-aware for comparison
+                                if trade_time.tzinfo is None:
+                                    trade_time = trade_time.replace(tzinfo=timezone.utc)
+                                
+                                if start_datetime and trade_time < start_datetime:
+                                    continue
+                                if end_datetime and trade_time > end_datetime:
+                                    continue
+                            filtered_trades.append(trade)
+                        logger.info(
+                            f"Reports: Strategy {strategy.id} has {len(filtered_trades)} trades "
+                            f"after date filtering (from {len(completed_trades_list)} completed trades)"
+                        )
+                        completed_trades_list = filtered_trades
                 
                 # Fetch funding fees for this strategy if client is available
                 funding_fees_by_trade: Dict[str, float] = {}  # Map trade_id to total funding fee

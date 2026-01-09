@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean, BigInteger, CheckConstraint, Column, DateTime, Enum, ForeignKey,
-    Integer, Numeric, String, Text, JSON, Index, func, Table
+    Integer, Numeric, String, Text, JSON, Index, func, Table, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy.orm import relationship, declarative_base
@@ -296,6 +296,8 @@ class Trade(Base):
     price = Column(Numeric(20, 8), nullable=False)
     avg_price = Column(Numeric(20, 8))
     executed_qty = Column(Numeric(20, 8), nullable=False)
+    orig_qty = Column(Numeric(20, 8))  # Original order quantity from Binance
+    remaining_qty = Column(Numeric(20, 8))  # Calculated: orig_qty - executed_qty
 
     # Financial Details
     notional_value = Column(Numeric(20, 8))
@@ -330,6 +332,11 @@ class Trade(Base):
     strategy = relationship("Strategy", back_populates="trades")
     entry_pairs = relationship("TradePair", foreign_keys="TradePair.entry_trade_id", back_populates="entry_trade")
     exit_pairs = relationship("TradePair", foreign_keys="TradePair.exit_trade_id", back_populates="exit_trade")
+    completed_trade_orders = relationship(
+        "CompletedTradeOrder",
+        foreign_keys="CompletedTradeOrder.trade_id",
+        back_populates="trade"
+    )
 
     __table_args__ = (
         CheckConstraint("side IN ('BUY', 'SELL')", name="trades_side_check"),
@@ -981,5 +988,123 @@ class CircuitBreakerEvent(Base):
     __table_args__ = (
         Index("idx_circuit_breaker_account_status", "account_id", "status"),
         Index("idx_circuit_breaker_strategy_status", "strategy_id", "status"),
+    )
+
+
+# ============================================
+# COMPLETED TRADES (Pre-computed matched trades)
+# ============================================
+
+class CompletedTrade(Base):
+    """Pre-computed matched trades - represents a completed position.
+    
+    This is the "strong base" - all orders reference this via foreign keys.
+    Partial fills are handled by the trades table (orig_qty, remaining_qty).
+    """
+    __tablename__ = "completed_trades"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(PGUUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(PGUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)  # Denormalized for performance
+    
+    # ✅ CRITICAL: Idempotency key to prevent duplicate completed trades
+    # Uses UUIDv5 (deterministic) generated from entry_trade_id + exit_trade_id + quantity + timestamp
+    close_event_id = Column(PGUUID(as_uuid=True), nullable=False, index=True, unique=True)  # Idempotency key (UUIDv5)
+    
+    # Denormalized for quick queries (first entry, last exit)
+    # ⚠️ NOTE: order_id is account-scoped (Binance), not global
+    entry_order_id = Column(BigInteger, nullable=False, index=True)  # First entry order (account-scoped)
+    exit_order_id = Column(BigInteger, nullable=False, index=True)  # Last exit order (account-scoped)
+    
+    # Trade details (aggregated from related orders)
+    symbol = Column(String(20), nullable=False, index=True)
+    side = Column(String(10), nullable=False)  # LONG or SHORT
+    
+    entry_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    exit_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    entry_price = Column(Numeric(20, 8), nullable=False)  # Weighted average
+    exit_price = Column(Numeric(20, 8), nullable=False)  # Weighted average
+    quantity = Column(Numeric(20, 8), nullable=False)  # Total quantity
+    
+    # PnL (aggregated)
+    pnl_usd = Column(Numeric(20, 8), nullable=False)
+    pnl_pct = Column(Numeric(10, 4), nullable=False)
+    fee_paid = Column(Numeric(20, 8), nullable=False)  # Trading fees
+    funding_fee = Column(Numeric(20, 8), nullable=False, default=0.0)  # Funding fees
+    
+    # Metadata
+    leverage = Column(Integer)
+    exit_reason = Column(String(50))
+    initial_margin = Column(Numeric(20, 8))
+    margin_type = Column(String(20))
+    notional_value = Column(Numeric(20, 8))
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    
+    # Relationships
+    orders = relationship("CompletedTradeOrder", back_populates="completed_trade", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        CheckConstraint("side IN ('LONG', 'SHORT')", name="completed_trades_side_check"),
+        # ✅ CRITICAL: Idempotency constraint to prevent duplicate completed trades
+        UniqueConstraint("user_id", "strategy_id", "close_event_id", name="uq_completed_trade_idempotency"),
+        Index("idx_completed_trades_user_strategy", "user_id", "strategy_id"),
+        Index("idx_completed_trades_exit_time", "exit_time"),
+        Index("idx_completed_trades_symbol", "symbol"),
+        Index("idx_completed_trades_account", "account_id"),
+    )
+
+
+class CompletedTradeOrder(Base):
+    """Junction table: Links orders to completed trades.
+    
+    STRONG BASE: Foreign key to trades.id ensures referential integrity.
+    Handles partial fills:
+    - One entry order can be closed by multiple exit orders
+    - One exit order can close multiple entry orders
+    - Each row represents a portion of a completed trade
+    """
+    __tablename__ = "completed_trade_orders"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    completed_trade_id = Column(PGUUID(as_uuid=True), ForeignKey("completed_trades.id", ondelete="CASCADE"), 
+                                 nullable=False, index=True)
+    
+    # ✅ STRONG BASE: Foreign key to trades.id (UUID, primary key)
+    trade_id = Column(PGUUID(as_uuid=True), ForeignKey("trades.id", ondelete="RESTRICT"), 
+                      nullable=False, index=True)
+    
+    # Denormalized for querying (BigInteger, not FK)
+    # ⚠️ CRITICAL: order_id is account-scoped (Binance), not global
+    order_id = Column(BigInteger, nullable=False, index=True)  # Account-scoped, not global
+    account_id = Column(PGUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), index=True)  # ✅ Added for account-scoped queries
+    
+    # Order role in this completed trade
+    order_role = Column(String(10), nullable=False)  # "ENTRY" or "EXIT"
+    
+    # Quantity from this order that contributed to the completed trade
+    quantity = Column(Numeric(20, 8), nullable=False)
+    
+    # Price from this order
+    price = Column(Numeric(20, 8), nullable=False)
+    
+    # Timestamp
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    
+    # Relationships
+    completed_trade = relationship("CompletedTrade", back_populates="orders")
+    trade = relationship("Trade", foreign_keys=[trade_id], back_populates="completed_trade_orders")
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("order_role IN ('ENTRY', 'EXIT')", name="completed_trade_orders_role_check"),
+        Index("idx_completed_trade_orders_trade", "trade_id"),  # ✅ For FK relationship
+        Index("idx_completed_trade_orders_order", "order_id"),  # For querying by order_id (account-scoped)
+        Index("idx_completed_trade_orders_account", "account_id"),  # ✅ Added for account-scoped queries
+        Index("idx_completed_trade_orders_completed_trade", "completed_trade_id"),
+        # Prevent duplicate entries (same trade, same role, same completed trade)
+        UniqueConstraint("completed_trade_id", "trade_id", "order_role", name="uq_completed_trade_order"),
     )
 

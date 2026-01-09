@@ -18,6 +18,10 @@ class OrderResponse(BaseModel):
     price: float
     avg_price: Optional[float] = None
     executed_qty: float
+    orig_qty: Optional[float] = Field(
+        default=None,
+        description="Original order quantity from Binance (for partial fill tracking)"
+    )
     
     # Actual Binance trade data fields
     timestamp: Optional[datetime] = Field(

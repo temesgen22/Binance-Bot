@@ -486,6 +486,66 @@ class StrategyExecutor:
                 f"{order_response.side} {order_response.symbol} "
                 f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
             )
+            
+            # ✅ Create completed trades when position closes (ON-WRITE)
+            # This pre-computes matched trades for better performance
+            if self.order_manager.strategy_service and self.order_manager.user_id:
+                try:
+                    from app.services.completed_trade_helper import create_completed_trades_on_position_close
+                    from app.models.db_models import Trade as DBTrade
+                    
+                    # Get database session
+                    db = self.order_manager.strategy_service.db_service.db
+                    
+                    # Get strategy UUID first (summary.id is strategy_id string, not UUID)
+                    db_strategy = self.order_manager.strategy_service.db_service.get_strategy(
+                        self.order_manager.user_id,
+                        summary.id
+                    )
+                    
+                    if not db_strategy:
+                        logger.warning(
+                            f"[{summary.id}] Strategy not found in database. Cannot create completed trades."
+                        )
+                    else:
+                        # Get exit trade UUID (just saved)
+                        exit_trade = db.query(DBTrade).filter(
+                            DBTrade.strategy_id == db_strategy.id,  # Use UUID, not string
+                            DBTrade.order_id == order_response.order_id
+                        ).first()
+                    
+                        if exit_trade:
+                            # Create completed trades (non-blocking - fire and forget)
+                            asyncio.create_task(
+                                asyncio.to_thread(
+                                    create_completed_trades_on_position_close,
+                                    db,
+                                    self.order_manager.user_id,
+                                    summary.id,  # Strategy ID string
+                                    exit_trade.id,  # Exit trade UUID
+                                    order_response.order_id,  # Exit order ID
+                                    order_response.executed_qty,  # Exit quantity
+                                    float(order_response.avg_price or order_response.price),  # Exit price
+                                    position_direction,  # Position side (LONG or SHORT)
+                                    exit_reason,  # Exit reason
+                                )
+                            )
+                            logger.debug(
+                                f"[{summary.id}] Creating completed trades for position close: "
+                                f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[{summary.id}] Exit trade {order_response.order_id} not found in database. "
+                                f"Cannot create completed trades."
+                            )
+                except Exception as e:
+                    # Don't fail position closing if completed trade creation fails
+                    logger.warning(
+                        f"[{summary.id}] Failed to create completed trades on position close: {e}",
+                        exc_info=True
+                    )
+            
             # Send Telegram notification for closing position
             if self.notifications:
                 asyncio.create_task(

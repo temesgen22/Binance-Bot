@@ -711,6 +711,7 @@ class BinanceClient:
         price_str = response.get("price", "0") or response.get("price", "0") or "0"
         avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
         executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
+        orig_qty_str = response.get("origQty") or response.get("origQty") or None
         status = response.get("status", "UNKNOWN")
         
         # Convert to float, handling various formats
@@ -732,6 +733,14 @@ class BinanceClient:
             executed_qty = float(executed_qty_str) if executed_qty_str and str(executed_qty_str).strip() else 0.0
         except (ValueError, TypeError):
             executed_qty = 0.0
+        
+        # Parse origQty (original order quantity)
+        orig_qty = None
+        try:
+            if orig_qty_str and str(orig_qty_str).strip() and str(orig_qty_str).strip() != "0":
+                orig_qty = float(orig_qty_str)
+        except (ValueError, TypeError):
+            orig_qty = None
         
         # For market orders that return immediately with "NEW" status but are actually filled,
         # query the order status to get actual fill data
@@ -762,6 +771,14 @@ class BinanceClient:
                     executed_qty_str = status_response.get("executedQty")
                     try:
                         executed_qty = float(executed_qty_str) if executed_qty_str else 0.0
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Update origQty from status response if available
+                if status_response.get("origQty"):
+                    orig_qty_str = status_response.get("origQty")
+                    try:
+                        orig_qty = float(orig_qty_str) if orig_qty_str and str(orig_qty_str).strip() != "0" else None
                     except (ValueError, TypeError):
                         pass
             except Exception as exc:
@@ -904,6 +921,7 @@ class BinanceClient:
             price=price,
             avg_price=avg_price,
             executed_qty=executed_qty,
+            orig_qty=orig_qty,
             timestamp=timestamp,
             commission=commission,
             commission_asset=commission_asset,
@@ -949,6 +967,7 @@ class BinanceClient:
         price_str = response.get("price", "0") or response.get("price", "0") or "0"
         avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
         executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
+        orig_qty_str = response.get("origQty") or response.get("origQty") or None
         status = response.get("status", "UNKNOWN")
         order_id = response.get("orderId")
         
@@ -970,6 +989,14 @@ class BinanceClient:
             executed_qty = float(executed_qty_str) if executed_qty_str and str(executed_qty_str).strip() else 0.0
         except (ValueError, TypeError):
             executed_qty = 0.0
+        
+        # Parse origQty (original order quantity)
+        orig_qty = None
+        try:
+            if orig_qty_str and str(orig_qty_str).strip() and str(orig_qty_str).strip() != "0":
+                orig_qty = float(orig_qty_str)
+        except (ValueError, TypeError):
+            orig_qty = None
         
         # Parse timestamps
         timestamp = None
@@ -1080,6 +1107,7 @@ class BinanceClient:
             price=price,
             avg_price=avg_price,
             executed_qty=executed_qty,
+            orig_qty=orig_qty,
             timestamp=timestamp,
             commission=commission,
             commission_asset=commission_asset,

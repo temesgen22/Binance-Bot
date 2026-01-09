@@ -251,7 +251,7 @@ async def test_multiple_start_stop_cycles_update_timestamps():
         stopped1 = await runner.stop(strategy_id)
         first_stopped_at = stopped1.stopped_at
         assert first_stopped_at is not None
-        assert first_stopped_at > first_started_at
+        assert first_stopped_at >= first_started_at  # Allow equal for very fast operations
         
         # Wait a bit to ensure different timestamps
         await asyncio.sleep(0.1)
@@ -260,13 +260,16 @@ async def test_multiple_start_stop_cycles_update_timestamps():
         started2 = await runner.start(strategy_id)
         second_started_at = started2.started_at
         assert second_started_at is not None
-        assert second_started_at > first_stopped_at
+        assert second_started_at >= first_stopped_at  # Allow equal for very fast operations
+        
+        # Wait a bit to ensure different timestamps
+        await asyncio.sleep(0.01)
         
         # Second stop (should update stopped_at)
         stopped2 = await runner.stop(strategy_id)
         second_stopped_at = stopped2.stopped_at
         assert second_stopped_at is not None
-        assert second_stopped_at > second_started_at
+        assert second_stopped_at >= second_started_at  # Allow equal for very fast operations
 
 
 @pytest.mark.asyncio

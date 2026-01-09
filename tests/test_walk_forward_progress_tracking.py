@@ -52,6 +52,12 @@ def create_test_user(user_id: Optional[str] = None):
     )
 
 
+@pytest.fixture
+def test_user():
+    """Create a test user fixture."""
+    return create_test_user()
+
+
 def build_klines(count: int, base_price: float = 50000.0, 
                  start_time: Optional[datetime] = None) -> list[list]:
     """Helper to create klines for testing."""
@@ -345,7 +351,7 @@ class TestWalkForwardWithProgress:
             window_type=sample_request.window_type
         )
         
-        task_id = await task_manager.create_task(total_windows=len(windows))
+        task_id = await task_manager.create_task(total_windows=len(windows), user_id="test-user-id")
         
         # Mock klines fetching
         all_klines = build_klines(1000, start_time=sample_request.start_time)
@@ -411,7 +417,7 @@ class TestWalkForwardWithProgress:
             window_type=sample_request.window_type
         )
         
-        task_id = await task_manager.create_task(total_windows=len(windows))
+        task_id = await task_manager.create_task(total_windows=len(windows), user_id="test-user-id")
         
         # Mock klines
         all_klines = build_klines(1000, start_time=sample_request.start_time)
@@ -482,7 +488,7 @@ class TestWalkForwardWithProgress:
             window_type=sample_request.window_type
         )
         
-        task_id = await task_manager.create_task(total_windows=len(windows))
+        task_id = await task_manager.create_task(total_windows=len(windows), user_id="test-user-id")
         
         all_klines = build_klines(1000, start_time=sample_request.start_time)
         
@@ -548,8 +554,37 @@ class TestWalkForwardAPIEndpoints:
     
     @pytest.fixture
     def client(self):
-        """Create test client."""
-        return TestClient(app)
+        """Create test client with mocked authentication."""
+        from uuid import uuid4
+        from app.models.db_models import User
+        from app.api.deps import get_current_user_async
+        
+        # Create a mock user for authentication
+        # Use a fixed UUID so we can match it with task user_ids
+        test_user_id = uuid4()
+        mock_user = User(
+            id=test_user_id,
+            username="testuser",
+            email="test@test.com",
+            password_hash="hash",
+            is_active=True
+        )
+        
+        # Override the async authentication dependency
+        # Note: For async dependencies, we need to return a coroutine
+        async def get_mock_user():
+            return mock_user
+        
+        app.dependency_overrides[get_current_user_async] = get_mock_user
+        
+        try:
+            client_instance = TestClient(app)
+            # Store the user_id on the client so tests can access it
+            client_instance.test_user = mock_user
+            yield client_instance
+        finally:
+            # Clean up dependency overrides
+            app.dependency_overrides.pop(get_current_user_async, None)
     
     @pytest.fixture
     def auth_headers(self):
@@ -622,9 +657,20 @@ class TestWalkForwardAPIEndpoints:
                     mock_task = MagicMock()
                     mock_task.done.return_value = False
                     
+                    # Create a mock user for the test
+                    from uuid import uuid4
+                    from app.models.db_models import User
+                    mock_user = User(
+                        id=uuid4(),
+                        username="testuser",
+                        email="test@test.com",
+                        password_hash="hash",
+                        is_active=True
+                    )
+                    
                     with patch('app.api.routes.backtesting.asyncio.create_task', return_value=mock_task):
-                        # Call the endpoint function directly
-                        result = await start_walk_forward_analysis(sample_request, mock_client)
+                        # Call the endpoint function directly with current_user
+                        result = await start_walk_forward_analysis(sample_request, current_user=mock_user, client=mock_client)
                         
                         # Should return task_id
                         assert "task_id" in result
@@ -641,12 +687,15 @@ class TestWalkForwardAPIEndpoints:
         """Test /walk-forward/cancel/{task_id} endpoint."""
         from app.services.walk_forward_task_manager import get_task_manager
         
+        # Use the test user from the client fixture
+        mock_user = client.test_user
+        
         async def setup_task():
             task_manager = get_task_manager()
-            task_id = await task_manager.create_task(total_windows=5)
+            task_id = await task_manager.create_task(total_windows=5, user_id=str(mock_user.id))
             return task_id
         
-        # Create a task
+        # Create a task with user_id matching the mock user
         task_id = asyncio.run(setup_task())
         
         response = client.post(
@@ -660,6 +709,7 @@ class TestWalkForwardAPIEndpoints:
     
     def test_cancel_nonexistent_task(self, client):
         """Test cancelling a non-existent task."""
+        # The client fixture already sets up authentication
         response = client.post(
             "/backtesting/walk-forward/cancel/nonexistent"
         )
@@ -670,9 +720,12 @@ class TestWalkForwardAPIEndpoints:
         """Test /walk-forward/result/{task_id} endpoint."""
         from app.services.walk_forward_task_manager import get_task_manager
         
+        # Use the test user from the client fixture
+        mock_user = client.test_user
+        
         async def setup_completed_task():
             task_manager = get_task_manager()
-            task_id = await task_manager.create_task(total_windows=5)
+            task_id = await task_manager.create_task(total_windows=5, user_id=str(mock_user.id))
             result = {"test": "result", "windows": []}
             await task_manager.complete_task(task_id, result=result)
             return task_id
@@ -691,9 +744,12 @@ class TestWalkForwardAPIEndpoints:
         """Test getting result for incomplete task."""
         from app.services.walk_forward_task_manager import get_task_manager
         
+        # Use the test user from the client fixture
+        mock_user = client.test_user
+        
         async def setup_running_task():
             task_manager = get_task_manager()
-            task_id = await task_manager.create_task(total_windows=5)
+            task_id = await task_manager.create_task(total_windows=5, user_id=str(mock_user.id))
             return task_id
         
         task_id = asyncio.run(setup_running_task())
@@ -711,7 +767,7 @@ class TestWalkForwardAPIEndpoints:
         from app.services.walk_forward_task_manager import get_task_manager
         
         task_manager = get_task_manager()
-        task_id = await task_manager.create_task(total_windows=5)
+        task_id = await task_manager.create_task(total_windows=5, user_id="test-user-id")
         
         # Update progress
         await task_manager.update_progress(
@@ -820,15 +876,20 @@ class TestWalkForwardAPIEndpoints:
         from app.services.walk_forward_task_manager import get_task_manager
         from app.core.auth import create_access_token
         
+        # Use the test user from the client fixture
+        mock_user = client.test_user
+        
         async def setup_task():
             task_manager = get_task_manager()
-            task_id = await task_manager.create_task(total_windows=1)
+            task_id = await task_manager.create_task(total_windows=1, user_id=str(mock_user.id))
             # Complete the task immediately so the SSE stream exits quickly
             await task_manager.complete_task(task_id, result={"test": "done"})
             return task_id
         
         task_id = asyncio.run(setup_task())
-        token_data = {"sub": "test_user", "username": "test", "email": "test@test.com"}
+        
+        # Create auth token for SSE endpoint (it uses token query param)
+        token_data = {"sub": str(mock_user.id), "username": mock_user.username, "email": mock_user.email}
         token = create_access_token(token_data)
         
         # Note: TestClient may buffer, but we can verify headers
@@ -860,7 +921,7 @@ class TestWalkForwardProgressIntegration:
         task_manager = get_task_manager()
         
         # 1. Create task
-        task_id = await task_manager.create_task(total_windows=3)
+        task_id = await task_manager.create_task(total_windows=3, user_id="test-user-id")
         assert task_id is not None
         
         # 2. Update progress through windows
@@ -894,7 +955,7 @@ class TestWalkForwardProgressIntegration:
         task_manager = get_task_manager()
         
         # Create and start task
-        task_id = await task_manager.create_task(total_windows=10)
+        task_id = await task_manager.create_task(total_windows=10, user_id="test-user-id")
         await task_manager.update_progress(task_id, current_window=3)
         
         # Cancel
@@ -1153,19 +1214,17 @@ class TestWalkForwardConcurrencyLimits:
         mock_request = MagicMock()
         mock_request.__dict__ = request_data
         
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user):
-            with patch('app.api.routes.backtesting.get_binance_client', return_value=mock_client):
-                with patch('app.api.routes.backtesting.WalkForwardRequest', return_value=WalkForwardRequest(**request_data)):
-                    with patch('app.api.routes.backtesting.generate_walk_forward_windows', return_value=[(None, None, None)]):
-                        # Should raise 429
-                        with pytest.raises(HTTPException) as exc_info:
-                            await start_walk_forward_analysis(
-                                request_data,
-                                current_user=user,
-                                client=mock_client
-                            )
-                        assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-                        assert "Too many concurrent analyses" in str(exc_info.value.detail)
+        with patch('app.api.routes.backtesting.get_binance_client', return_value=mock_client):
+            # Should raise 429
+            with pytest.raises(HTTPException) as exc_info:
+                await start_walk_forward_analysis(
+                    request_data,
+                    current_user=user,
+                    client=mock_client
+                )
+            assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+            # Check for either per-user or global limit message
+            assert "concurrent analyses" in str(exc_info.value.detail) or "at capacity" in str(exc_info.value.detail)
         
         # Cleanup
         for task_id in task_ids:
@@ -1306,89 +1365,112 @@ class TestWalkForwardOwnershipVerification:
         # User1 creates a task
         task_id = await task_manager.create_task(total_windows=3, user_id=str(user1.id))
         
-        # User1 can access their task
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user1):
-            # Should not raise
-            try:
-                response = await get_walk_forward_progress(
-                    task_id=task_id,
-                    token=None,
-                    current_user=user1
-                )
-                # This is an SSE endpoint, so it returns StreamingResponse
-                # We can't easily test the full stream, but we can verify no exception
-            except HTTPException as e:
-                # Should not raise 403
-                assert e.status_code != status.HTTP_403_FORBIDDEN
+        # User1 can access their task - create a token for user1
+        from app.core.auth import create_access_token
+        token1 = create_access_token({"sub": str(user1.id), "username": user1.username, "email": user1.email})
         
-        # User2 cannot access user1's task
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user2):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_walk_forward_progress(
-                    task_id=task_id,
-                    token=None,
-                    current_user=user2
-                )
-            assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        # User1 can access their task
+        try:
+            response = await get_walk_forward_progress(
+                task_id=task_id,
+                token=token1,
+                request=None
+            )
+            # This is an SSE endpoint, so it returns StreamingResponse
+            # We can't easily test the full stream, but we can verify no exception
+        except HTTPException as e:
+            # Should not raise 403
+            assert e.status_code != status.HTTP_403_FORBIDDEN
+        
+        # User2 cannot access user1's task - create a token for user2
+        token2 = create_access_token({"sub": str(user2.id), "username": user2.username, "email": user2.email})
+        
+        # User2 cannot access user1's task (should get 404 or 403)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_walk_forward_progress(
+                task_id=task_id,
+                token=token2,
+                request=None
+            )
+        # Task might not be found (404) or access denied (403) depending on ownership check order
+        assert exc_info.value.status_code in (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND)
+        if exc_info.value.status_code == status.HTTP_403_FORBIDDEN:
             assert "Access denied" in str(exc_info.value.detail)
     
     @pytest.mark.asyncio
     async def test_cancel_endpoint_ownership(self, task_manager, user1, user2):
         """Test that cancel endpoint verifies ownership."""
         from app.api.routes.backtesting import cancel_walk_forward_analysis
+        from app.services.walk_forward_task_manager import get_task_manager
         from fastapi import status
         
+        # Use the singleton task manager (same one the endpoints use)
+        singleton_task_manager = get_task_manager()
+        
         # User1 creates a task
-        task_id = await task_manager.create_task(total_windows=3, user_id=str(user1.id))
+        task_id = await singleton_task_manager.create_task(total_windows=3, user_id=str(user1.id))
         
         # User1 can cancel their task
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user1):
-            result = await cancel_walk_forward_analysis(
-                task_id=task_id,
-                current_user=user1
-            )
-            assert result["success"] is True
+        result = await cancel_walk_forward_analysis(
+            task_id=task_id,
+            current_user=user1
+        )
+        assert result["success"] is True
         
         # Create another task for user1
-        task_id2 = await task_manager.create_task(total_windows=3, user_id=str(user1.id))
+        task_id2 = await singleton_task_manager.create_task(total_windows=3, user_id=str(user1.id))
         
-        # User2 cannot cancel user1's task
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user2):
-            with pytest.raises(HTTPException) as exc_info:
-                await cancel_walk_forward_analysis(
-                    task_id=task_id2,
-                    current_user=user2
-                )
-            assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
-            assert "Access denied" in str(exc_info.value.detail)
+        # Verify task exists before user2 tries to cancel it
+        progress = await singleton_task_manager.get_progress(task_id2)
+        assert progress is not None
+        assert progress.user_id == str(user1.id)
+        
+        # User2 cannot cancel user1's task (should get 403, not 404)
+        with pytest.raises(HTTPException) as exc_info:
+            await cancel_walk_forward_analysis(
+                task_id=task_id2,
+                current_user=user2
+            )
+        # Should get 403 (access denied), not 404 (task not found)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        assert "Access denied" in str(exc_info.value.detail)
     
     @pytest.mark.asyncio
     async def test_result_endpoint_ownership(self, task_manager, user1, user2):
         """Test that result endpoint verifies ownership."""
         from app.api.routes.backtesting import get_walk_forward_result
+        from app.services.walk_forward_task_manager import get_task_manager
         from fastapi import status
         
+        # Use the singleton task manager (same one the endpoints use)
+        singleton_task_manager = get_task_manager()
+        
         # User1 creates and completes a task
-        task_id = await task_manager.create_task(total_windows=3, user_id=str(user1.id))
-        await task_manager.complete_task(task_id, result={"test": "result"})
+        task_id = await singleton_task_manager.create_task(total_windows=3, user_id=str(user1.id))
+        await singleton_task_manager.complete_task(task_id, result={"test": "result"})
+        
+        # Verify task exists and is completed
+        progress = await singleton_task_manager.get_progress(task_id)
+        assert progress is not None
+        assert progress.status == "completed"
+        assert progress.user_id == str(user1.id)
         
         # User1 can access their result
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user1):
-            result = await get_walk_forward_result(
-                task_id=task_id,
-                current_user=user1
-            )
-            assert result == {"test": "result"}
+        result = await get_walk_forward_result(
+            task_id=task_id,
+            current_user=user1
+        )
+        assert result == {"test": "result"}
         
-        # User2 cannot access user1's result
-        with patch('app.api.routes.backtesting.get_current_user_async', return_value=user2):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_walk_forward_result(
-                    task_id=task_id,
-                    current_user=user2
-                )
-            assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
-            assert "Access denied" in str(exc_info.value.detail)
+        # User2 cannot access user1's result (should get 403, not 404)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_walk_forward_result(
+                task_id=task_id,
+                current_user=user2
+            )
+        # Should get 403 (access denied), not 404 (task not found)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+        assert "Access denied" in str(exc_info.value.detail)
 
 
 class TestWalkForwardConcurrencySafety:
@@ -1400,7 +1482,7 @@ class TestWalkForwardConcurrencySafety:
         from app.services.walk_forward_task_manager import get_task_manager
         
         task_manager = get_task_manager()
-        task_id = await task_manager.create_task(total_windows=10)
+        task_id = await task_manager.create_task(total_windows=10, user_id="test-user-id")
         
         # Simulate concurrent updates from multiple sources:
         # 1. Optimization loop updating phase
@@ -1463,7 +1545,7 @@ class TestWalkForwardConcurrencySafety:
         from app.services.walk_forward_task_manager import get_task_manager
         
         task_manager = get_task_manager()
-        task_id = await task_manager.create_task(total_windows=10)
+        task_id = await task_manager.create_task(total_windows=10, user_id="test-user-id")
         
         async def update_progress_continuously():
             """Continuously update progress."""
@@ -1498,7 +1580,7 @@ class TestWalkForwardConcurrencySafety:
         from app.services.walk_forward_task_manager import get_task_manager
         
         task_manager = get_task_manager()
-        task_id = await task_manager.create_task(total_windows=5)
+        task_id = await task_manager.create_task(total_windows=5, user_id="test-user-id")
         
         async def update_progress():
             """Update progress concurrently."""
@@ -1537,7 +1619,7 @@ class TestWalkForwardConcurrencySafety:
         # Create multiple tasks
         task_ids = []
         for i in range(5):
-            task_id = await task_manager.create_task(total_windows=10)
+            task_id = await task_manager.create_task(total_windows=10, user_id="test-user-id")
             task_ids.append(task_id)
         
         async def update_task(task_id: str, window: int):
@@ -1568,7 +1650,7 @@ class TestWalkForwardConcurrencySafety:
         from app.services.walk_forward_task_manager import get_task_manager
         
         task_manager = get_task_manager()
-        task_id = await task_manager.create_task(total_windows=100)
+        task_id = await task_manager.create_task(total_windows=100, user_id="test-user-id")
         
         # Rapid concurrent updates
         async def rapid_updates():

@@ -1472,67 +1472,112 @@ async def get_realtime_risk_status(
         total_exposure_usdt = 0.0
         # TODO: Get actual exposure from open positions via StrategyRunner
         
-        # CRITICAL: Calculate daily/weekly PnL using trade matching (same logic as reports page)
-        # This ensures we calculate from completed trade cycles, not individual entry/exit trades
-        from app.api.routes.reports import _match_trades_to_completed_positions
-        from app.models.order import OrderResponse
+        # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+        # This is much faster than on-demand matching
+        from app.models.db_models import CompletedTrade
+        from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
         
-        # Group trades by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
-        trades_by_strategy_uuid = {}
-        for db_trade in trades_db:
-            strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
-            if not strategy_uuid:
-                continue
-            
-            strategy_uuid_str = str(strategy_uuid)
-            if strategy_uuid_str not in trades_by_strategy_uuid:
-                trades_by_strategy_uuid[strategy_uuid_str] = []
-            trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
-        
-        # Convert and group OrderResponse objects by strategy
-        trades_by_strategy = {}
-        for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
-            # Convert database trades to OrderResponse format using helper
-            order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
-            trades_by_strategy[strategy_uuid_str] = order_responses
-        
-        # Match trades for each strategy and calculate PnL
         all_completed_trades = []
-        for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
-            if not strategy_trades:
-                continue
-            
-            # Get strategy info for matching
-            strategy_name = "Unknown"
-            symbol = strategy_trades[0].symbol if strategy_trades else ""
-            leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
-            strategy_id_str = "unknown"  # Default strategy_id string
-            
-            # Try to get strategy info from database using UUID
+        
+        # Get strategy UUIDs for the account
+        strategy_uuids = []
+        if account_id_normalized:
+            if account:
+                from app.models.db_models import Strategy
+                strategies = db.query(Strategy).filter(
+                    Strategy.user_id == user_id,
+                    Strategy.account_id == account.id
+                ).all()
+                strategy_uuids = [s.id for s in strategies]
+        else:
+            # All strategies for user
+            from app.models.db_models import Strategy
+            strategies = db.query(Strategy).filter(Strategy.user_id == user_id).all()
+            strategy_uuids = [s.id for s in strategies]
+        
+        # Try to get completed trades from database (pre-computed)
+        for strategy_uuid in strategy_uuids:
             try:
-                from uuid import UUID
-                strategy_uuid_obj = UUID(strategy_uuid_str)
-                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
-                if db_strategy:
-                    strategy_name = db_strategy.name or "Unknown"
-                    symbol = db_strategy.symbol or symbol
-                    leverage = db_strategy.leverage or leverage
-                    strategy_id_str = db_strategy.strategy_id or "unknown"
-            except Exception as e:
-                logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
-            
-            # Match trades to completed positions
-            try:
-                matched_trades = _match_trades_to_completed_positions(
-                    strategy_trades,
-                    strategy_id_str,  # Use strategy_id string, not UUID
-                    strategy_name,
-                    symbol,
-                    leverage
+                # Get strategy_id string for the helper function
+                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid)
+                if not db_strategy:
+                    continue
+                
+                strategy_id_str = db_strategy.strategy_id or str(strategy_uuid)
+                
+                # Query from CompletedTrade table
+                completed_trades = _get_completed_trades_from_database(
+                    db_service=db_service,
+                    user_id=user_id,
+                    strategy_uuid=strategy_uuid,
+                    strategy_id=strategy_id_str,
+                    start_datetime=None,  # Get all completed trades
+                    end_datetime=None
                 )
-                all_completed_trades.extend(matched_trades)
+                all_completed_trades.extend(completed_trades)
             except Exception as e:
-                logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
+                logger.debug(f"Could not get completed trades from database for strategy {strategy_uuid}: {e}")
+        
+        # ✅ FALLBACK: If no completed trades from database, use on-demand matching
+        if not all_completed_trades:
+            logger.debug("No completed trades from database, falling back to on-demand matching")
+            from app.models.order import OrderResponse
+            
+            # Group trades by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
+            trades_by_strategy_uuid = {}
+            for db_trade in trades_db:
+                strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
+                if not strategy_uuid:
+                    continue
+                
+                strategy_uuid_str = str(strategy_uuid)
+                if strategy_uuid_str not in trades_by_strategy_uuid:
+                    trades_by_strategy_uuid[strategy_uuid_str] = []
+                trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
+            
+            # Convert and group OrderResponse objects by strategy
+            trades_by_strategy = {}
+            for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
+                # Convert database trades to OrderResponse format using helper
+                order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
+                trades_by_strategy[strategy_uuid_str] = order_responses
+            
+            # Match trades for each strategy and calculate PnL
+            for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
+                if not strategy_trades:
+                    continue
+                
+                # Get strategy info for matching
+                strategy_name = "Unknown"
+                symbol = strategy_trades[0].symbol if strategy_trades else ""
+                leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
+                strategy_id_str = "unknown"  # Default strategy_id string
+                
+                # Try to get strategy info from database using UUID
+                try:
+                    from uuid import UUID
+                    strategy_uuid_obj = UUID(strategy_uuid_str)
+                    db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
+                    if db_strategy:
+                        strategy_name = db_strategy.name or "Unknown"
+                        symbol = db_strategy.symbol or symbol
+                        leverage = db_strategy.leverage or leverage
+                        strategy_id_str = db_strategy.strategy_id or "unknown"
+                except Exception as e:
+                    logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
+                
+                # Match trades to completed positions
+                try:
+                    matched_trades = _match_trades_to_completed_positions(
+                        strategy_trades,
+                        strategy_id_str,  # Use strategy_id string, not UUID
+                        strategy_name,
+                        symbol,
+                        leverage
+                    )
+                    all_completed_trades.extend(matched_trades)
+                except Exception as e:
+                    logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
         
         # Calculate daily PnL (realized only) from completed trades
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1611,24 +1656,30 @@ async def get_realtime_risk_status(
             logger.warning(f"Error calculating drawdown from trades: {e}")
             current_drawdown_pct = 0.0
         
-        # Determine risk status
+        # Determine risk status and identify which limits are breached
         # Note: risk_config.max_drawdown_pct is stored as decimal (0-1), but current_drawdown_pct is percentage (0-100)
         risk_status = "normal"
+        breach_reasons = []
+        
         if risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100):
             risk_status = "breach"
+            breach_reasons.append(("DRAWDOWN_LIMIT_BREACH", f"Drawdown limit exceeded: {current_drawdown_pct:.2f}% >= {risk_config.max_drawdown_pct * 100:.2f}%"))
         elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt):
             risk_status = "breach"
+            breach_reasons.append(("DAILY_LOSS_LIMIT_BREACH", f"Daily loss limit exceeded: ${daily_pnl_usdt:.2f} <= -${risk_config.max_daily_loss_usdt:.2f}"))
         elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt):
             risk_status = "breach"
+            breach_reasons.append(("WEEKLY_LOSS_LIMIT_BREACH", f"Weekly loss limit exceeded: ${weekly_pnl_usdt:.2f} <= -${risk_config.max_weekly_loss_usdt:.2f}"))
         elif risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt:
             risk_status = "breach"
+            breach_reasons.append(("PORTFOLIO_EXPOSURE_LIMIT_BREACH", f"Portfolio exposure limit exceeded: ${total_exposure_usdt:.2f} >= ${risk_config.max_portfolio_exposure_usdt:.2f}"))
         elif (risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100 * 0.8)) or \
              (risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt) * 0.8) or \
              (risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt) * 0.8) or \
              (risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt * 0.8):
             risk_status = "warning"
         
-        # Get recent enforcement events (last 10)
+        # Get recent enforcement events (last 10) to check for duplicates
         account_uuid = None
         if account_id_normalized and account_id_normalized != "all":
             db_account = db_service.get_account_by_id(user_id, account_id_normalized)
@@ -1641,6 +1692,46 @@ async def get_realtime_risk_status(
             limit=10,
             offset=0
         )
+        
+        # Create enforcement events for breaches (avoid duplicates - check if event exists in last hour)
+        if breach_reasons and account_uuid:
+            one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+            
+            for event_type, message in breach_reasons:
+                # Check if similar event was created recently (within last hour)
+                recent_similar_event = None
+                for event in recent_events:
+                    if (event.event_type == event_type and 
+                        event.created_at >= one_hour_ago and
+                        event.account_id == account_uuid):
+                        recent_similar_event = event
+                        break
+                
+                # Only create event if no similar recent event exists
+                if not recent_similar_event:
+                    try:
+                        db_service.create_system_event(
+                            event_type=event_type,
+                            event_level="ERROR",
+                            message=message,
+                            strategy_id=None,  # Portfolio-level breach, not strategy-specific
+                            account_id=account_uuid,
+                            event_metadata={
+                                "account_id": account_id_normalized,
+                                "limit_type": event_type.lower().replace("_breach", ""),
+                                "current_value": float(current_drawdown_pct) if "DRAWDOWN" in event_type else 
+                                                 float(daily_pnl_usdt) if "DAILY" in event_type else
+                                                 float(weekly_pnl_usdt) if "WEEKLY" in event_type else
+                                                 float(total_exposure_usdt),
+                                "limit_value": float(risk_config.max_drawdown_pct * 100) if "DRAWDOWN" in event_type else
+                                              float(risk_config.max_daily_loss_usdt) if "DAILY" in event_type else
+                                              float(risk_config.max_weekly_loss_usdt) if "WEEKLY" in event_type else
+                                              float(risk_config.max_portfolio_exposure_usdt)
+                            }
+                        )
+                        logger.warning(f"Created enforcement event for {event_type}: {message}")
+                    except Exception as e:
+                        logger.error(f"Failed to create enforcement event for {event_type}: {e}")
         
         # Format recent events
         recent_event_dicts = []
@@ -1795,11 +1886,31 @@ async def get_strategy_risk_status(
                     except Exception as e:
                         logger.warning(f"Error getting strategy trades for strategy {strategy_id}: {e}")
                         today_trades = []
-                today_trades = [t for t in today_trades if t and t.timestamp and t.timestamp >= today_start] if today_trades else []
-                if today_trades:
-                    # CRITICAL: Match trades to completed positions (same logic as reports page)
-                    from app.api.routes.reports import _match_trades_to_completed_positions
-                    from app.models.order import OrderResponse
+                # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table
+                from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
+                
+                # Try to get completed trades from database (pre-computed)
+                all_completed_trades = []
+                try:
+                    completed_trades = _get_completed_trades_from_database(
+                        db_service=db_service,
+                        user_id=user_id,
+                        strategy_uuid=db_strategy.id,
+                        strategy_id=strategy_id,
+                        start_datetime=today_start,  # Filter by today
+                        end_datetime=None
+                    )
+                    all_completed_trades.extend(completed_trades)
+                    logger.debug(f"Strategy {strategy_id}: Found {len(completed_trades)} completed trades from database today")
+                except Exception as e:
+                    logger.debug(f"Strategy {strategy_id}: Could not get completed trades from database: {e}, falling back to on-demand matching")
+                
+                # ✅ FALLBACK: If no completed trades from database, use on-demand matching
+                if not all_completed_trades:
+                    today_trades = [t for t in today_trades if t and t.timestamp and t.timestamp >= today_start] if today_trades else []
+                    if today_trades:
+                        # CRITICAL: Match trades to completed positions (same logic as reports page)
+                        from app.models.order import OrderResponse
                     
                     # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
                     trades_by_strategy_uuid = {}
@@ -1855,23 +1966,21 @@ async def get_strategy_risk_status(
                         try:
                             matched_trades = _match_trades_to_completed_positions(
                                 strategy_trades,
-                                strategy_id_str,  # Use strategy_id string, not UUID
-                                strategy_name,
-                                symbol,
-                                leverage
+                                strategy_id,  # Use strategy_id string, not UUID
+                                db_strategy.name or "Unknown",
+                                db_strategy.symbol or (strategy_trades[0].symbol if strategy_trades else ""),
+                                db_strategy.leverage or (strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1)
                             )
                             all_completed_trades.extend(matched_trades)
                         except Exception as e:
-                            logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
-                    
-                    # Calculate daily loss from completed trades
-                    daily_loss_usdt = sum(
-                        _get_pnl_from_completed_trade(t)
-                        for t in all_completed_trades
-                    )
-                    logger.debug(f"Strategy {strategy_id}: Found {len(all_completed_trades)} completed trades today, daily_loss={daily_loss_usdt:.2f}")
-                else:
-                    logger.debug(f"Strategy {strategy_id}: No trades today, daily_loss=0.0")
+                            logger.warning(f"Error matching trades for strategy {strategy_id}: {e}")
+                
+                # Calculate daily loss from completed trades
+                daily_loss_usdt = sum(
+                    _get_pnl_from_completed_trade(t)
+                    for t in all_completed_trades
+                )
+                logger.debug(f"Strategy {strategy_id}: Found {len(all_completed_trades)} completed trades today, daily_loss={daily_loss_usdt:.2f}")
             except Exception as e:
                 logger.warning(f"Error getting trades for risk status: {e}")
                 daily_loss_usdt = 0.0  # Default to 0 if we can't get trades

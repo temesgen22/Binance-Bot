@@ -39,6 +39,11 @@ class TradeService:
     
     def _order_response_to_trade_dict(self, order: OrderResponse, strategy_id: UUID, user_id: UUID) -> dict:
         """Convert OrderResponse to Trade database model dict."""
+        # Calculate remaining_qty if orig_qty is available
+        remaining_qty = None
+        if order.orig_qty is not None and order.executed_qty is not None:
+            remaining_qty = max(0.0, order.orig_qty - order.executed_qty)
+        
         return {
             "strategy_id": strategy_id,
             "user_id": user_id,
@@ -51,6 +56,8 @@ class TradeService:
             "price": order.price,
             "avg_price": order.avg_price,
             "executed_qty": order.executed_qty,
+            "orig_qty": order.orig_qty,
+            "remaining_qty": remaining_qty,
             "notional_value": order.notional_value,
             "cummulative_quote_qty": order.cummulative_quote_qty,
             "initial_margin": order.initial_margin,
@@ -79,6 +86,7 @@ class TradeService:
             price=float(db_trade.price),
             avg_price=float(db_trade.avg_price) if db_trade.avg_price else None,
             executed_qty=float(db_trade.executed_qty),
+            orig_qty=float(db_trade.orig_qty) if db_trade.orig_qty else None,
             timestamp=db_trade.timestamp,
             commission=float(db_trade.commission) if db_trade.commission else None,
             commission_asset=db_trade.commission_asset,
@@ -132,41 +140,107 @@ class TradeService:
         # Convert OrderResponse to trade dict
         trade_data = self._order_response_to_trade_dict(order, strategy_id, user_id)
         
-        try:
-            # Save to database within transaction (DatabaseService.create_trade handles this)
-            # If this fails, exception is raised and transaction is rolled back
-            db_trade = self.db_service.create_trade(trade_data)
-        except IntegrityError as e:
-            # Handle duplicate order gracefully
-            error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
-            if 'unique' in error_msg.lower() or 'duplicate' in error_msg.lower() or 'idx_trades_strategy_order_id' in error_msg:
-                # Duplicate order detected - get existing trade
-                logger.warning(
-                    f"Duplicate order {order.order_id} for strategy {strategy_id}. "
-                    f"Returning existing trade from database."
-                )
-                # Query existing trade
-                existing_trade = self.db_service.db.query(DBTrade).filter(
-                    DBTrade.strategy_id == strategy_id,
-                    DBTrade.order_id == order.order_id
-                ).first()
-                if existing_trade:
-                    logger.info(
-                        f"Found existing trade {existing_trade.id} for order {order.order_id}. "
-                        f"This is expected for idempotent order execution."
-                    )
-                    return existing_trade
-                else:
-                    # Should not happen, but handle gracefully
-                    logger.error(
-                        f"IntegrityError for duplicate order {order.order_id}, but existing trade not found. "
-                        f"This may indicate a race condition."
-                    )
-                    raise
+        # Check for existing trade first (idempotent update)
+        existing_trade = self.db_service.db.query(DBTrade).filter(
+            DBTrade.strategy_id == strategy_id,
+            DBTrade.order_id == order.order_id
+        ).first()
+        
+        if existing_trade:
+            # Update existing trade with latest data (handles partial fill updates)
+            logger.info(
+                f"Updating existing trade {existing_trade.id} for order {order.order_id} "
+                f"(status: {existing_trade.status} -> {order.status}, "
+                f"executed_qty: {existing_trade.executed_qty} -> {order.executed_qty})"
+            )
+            
+            # Update fields that may have changed (especially for partial fills)
+            existing_trade.status = order.status
+            existing_trade.executed_qty = order.executed_qty
+            existing_trade.avg_price = order.avg_price
+            existing_trade.update_time = order.update_time
+            
+            # Update orig_qty if provided (may not be in first response)
+            if order.orig_qty is not None:
+                existing_trade.orig_qty = order.orig_qty
+            
+            # Recalculate remaining_qty
+            if existing_trade.orig_qty is not None and existing_trade.executed_qty is not None:
+                existing_trade.remaining_qty = max(0.0, existing_trade.orig_qty - existing_trade.executed_qty)
             else:
-                # Not a duplicate error, re-raise
-                logger.error(f"IntegrityError saving trade {order.order_id}: {error_msg}")
+                existing_trade.remaining_qty = None
+            
+            # Update other fields that may have changed
+            if order.commission is not None:
+                existing_trade.commission = order.commission
+            if order.commission_asset:
+                existing_trade.commission_asset = order.commission_asset
+            if order.notional_value is not None:
+                existing_trade.notional_value = order.notional_value
+            if order.cummulative_quote_qty is not None:
+                existing_trade.cummulative_quote_qty = order.cummulative_quote_qty
+            
+            # Commit the update
+            try:
+                self.db_service.db.commit()
+                logger.info(f"Successfully updated trade {existing_trade.id} for order {order.order_id}")
+            except Exception as e:
+                self.db_service.db.rollback()
+                logger.error(f"Failed to update existing trade {existing_trade.id}: {e}")
                 raise
+            
+            db_trade = existing_trade
+        else:
+            # Create new trade
+            try:
+                # Save to database within transaction (DatabaseService.create_trade handles this)
+                # If this fails, exception is raised and transaction is rolled back
+                db_trade = self.db_service.create_trade(trade_data)
+            except IntegrityError as e:
+                # Handle duplicate order gracefully (race condition: another process created it)
+                error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+                if 'unique' in error_msg.lower() or 'duplicate' in error_msg.lower() or 'idx_trades_strategy_order_id' in error_msg:
+                    # Duplicate order detected - get existing trade
+                    logger.warning(
+                        f"Duplicate order {order.order_id} for strategy {strategy_id} (race condition). "
+                        f"Querying existing trade from database."
+                    )
+                    # Query existing trade (may have been created by another process)
+                    existing_trade = self.db_service.db.query(DBTrade).filter(
+                        DBTrade.strategy_id == strategy_id,
+                        DBTrade.order_id == order.order_id
+                    ).first()
+                    if existing_trade:
+                        logger.info(
+                            f"Found existing trade {existing_trade.id} for order {order.order_id}. "
+                            f"This is expected for concurrent order execution."
+                        )
+                        # Update it with latest data (same as above)
+                        existing_trade.status = order.status
+                        existing_trade.executed_qty = order.executed_qty
+                        existing_trade.avg_price = order.avg_price
+                        existing_trade.update_time = order.update_time
+                        if order.orig_qty is not None:
+                            existing_trade.orig_qty = order.orig_qty
+                        if existing_trade.orig_qty is not None and existing_trade.executed_qty is not None:
+                            existing_trade.remaining_qty = max(0.0, existing_trade.orig_qty - existing_trade.executed_qty)
+                        try:
+                            self.db_service.db.commit()
+                        except Exception as update_e:
+                            self.db_service.db.rollback()
+                            logger.error(f"Failed to update existing trade after IntegrityError: {update_e}")
+                        return existing_trade
+                    else:
+                        # Should not happen, but handle gracefully
+                        logger.error(
+                            f"IntegrityError for duplicate order {order.order_id}, but existing trade not found. "
+                            f"This may indicate a database inconsistency."
+                        )
+                        raise
+                else:
+                    # Not a duplicate error, re-raise
+                    logger.error(f"IntegrityError saving trade {order.order_id}: {error_msg}")
+                    raise
         
         # Cache in Redis (sorted set by timestamp for recent trades)
         # Note: Redis is cache, so if it fails, we don't rollback database
