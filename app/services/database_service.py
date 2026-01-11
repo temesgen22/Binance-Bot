@@ -339,15 +339,46 @@ class DatabaseService:
         return account
     
     def delete_account(self, user_id: UUID, account_id: str) -> bool:
-        """Delete (deactivate) an account."""
-        account = self.get_account_by_id(user_id, account_id)
+        """Hard delete an account from the database.
+        
+        Permanently removes the account record. This cannot be undone.
+        Will fail if account has associated strategies (RESTRICT constraint).
+        
+        Returns:
+            True if account was deleted, False if account not found
+            
+        Raises:
+            ValueError: If account has associated strategies that prevent deletion
+        """
+        # Get account without is_active filter to allow deleting inactive accounts
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if not account_id_lower:
+            return False
+        
+        account = self.db.query(Account).filter(
+            Account.user_id == user_id,
+            Account.account_id.ilike(account_id_lower)
+        ).first()
+        
         if not account:
             return False
         
-        # Soft delete: set is_active to False
-        account.is_active = False
+        # Check if account has associated strategies (RESTRICT constraint)
+        from app.models.db_models import Strategy
+        strategy_count = self.db.query(Strategy).filter(
+            Strategy.account_id == account.id
+        ).count()
+        
+        if strategy_count > 0:
+            raise ValueError(
+                f"Cannot delete account '{account_id}': it has {strategy_count} associated strateg{'y' if strategy_count == 1 else 'ies'}. "
+                f"Please delete or reassign the strategies first, or deactivate the account instead."
+            )
+        
+        # Hard delete: actually remove the record from database
+        self.db.delete(account)
         with self._transaction(error_message=f"Failed to delete account {account_id}"):
-            logger.info(f"Deactivated account {account_id} for user {user_id}")
+            logger.info(f"Permanently deleted account {account_id} for user {user_id}")
         return True
     
     async def async_update_account(
@@ -356,11 +387,31 @@ class DatabaseService:
         account_id: str,
         **updates
     ) -> Optional[Account]:
-        """Update account (async)."""
+        """Update account (async).
+        
+        Note: This method can update both active and inactive accounts,
+        allowing reactivation of inactive accounts.
+        """
         if not self._is_async:
             raise RuntimeError("Use update_account() with Session")
         
-        account = await self.async_get_account_by_id(user_id, account_id)
+        # Get account without is_active filter to allow updating inactive accounts
+        # Normalize account_id to lowercase (constraint requires lowercase)
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if not account_id_lower:
+            return None
+        
+        # Query using Account.account_id (string column), not Account.id (UUID primary key)
+        # Don't filter by is_active to allow updating inactive accounts
+        result = await self.db.execute(
+            select(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id.ilike(account_id_lower)  # Case-insensitive match on string column
+                # Note: No is_active filter - allows updating inactive accounts
+            )
+        )
+        account = result.scalar_one_or_none()
+        
         if not account:
             return None
         
@@ -390,20 +441,67 @@ class DatabaseService:
         return account
     
     async def async_delete_account(self, user_id: UUID, account_id: str) -> bool:
-        """Delete (deactivate) an account (async)."""
+        """Hard delete an account from the database (async).
+        
+        Permanently removes the account record. This cannot be undone.
+        Will fail if account has associated strategies (RESTRICT constraint).
+        
+        Returns:
+            True if account was deleted, False if account not found
+            
+        Raises:
+            ValueError: If account has associated strategies that prevent deletion
+        """
         if not self._is_async:
             raise RuntimeError("Use delete_account() with Session")
         
-        account = await self.async_get_account_by_id(user_id, account_id)
+        # Get account without is_active filter to allow deleting inactive accounts
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if not account_id_lower:
+            return False
+        
+        result = await self.db.execute(
+            select(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id.ilike(account_id_lower)
+            )
+        )
+        account = result.scalar_one_or_none()
+        
         if not account:
             return False
         
-        # Soft delete: set is_active to False
-        account.is_active = False
+        # Check if account has associated strategies (RESTRICT constraint)
+        from app.models.db_models import Strategy
+        strategy_result = await self.db.execute(
+            select(func.count(Strategy.id)).filter(
+                Strategy.account_id == account.id
+            )
+        )
+        strategy_count = strategy_result.scalar_one() or 0
+        
+        if strategy_count > 0:
+            raise ValueError(
+                f"Cannot delete account '{account_id}': it has {strategy_count} associated strateg{'y' if strategy_count == 1 else 'ies'}. "
+                f"Please delete or reassign the strategies first, or deactivate the account instead."
+            )
+        
+        # Hard delete: actually remove the record from database
         try:
+            await self.db.delete(account)
             await self.db.commit()
-            await self.db.refresh(account)
-            logger.info(f"Deactivated account {account_id} for user {user_id}")
+            logger.info(f"Permanently deleted account {account_id} for user {user_id}")
+        except IntegrityError as e:
+            await self.db.rollback()
+            # Check if it's a RESTRICT constraint violation
+            error_msg = str(e)
+            if "restrict" in error_msg.lower() or "constraint" in error_msg.lower():
+                raise ValueError(
+                    f"Cannot delete account '{account_id}': it has associated strategies. "
+                    f"Please delete or reassign the strategies first, or deactivate the account instead."
+                ) from e
+            logger.error(f"Failed to delete account {account_id}: {e}")
+            raise
         except Exception as e:
             await self.db.rollback()
             logger.error(f"Failed to delete account {account_id}: {e}")

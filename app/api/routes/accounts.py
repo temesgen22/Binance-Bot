@@ -121,18 +121,31 @@ async def list_accounts(
     request: Request,
     current_user: User = Depends(get_current_user_async),
     account_service: AccountService = Depends(get_account_service_async),
-    include_env: bool = False
+    include_env: bool = False,
+    include_inactive: bool = False
 ) -> List[AccountResponse]:
     """List all Binance accounts for the current user.
     
     Returns accounts from database (multi-user mode).
     Optionally includes accounts from .env file if include_env=True.
+    Optionally includes inactive accounts if include_inactive=True.
     """
     result = []
     
     # Get accounts from database (multi-user mode) - async
     try:
-        db_accounts = await account_service.db_service.async_get_user_accounts(current_user.id)
+        if include_inactive:
+            # Get all accounts including inactive ones
+            from sqlalchemy import select
+            from app.models.db_models import Account
+            async_db = account_service.db_service.db
+            query_result = await async_db.execute(
+                select(Account).filter(Account.user_id == current_user.id)
+            )
+            db_accounts = list(query_result.scalars().all())
+        else:
+            # Get only active accounts (default behavior)
+            db_accounts = await account_service.db_service.async_get_user_accounts(current_user.id)
         
         for acc in db_accounts:
             response = AccountResponse.from_account(acc)
@@ -204,11 +217,36 @@ async def get_account(
     account_id: str,
     request: Request,
     current_user: User = Depends(get_current_user_async),
-    account_service: AccountService = Depends(get_account_service_async)
+    account_service: AccountService = Depends(get_account_service_async),
+    include_inactive: bool = True
 ) -> AccountResponse:
-    """Get a specific account by ID."""
+    """Get a specific account by ID.
+    
+    By default, includes inactive accounts (for editing purposes).
+    Set include_inactive=False to only get active accounts.
+    """
     try:
-        db_account = await account_service.db_service.async_get_account_by_id(current_user.id, account_id)
+        # For editing, we need to get account even if inactive
+        if include_inactive:
+            from sqlalchemy import select
+            from app.models.db_models import Account
+            async_db = account_service.db_service.db
+            account_id_lower = account_id.lower().strip() if account_id else None
+            if not account_id_lower:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid account_id"
+                )
+            result = await async_db.execute(
+                select(Account).filter(
+                    Account.user_id == current_user.id,
+                    Account.account_id.ilike(account_id_lower)
+                )
+            )
+            db_account = result.scalar_one_or_none()
+        else:
+            # Only get active accounts
+            db_account = await account_service.db_service.async_get_account_by_id(current_user.id, account_id)
         
         if not db_account:
             raise HTTPException(
@@ -268,7 +306,29 @@ async def update_account(
             )
         
         # Get updated account from database (async)
-        db_account = await account_service.db_service.async_get_account_by_id(current_user.id, account_id)
+        # Note: If account was deactivated, async_get_account_by_id won't find it (filters by is_active=True)
+        # So we need to get it directly without the is_active filter
+        from sqlalchemy import select
+        from app.models.db_models import Account
+        async_db = account_service.db_service.db
+        account_id_lower = account_id.lower().strip() if account_id else None
+        if account_id_lower:
+            result = await async_db.execute(
+                select(Account).filter(
+                    Account.user_id == current_user.id,
+                    Account.account_id.ilike(account_id_lower)
+                )
+            )
+            db_account = result.scalar_one_or_none()
+        else:
+            db_account = None
+        
+        if not db_account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account '{account_id}' not found"
+            )
+        
         return AccountResponse.from_account(db_account)
         
     except HTTPException:
@@ -288,7 +348,14 @@ async def delete_account(
     current_user: User = Depends(get_current_user_async),
     account_service: AccountService = Depends(get_account_service_async)
 ):
-    """Delete (deactivate) an account."""
+    """Permanently delete an account from the database.
+    
+    This is a HARD DELETE that permanently removes the account record.
+    This action cannot be undone.
+    
+    The account will be deleted only if it has no associated strategies.
+    If strategies exist, use deactivate (PUT with is_active=False) instead.
+    """
     try:
         success = await account_service.async_delete_account(current_user.id, account_id)
         
@@ -298,9 +365,16 @@ async def delete_account(
                 detail=f"Account '{account_id}' not found"
             )
         
-        logger.info(f"Deleted account {account_id} for user {current_user.id}")
+        logger.info(f"Permanently deleted account {account_id} for user {current_user.id}")
         return None
         
+    except ValueError as e:
+        # Handle ValueError from strategy constraint check
+        logger.warning(f"Cannot delete account {account_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except HTTPException:
         raise
     except Exception as e:

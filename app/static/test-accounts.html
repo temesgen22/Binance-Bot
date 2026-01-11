@@ -319,6 +319,16 @@
             box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
         }
 
+        .account-card-inactive {
+            opacity: 0.7;
+            border-color: #dc3545;
+        }
+
+        .account-card-inactive:hover {
+            border-color: #dc3545;
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.2);
+        }
+
         .account-info {
             flex: 1;
         }
@@ -509,8 +519,8 @@
             existingAccountsList.innerHTML = '<div class="loading-accounts"><span class="loading"></span> Loading accounts...</div>';
             
             try {
-                // Load accounts from database
-                const dbResponse = await authFetch('/accounts/list');
+                // Load accounts from database including inactive ones
+                const dbResponse = await authFetch('/accounts/list?include_inactive=true');
                 const dbAccounts = await dbResponse.json();
                 
                 if (!dbAccounts || dbAccounts.length === 0) {
@@ -525,11 +535,18 @@
                     const isTestnet = account.testnet === true || account.testnet === 'True';
                     const accountId = account.account_id || account.id;
                     const exchangePlatform = account.exchange_platform || 'binance';
+                    const isActive = account.is_active !== false; // Default to true if not specified
+                    const statusClass = isActive ? '' : 'account-card-inactive';
+                    const statusStyle = isActive ? '' : 'opacity: 0.7; border-color: #dc3545;';
+                    
                     html += `
-                        <div class="account-card" data-account-id="${accountId}" data-source="database">
+                        <div class="account-card ${statusClass}" data-account-id="${accountId}" data-source="database" style="${statusStyle}">
                             <div class="account-info">
                                 <h3>${account.name || accountId} ${account.is_default ? '<span style="color: #28a745; font-size: 0.8em;">(Default)</span>' : ''}</h3>
                                 <p>
+                                    <span class="account-badge ${isActive ? 'status-badge success' : 'status-badge error'}" style="margin-right: 8px;">
+                                        ${isActive ? '✅ Active' : '❌ Inactive'}
+                                    </span>
                                     <span class="account-badge ${isTestnet ? 'testnet' : 'production'}">
                                         ${isTestnet ? '🧪 Testnet' : '🌐 Production'}
                                     </span>
@@ -539,14 +556,25 @@
                                 </p>
                             </div>
                             <div class="account-actions">
-                                <button class="btn btn-primary btn-test-account" onclick="testDatabaseAccount('${accountId}')">
-                                    🧪 Test
-                                </button>
+                                ${isActive ? `
+                                    <button class="btn btn-primary btn-test-account" onclick="testDatabaseAccount('${accountId}')">
+                                        🧪 Test
+                                    </button>
+                                ` : ''}
                                 <button class="btn btn-secondary" onclick="editAccount('${accountId}')" style="font-size: 0.9em;">
                                     ✏️ Edit
                                 </button>
-                                <button class="btn btn-danger" onclick="deleteAccount('${accountId}')" style="font-size: 0.9em;">
-                                    🗑️ Delete
+                                ${isActive ? `
+                                    <button class="btn btn-warning" onclick="toggleAccountStatus('${accountId}', false)" style="font-size: 0.9em; background: #ffc107; color: #333;">
+                                        ⏸️ Deactivate
+                                    </button>
+                                ` : `
+                                    <button class="btn btn-success" onclick="toggleAccountStatus('${accountId}', true)" style="font-size: 0.9em; background: #28a745; color: white;">
+                                        ▶️ Activate
+                                    </button>
+                                `}
+                                <button class="btn btn-danger" onclick="deleteAccount('${accountId}')" style="font-size: 0.9em;" title="Permanently delete account (irreversible)">
+                                    🗑️ Delete Permanently
                                 </button>
                             </div>
                         </div>
@@ -599,10 +627,29 @@
                 const response = await authFetch(`/accounts/${accountId}`);
                 const account = await response.json();
                 
+                // Remove existing isActiveGroup if it exists
+                const existingGroup = document.getElementById('isActiveGroup');
+                if (existingGroup) {
+                    existingGroup.remove();
+                }
+                
                 // Populate form with account data
                 document.getElementById('accountName').value = account.name || '';
                 document.getElementById('exchangePlatform').value = account.exchange_platform || 'binance';
                 document.getElementById('testnet').checked = account.testnet === true || account.testnet === 'True';
+                
+                // Add is_active checkbox for editing
+                const testnetGroup = document.getElementById('testnet').closest('.form-group');
+                const isActiveGroup = document.createElement('div');
+                isActiveGroup.id = 'isActiveGroup';
+                isActiveGroup.className = 'form-group';
+                isActiveGroup.innerHTML = `
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="isActive" ${account.is_active !== false ? 'checked' : ''}>
+                        <label for="isActive">Active Account (uncheck to deactivate)</label>
+                    </div>
+                `;
+                testnetGroup.after(isActiveGroup);
                 
                 // Show edit mode
                 const form = document.getElementById('testForm');
@@ -625,16 +672,24 @@
             const name = document.getElementById('accountName').value.trim();
             const exchangePlatform = document.getElementById('exchangePlatform').value.trim();
             const testnet = document.getElementById('testnet').checked;
+            const isActive = document.getElementById('isActive') ? document.getElementById('isActive').checked : undefined;
+            
+            const updateData = {
+                name: name || null,
+                exchange_platform: exchangePlatform,
+                testnet: testnet
+            };
+            
+            // Only include is_active if the checkbox exists (in edit mode)
+            if (document.getElementById('isActive') !== null) {
+                updateData.is_active = isActive;
+            }
             
             try {
                 const response = await authFetch(`/accounts/${accountId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: name || null,
-                        exchange_platform: exchangePlatform,
-                        testnet: testnet
-                    })
+                    body: JSON.stringify(updateData)
                 });
                 
                 if (response.ok) {
@@ -643,6 +698,11 @@
                     // Reset form
                     document.getElementById('testForm').reset();
                     document.getElementById('testBtn').textContent = '🧪 Test Account';
+                    // Remove isActive checkbox if it exists
+                    const isActiveGroup = document.getElementById('isActiveGroup');
+                    if (isActiveGroup) {
+                        isActiveGroup.remove();
+                    }
                 } else {
                     const error = await response.json();
                     alert('Error updating account: ' + (error.detail || error.message));
@@ -652,9 +712,47 @@
             }
         }
         
-        // Delete account
+        // Toggle account status (activate/deactivate)
+        async function toggleAccountStatus(accountId, activate) {
+            const action = activate ? 'activate' : 'deactivate';
+            if (!confirm(`Are you sure you want to ${action} account "${accountId}"?`)) {
+                return;
+            }
+            
+            try {
+                const response = await authFetch(`/accounts/${accountId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        is_active: activate
+                    })
+                });
+                
+                if (response.ok) {
+                    alert(`Account ${action}d successfully!`);
+                    loadExistingAccounts();
+                } else {
+                    const error = await response.json();
+                    alert(`Error ${action}ing account: ${error.detail || error.message}`);
+                }
+            } catch (error) {
+                alert(`Error ${action}ing account: ${error.message}`);
+            }
+        }
+        
+        // Delete account (HARD DELETE - permanent removal)
         async function deleteAccount(accountId) {
-            if (!confirm(`Are you sure you want to delete account "${accountId}"? This action cannot be undone.`)) {
+            if (!confirm(
+                `⚠️ WARNING: Permanently Delete Account\n\n` +
+                `Are you sure you want to PERMANENTLY DELETE account "${accountId}"?\n\n` +
+                `This is a HARD DELETE that will:\n` +
+                `• Permanently remove the account from the database\n` +
+                `• Cannot be undone\n` +
+                `• Will fail if account has associated strategies\n\n` +
+                `If you want to temporarily disable the account instead,\n` +
+                `use the "Deactivate" button.\n\n` +
+                `Type the account ID to confirm: ${accountId}`
+            )) {
                 return;
             }
             
@@ -664,7 +762,7 @@
                 });
                 
                 if (response.ok || response.status === 204) {
-                    alert('Account deleted successfully!');
+                    alert('Account permanently deleted!');
                     loadExistingAccounts();
                 } else {
                     const error = await response.json();
