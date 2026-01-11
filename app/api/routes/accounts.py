@@ -258,8 +258,8 @@ async def update_account(
                 detail="No fields to update"
             )
         
-        # Update account (sync method for now - update_account is still sync)
-        config = account_service.update_account(current_user.id, account_id, **updates)
+        # Update account (async)
+        config = await account_service.async_update_account(current_user.id, account_id, **updates)
         
         if not config:
             raise HTTPException(
@@ -290,7 +290,7 @@ async def delete_account(
 ):
     """Delete (deactivate) an account."""
     try:
-        success = account_service.delete_account(current_user.id, account_id)
+        success = await account_service.async_delete_account(current_user.id, account_id)
         
         if not success:
             raise HTTPException(

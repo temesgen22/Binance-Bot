@@ -350,6 +350,67 @@ class DatabaseService:
             logger.info(f"Deactivated account {account_id} for user {user_id}")
         return True
     
+    async def async_update_account(
+        self,
+        user_id: UUID,
+        account_id: str,
+        **updates
+    ) -> Optional[Account]:
+        """Update account (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use update_account() with Session")
+        
+        account = await self.async_get_account_by_id(user_id, account_id)
+        if not account:
+            return None
+        
+        # Handle is_default update
+        if "is_default" in updates and updates["is_default"]:
+            # Unset other defaults
+            stmt = update(Account).where(
+                Account.user_id == user_id,
+                Account.is_default == True,
+                Account.id != account.id
+            ).values(is_default=False)
+            await self.db.execute(stmt)
+        
+        for key, value in updates.items():
+            if hasattr(account, key):
+                setattr(account, key, value)
+        
+        try:
+            await self.db.commit()
+            await self.db.refresh(account)
+            logger.info(f"Updated account {account_id} for user {user_id}")
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to update account {account_id}: {e}")
+            raise
+        
+        return account
+    
+    async def async_delete_account(self, user_id: UUID, account_id: str) -> bool:
+        """Delete (deactivate) an account (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use delete_account() with Session")
+        
+        account = await self.async_get_account_by_id(user_id, account_id)
+        if not account:
+            return False
+        
+        # Soft delete: set is_active to False
+        account.is_active = False
+        try:
+            await self.db.commit()
+            await self.db.refresh(account)
+            logger.info(f"Deactivated account {account_id} for user {user_id}")
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to delete account {account_id}: {e}")
+            raise
+        
+        return True
+    
     # ============================================
     # STRATEGY OPERATIONS
     # ============================================

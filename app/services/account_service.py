@@ -283,6 +283,9 @@ class AccountService(BaseCacheService):
         
         If api_key or api_secret are provided in updates, they will be encrypted automatically.
         """
+        if self._is_async:
+            raise RuntimeError("Use async_update_account() with AsyncSession")
+        
         # Encrypt API keys if they're being updated
         if "api_key" in updates:
             try:
@@ -318,8 +321,72 @@ class AccountService(BaseCacheService):
     
     def delete_account(self, user_id: UUID, account_id: str) -> bool:
         """Delete account from database and cache."""
+        if self._is_async:
+            raise RuntimeError("Use async_delete_account() with AsyncSession")
         # Delete from database
         success = self.db_service.delete_account(user_id, account_id)
+        
+        if success:
+            # Delete from cache
+            key = self._redis_key(user_id, account_id)
+            list_key = self._redis_list_key(user_id)
+            self._invalidate_cache(key, list_key)
+        
+        return success
+    
+    async def async_update_account(
+        self,
+        user_id: UUID,
+        account_id: str,
+        **updates
+    ) -> Optional[BinanceAccountConfig]:
+        """Update account in database and invalidate cache (async).
+        
+        If api_key or api_secret are provided in updates, they will be encrypted automatically.
+        """
+        if not self._is_async:
+            raise RuntimeError("Use update_account() with Session")
+        
+        # Encrypt API keys if they're being updated
+        if "api_key" in updates:
+            try:
+                encryption_service = get_encryption_service()
+                updates["api_key_encrypted"] = encryption_service.encrypt(updates.pop("api_key"))
+            except (ValueError, ImportError) as e:
+                logger.warning(f"Encryption service not available: {e}. Storing API key in plaintext.")
+                updates["api_key_encrypted"] = updates.pop("api_key")
+        
+        if "api_secret" in updates:
+            try:
+                encryption_service = get_encryption_service()
+                updates["api_secret_encrypted"] = encryption_service.encrypt(updates.pop("api_secret"))
+            except (ValueError, ImportError) as e:
+                logger.warning(f"Encryption service not available: {e}. Storing API secret in plaintext.")
+                updates["api_secret_encrypted"] = updates.pop("api_secret")
+        
+        # Update in database (async)
+        db_account = await self.db_service.async_update_account(user_id, account_id, **updates)
+        
+        if not db_account:
+            return None
+        
+        # Convert to config
+        config = self._db_account_to_config(db_account)
+        
+        # Invalidate cache
+        key = self._redis_key(user_id, account_id)
+        list_key = self._redis_list_key(user_id)
+        self._invalidate_cache(key, list_key)
+        
+        return config
+    
+    async def async_delete_account(self, user_id: UUID, account_id: str) -> bool:
+        """Delete account from database and cache (async)."""
+        if not self._is_async:
+            raise RuntimeError("Use delete_account() with Session")
+        
+        # Delete from database (async)
+        success = await self.db_service.async_delete_account(user_id, account_id)
         
         if success:
             # Delete from cache
