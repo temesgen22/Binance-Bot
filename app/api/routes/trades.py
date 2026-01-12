@@ -600,9 +600,12 @@ def get_pnl_overview(
     Also checks Binance for positions that might not have corresponding trades
     (e.g., manually opened positions).
     """
+    logger.info(f"Getting PnL overview for user {current_user.id}, account_id: {account_id}")
+    
     # Get all unique symbols from strategies with trades
     symbols = set()
     strategies = runner.list_strategies()
+    logger.debug(f"Found {len(strategies)} strategies")
     for strategy in strategies:
         # Apply account_id filter
         if account_id and strategy.account_id != account_id:
@@ -610,6 +613,7 @@ def get_pnl_overview(
         trades = runner.get_trades(strategy.id)
         if trades:
             symbols.add(strategy.symbol)
+            logger.debug(f"Added symbol {strategy.symbol} from strategy {strategy.id} ({len(trades)} trades)")
     
     # Also check Binance for positions that might not have trades
     # Use account-specific client when filtering by account_id
@@ -619,6 +623,9 @@ def get_pnl_overview(
             account_client = client_manager.get_client(account_id)
             if account_client:
                 position_client = account_client
+                logger.debug(f"Using account-specific client for {account_id}")
+            else:
+                logger.warning(f"Account-specific client not found for {account_id}, using default client")
         except Exception as exc:
             logger.warning(f"Could not get account-specific client for {account_id}, using default: {exc}")
     
@@ -627,18 +634,27 @@ def get_pnl_overview(
     try:
         # Get all positions from Binance
         # Note: Binance futures_position_information() without symbol returns all positions
-        rest = position_client._ensure()
-        all_binance_positions = rest.futures_position_information()
-        for pos in all_binance_positions:
-            position_amt = float(pos.get("positionAmt", 0))
-            if abs(position_amt) > 0:
-                symbol = pos.get("symbol", "").upper()
-                if symbol:
-                    symbols.add(symbol)
-                    logger.debug(f"Found Binance position for {symbol} (not in strategies with trades)")
+        if position_client is None:
+            logger.warning("Position client is None, cannot fetch all positions from Binance")
+        else:
+            rest = position_client._ensure()
+            if rest is None:
+                logger.warning("REST client is None, cannot fetch all positions from Binance")
+            else:
+                all_binance_positions = rest.futures_position_information()
+                logger.debug(f"Fetched {len(all_binance_positions)} total positions from Binance")
+                for pos in all_binance_positions:
+                    position_amt = float(pos.get("positionAmt", 0))
+                    if abs(position_amt) > 0:
+                        symbol = pos.get("symbol", "").upper()
+                        if symbol:
+                            symbols.add(symbol)
+                            logger.info(f"Found Binance position for {symbol} (not in strategies with trades), size: {position_amt}")
     except Exception as exc:
-        logger.debug(f"Could not fetch all positions from Binance (this is optional): {exc}")
+        logger.warning(f"Could not fetch all positions from Binance (this is optional): {exc}", exc_info=True)
         # Continue with symbols from strategies only - this is not critical
+    
+    logger.info(f"Total symbols to process: {len(symbols)} ({sorted(symbols)})")
     
     # Get PnL for each symbol
     pnl_list = []
@@ -651,11 +667,16 @@ def get_pnl_overview(
                 client=client,
                 client_manager=client_manager
             )
+            open_pos_count = len(pnl.open_positions) if pnl.open_positions else 0
+            if open_pos_count > 0:
+                logger.info(f"Symbol {symbol}: {open_pos_count} open positions found")
             pnl_list.append(pnl)
         except Exception as exc:
-            logger.warning(f"Failed to get PnL for {symbol}: {exc}")
-            continue
+            logger.error(f"Error getting PnL for {symbol}: {exc}", exc_info=True)
+            # Continue with other symbols even if one fails
     
+    total_open_positions = sum(len(pnl.open_positions) if pnl.open_positions else 0 for pnl in pnl_list)
+    logger.info(f"Returning PnL overview: {len(pnl_list)} symbols, {total_open_positions} total open positions")
     return pnl_list
 
 

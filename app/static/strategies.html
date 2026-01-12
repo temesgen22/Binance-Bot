@@ -1512,11 +1512,14 @@
                 
                 if (riskChecks.daily_loss) {
                     const daily = riskChecks.daily_loss;
-                    const pct = daily.limit_value < 0 
-                        ? Math.abs((daily.current_value / daily.limit_value) * 100)
-                        : 0;
-                    if (pct >= 80) {
-                        warnings.push(`Daily Loss: ${pct.toFixed(0)}%`);
+                    // daily.current_value is negative when there's a loss (e.g., -400)
+                    // daily.limit_value is positive (e.g., 500) - the max_daily_loss_usdt
+                    // Calculate percentage: abs(current_value) / limit_value * 100
+                    if (daily.limit_value && daily.limit_value > 0 && daily.current_value < 0) {
+                        const pct = (Math.abs(daily.current_value) / daily.limit_value) * 100;
+                        if (pct >= 80) {
+                            warnings.push(`Daily Loss: ${pct.toFixed(0)}%`);
+                        }
                     }
                 }
                 
