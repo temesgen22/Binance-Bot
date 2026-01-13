@@ -123,6 +123,7 @@ async def test_start_sets_started_at_timestamp():
     # Mock the run loop to avoid actual execution
     async def short_run_loop(strategy, summary_obj, risk=None, executor=None):
         summary_obj.status = StrategyState.running
+        await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
     
     with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         # Capture the timestamp before starting

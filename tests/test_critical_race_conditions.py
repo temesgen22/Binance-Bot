@@ -132,7 +132,9 @@ class TestConcurrencyRaceConditions:
         
         # Mock executor to prevent actual execution
         strategy_runner.executor = MagicMock()
-        strategy_runner.executor.run_loop = AsyncMock()
+        async def mock_run_loop(strategy, summary, risk=None, executor=None):
+            await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
+        strategy_runner.executor.run_loop = mock_run_loop
         
         # Start strategy twice concurrently
         results = await asyncio.gather(
@@ -198,7 +200,9 @@ class TestConcurrencyRaceConditions:
         
         # Mock executor
         strategy_runner.executor = MagicMock()
-        strategy_runner.executor.run_loop = AsyncMock()
+        async def mock_run_loop(strategy, summary, risk=None, executor=None):
+            await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
+        strategy_runner.executor.run_loop = mock_run_loop
         
         # Start both concurrently
         results = await asyncio.gather(
@@ -233,7 +237,9 @@ class TestConcurrencyRaceConditions:
         # Register and start strategy
         strategy_runner._strategies[strategy_summary.id] = strategy_summary
         strategy_runner.executor = MagicMock()
-        strategy_runner.executor.run_loop = AsyncMock()
+        async def mock_run_loop(strategy, summary, risk=None, executor=None):
+            await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
+        strategy_runner.executor.run_loop = mock_run_loop
         
         # Start strategy
         await strategy_runner.start(strategy_summary.id)
@@ -1309,7 +1315,7 @@ class TestPersistenceOrdering:
 
         with patch.object(strategy_runner.executor, 'run_loop', new_callable=AsyncMock) as mock_run_loop:
 
-            mock_run_loop.side_effect = lambda s, sum: asyncio.sleep(0.1)  # Short run
+            mock_run_loop.side_effect = lambda strategy, summary, risk=None, executor=None: asyncio.sleep(0.2)  # Short run
 
             
 
@@ -1393,7 +1399,9 @@ class TestPersistenceOrdering:
 
         with patch.object(strategy_runner.executor, 'run_loop', new_callable=AsyncMock) as mock_run_loop:
 
-            mock_run_loop.side_effect = lambda s, sum: asyncio.sleep(0.1)
+            async def mock_run_loop(strategy, summary, risk=None, executor=None):
+                await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
+            mock_run_loop.side_effect = mock_run_loop
 
             
 
@@ -1517,9 +1525,12 @@ class TestPersistenceOrdering:
 
         # Restore running strategies
 
-        with patch.object(strategy_runner.executor, 'run_loop', new_callable=AsyncMock) as mock_run_loop:
-
-            mock_run_loop.side_effect = lambda s, sum: asyncio.sleep(0.1)
+        async def mock_run_loop_func(strategy, summary, risk=None, executor=None):
+            # Run indefinitely (or at least longer than the 0.5s verification delay)
+            while True:
+                await asyncio.sleep(1.0)
+        
+        with patch.object(strategy_runner.executor, 'run_loop', side_effect=mock_run_loop_func):
 
             
 
@@ -1687,7 +1698,9 @@ class TestCancellationCorrectness:
 
         with patch.object(strategy_runner.executor, 'run_loop', new_callable=AsyncMock) as mock_run_loop:
 
-            mock_run_loop.side_effect = lambda s, sum: asyncio.sleep(0.1)
+            async def mock_run_loop(strategy, summary, risk=None, executor=None):
+                await asyncio.sleep(0.2)  # Run long enough to pass immediate verification
+            mock_run_loop.side_effect = mock_run_loop
 
             
 

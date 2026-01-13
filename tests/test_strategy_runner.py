@@ -70,6 +70,8 @@ async def test_register_auto_start_does_not_double_start(monkeypatch):
 
     async def short_run_loop(strategy, summary_obj, risk=None, executor=None):
         summary_obj.status = StrategyState.running
+        # Wait a bit so the task doesn't complete immediately (which triggers error detection)
+        await asyncio.sleep(0.2)
 
     with patch.object(StrategyExecutor, "run_loop", side_effect=short_run_loop):
         started = await runner.start(summary.id)

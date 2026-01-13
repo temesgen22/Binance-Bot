@@ -23,6 +23,7 @@ def create_completed_trades_on_position_close(
     exit_price: float,  # Exit price
     position_side: str,  # "LONG" or "SHORT"
     exit_reason: Optional[str] = None,
+    db: Optional[Session] = None,  # Optional: for testing only (thread-unsafe if shared)
 ) -> List[UUID]:
     """Create completed trades when a position is closed.
     
@@ -34,8 +35,9 @@ def create_completed_trades_on_position_close(
     
     Called ON-WRITE when a position is closed.
     
-    CRITICAL: Creates its own database session (thread-safe).
+    CRITICAL: Creates its own database session (thread-safe) unless `db` is provided.
     SQLAlchemy sessions are NOT thread-safe and should not be shared.
+    The `db` parameter is ONLY for testing - never pass a session in production!
     
     Args:
         user_id: User UUID
@@ -46,6 +48,7 @@ def create_completed_trades_on_position_close(
         exit_price: Exit price
         position_side: Position side ("LONG" or "SHORT")
         exit_reason: Exit reason (optional)
+        db: Optional database session (FOR TESTING ONLY - never use in production!)
     
     Returns:
         List of CompletedTrade UUIDs created
@@ -60,11 +63,15 @@ def create_completed_trades_on_position_close(
         f"exit_quantity={exit_quantity}, position_side={position_side}"
     )
     
-    # CRITICAL FIX: Create a new database session for this thread
+    # CRITICAL FIX: Create a new database session for this thread (unless provided for testing)
     # SQLAlchemy sessions are NOT thread-safe and should not be shared across threads
     # Use session factory to create a new session in this thread
-    session_factory = get_session_factory()
-    db = session_factory()
+    # NOTE: `db` parameter is ONLY for testing - production code should never pass it
+    should_close_db = False
+    if db is None:
+        session_factory = get_session_factory()
+        db = session_factory()
+        should_close_db = True
     
     try:
         # Get strategy UUID from database
@@ -257,9 +264,10 @@ def create_completed_trades_on_position_close(
         # Don't fail position closing if completed trade creation fails
         return []
     finally:
-        # CRITICAL: Always close the session
-        try:
-            db.close()
-        except Exception:
-            pass
+        # Only close database if we created it (not if it was passed for testing)
+        if should_close_db:
+            try:
+                db.close()
+            except Exception:
+                pass
 

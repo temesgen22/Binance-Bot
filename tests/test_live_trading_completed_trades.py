@@ -199,7 +199,7 @@ class TestLiveTradingCompletedTrades:
         """Test that completed trade is created when position closes in live trading."""
         # Simulate position close: call the helper function
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,  # Use strategy_id string
             exit_trade_id=exit_trade.id,
@@ -322,7 +322,7 @@ class TestLiveTradingCompletedTrades:
         
         # Create completed trades
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -401,7 +401,7 @@ class TestLiveTradingCompletedTrades:
         
         # Create first completed trade
         completed_trade_ids_1 = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit1.id,
@@ -516,7 +516,7 @@ class TestLiveTradingCompletedTrades:
         
         # Create completed trade
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -549,7 +549,7 @@ class TestLiveTradingCompletedTrades:
         """Test that function returns empty list when strategy not found."""
         # Use non-existent strategy_id
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id="non-existent-strategy",
             exit_trade_id=exit_trade.id,
@@ -577,7 +577,7 @@ class TestLiveTradingCompletedTrades:
         fake_exit_trade_id = uuid4()
         
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=fake_exit_trade_id,
@@ -604,7 +604,7 @@ class TestLiveTradingCompletedTrades:
         # No entry trades created
         
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -631,7 +631,7 @@ class TestLiveTradingCompletedTrades:
         """Test that calling the function twice with same parameters doesn't create duplicates."""
         # First call
         completed_trade_ids_1 = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -645,7 +645,7 @@ class TestLiveTradingCompletedTrades:
         
         # Second call with same parameters (should be idempotent)
         completed_trade_ids_2 = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -712,7 +712,7 @@ class TestLiveTradingCompletedTrades:
         
         # Create completed trade
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,
@@ -796,7 +796,7 @@ class TestLiveTradingIntegration:
         
         # Simulate completed trade creation (as would be called from strategy_executor)
         completed_trade_ids = create_completed_trades_on_position_close(
-            db=db_session,
+            db=db_session,  # Pass test session for testing
             user_id=test_user.id,
             strategy_id=test_strategy.strategy_id,
             exit_trade_id=exit_trade.id,

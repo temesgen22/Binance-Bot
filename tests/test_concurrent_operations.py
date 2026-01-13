@@ -256,8 +256,8 @@ async def test_dead_task_cleanup_concurrent():
         strategy_ids.append(summary.id)
     
     # Mock executor.run_loop to complete quickly (simulate dead tasks)
-    async def mock_run_loop(*args, **kwargs):
-        await asyncio.sleep(0.01)
+    async def mock_run_loop(strategy, summary, risk=None, executor=None):
+        await asyncio.sleep(0.15)  # Run long enough to pass immediate verification, then crash
         raise Exception("Task completed/crashed")
     
     runner.executor.run_loop = mock_run_loop
