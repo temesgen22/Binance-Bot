@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from statistics import fmean
 from typing import Deque, Optional, Literal
 from collections import deque
@@ -378,15 +379,21 @@ class EmaScalpingStrategy(Strategy):
         """
         try:
             # Get enough klines to compute EMAs
+            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
             limit = max(self.slow_period + 10, 50)
-            klines = self.client.get_klines(
+            klines = await asyncio.to_thread(
+                self.client.get_klines,
                 symbol=self.context.symbol,
                 interval=self.interval,
                 limit=limit
             )
             
             if not klines or len(klines) < self.slow_period + 2:
-                current_price = self.client.get_price(self.context.symbol)
+                # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+                current_price = await asyncio.to_thread(
+                    self.client.get_price,
+                    self.context.symbol
+                )
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,
@@ -404,7 +411,11 @@ class EmaScalpingStrategy(Strategy):
             
             # CRITICAL: If in position, check TP/SL using live price even if no new candle
             # This allows TP/SL to be evaluated on every call, not just when candles close
-            live_price = self.client.get_price(self.context.symbol)
+            # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+            live_price = await asyncio.to_thread(
+                self.client.get_price,
+                self.context.symbol
+            )
             
             # BUG FIX 1: Enforce monotonic candle time - prevent processing older candles
             # This prevents time from going backwards and causing contradictory signals
@@ -415,7 +426,7 @@ class EmaScalpingStrategy(Strategy):
             # Duplicates are handled separately below to maintain clear logic separation
             if self.last_closed_candle_time is not None and last_closed_time < self.last_closed_candle_time:
                 # Strictly older candle - skip EMA processing but allow TP/SL checks
-                logger.warning(
+                logger.debug(
                     f"[{self.context.id}] Skipping OLDER candle: time={last_closed_time} "
                     f"(last_processed={self.last_closed_candle_time}). "
                     f"Only checking TP/SL if in position."
@@ -688,7 +699,9 @@ class EmaScalpingStrategy(Strategy):
                         # Higher-timeframe bias check (C)
                         if self.enable_htf_bias and self.interval == "1m":
                             # Check 5m trend
-                            htf_klines = self.client.get_klines(
+                            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
+                            htf_klines = await asyncio.to_thread(
+                                self.client.get_klines,
                                 symbol=self.context.symbol,
                                 interval="5m",
                                 limit=self.slow_period + 5
@@ -844,7 +857,11 @@ class EmaScalpingStrategy(Strategy):
             
         except Exception as exc:
             logger.error(f"[{self.context.id}] EMA scalping evaluation error: {exc}")
-            current_price = self.client.get_price(self.context.symbol)
+            # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+            current_price = await asyncio.to_thread(
+                self.client.get_price,
+                self.context.symbol
+            )
             return StrategySignal(
                 action="HOLD",
                 symbol=self.context.symbol,

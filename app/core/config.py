@@ -53,6 +53,11 @@ class Settings(BaseSettings):
         alias="WALK_FORWARD_TASK_CLEANUP_AGE_HOURS",
         description="Age in hours after which completed walk-forward tasks are cleaned up"
     )
+    dead_task_cleanup_interval_seconds: int = Field(
+        default=60,
+        alias="DEAD_TASK_CLEANUP_INTERVAL_SECONDS",
+        description="Interval in seconds for periodic cleanup of dead strategy tasks (default: 60 seconds)"
+    )
     api_port: int = Field(default=8000, alias="API_PORT")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")

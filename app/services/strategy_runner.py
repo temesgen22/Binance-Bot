@@ -109,6 +109,8 @@ class StrategyRunner:
         self._strategies: Dict[str, StrategySummary] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
+        self._cleanup_task: Optional[asyncio.Task] = None  # Periodic cleanup task
+        self._cleanup_running: bool = False  # Flag to control cleanup loop
         
         # Hot-swap support: Track parameter versions and per-strategy locks
         self._params_versions: Dict[str, int] = {}  # Track parameter version for each strategy
@@ -221,16 +223,20 @@ class StrategyRunner:
     
     # _update_strategy_in_db() removed - now handled by state_manager.update_strategy_in_db()
 
-    async def restore_running_strategies(self) -> None:
+    async def restore_running_strategies(self) -> list[str]:
         """Restore all strategies that have status=running from database.
         
         This is called on startup to restore strategies that were running
         before the server was restarted. It respects max_concurrent limit.
+        
+        Returns:
+            List of strategy IDs that were successfully restored
         """
         if not (self.strategy_service and self.user_id):
             logger.debug("Cannot restore running strategies: no strategy_service or user_id")
-            return
+            return []
         
+        restored_ids = []
         try:
             # Load all strategies from database
             self.state_manager.load_from_database()
@@ -250,7 +256,54 @@ class StrategyRunner:
             for strategy_id in running_strategies:
                 try:
                     await self.start(strategy_id)
-                    logger.info(f"Restored running strategy: {strategy_id}")
+                    
+                    # CRITICAL: Verify task is actually running after start
+                    # Wait a moment for task to start, then check if it's still alive
+                    await asyncio.sleep(0.5)  # 500ms to allow task to start
+                    
+                    # Check if task exists and is running
+                    async with self._lock:
+                        if strategy_id in self._tasks:
+                            task = self._tasks[strategy_id]
+                            if task.done():
+                                # Task completed immediately - mark as error
+                                exception = None
+                                try:
+                                    exception = task.exception()
+                                except Exception:
+                                    pass
+                                
+                                logger.error(
+                                    f"Restored strategy {strategy_id} but task died immediately. "
+                                    f"Exception: {exception}"
+                                )
+                                # Remove dead task and mark as error
+                                del self._tasks[strategy_id]
+                                self._strategies[strategy_id].status = StrategyState.error
+                                self.state_manager.update_strategy_in_db(
+                                    strategy_id,
+                                    save_to_redis=True,
+                                    status=StrategyState.error.value
+                                )
+                                # Don't add to restored_ids - restoration failed
+                                continue
+                            else:
+                                # Task is running - restoration successful
+                                logger.info(f"✅ Restored running strategy: {strategy_id} (task is active)")
+                                restored_ids.append(strategy_id)
+                        else:
+                            # Task was never created - mark as error
+                            logger.error(
+                                f"Restored strategy {strategy_id} but task was not created"
+                            )
+                            self._strategies[strategy_id].status = StrategyState.error
+                            self.state_manager.update_strategy_in_db(
+                                strategy_id,
+                                save_to_redis=True,
+                                status=StrategyState.error.value
+                            )
+                            # Don't add to restored_ids - restoration failed
+                            continue
                 except MaxConcurrentStrategiesError:
                     logger.warning(
                         f"Cannot restore strategy {strategy_id}: max_concurrent limit reached. "
@@ -258,7 +311,7 @@ class StrategyRunner:
                     )
                     break  # Stop restoring if limit reached
                 except Exception as exc:
-                    logger.error(f"Failed to restore strategy {strategy_id}: {exc}")
+                    logger.error(f"Failed to restore strategy {strategy_id}: {exc}", exc_info=True)
                     # Mark as error if restore fails
                     if strategy_id in self._strategies:
                         self._strategies[strategy_id].status = StrategyState.error
@@ -269,6 +322,8 @@ class StrategyRunner:
                         )
         except Exception as exc:
             logger.error(f"Failed to restore running strategies: {exc}", exc_info=True)
+        
+        return restored_ids
 
     async def _cleanup_dead_tasks(self) -> None:
         """Remove completed/cancelled tasks from _tasks dictionary.
@@ -318,6 +373,86 @@ class StrategyRunner:
                 f"Strategy {strategy_id} task completed unexpectedly. "
                 f"Marking as error status."
             )
+
+    async def _periodic_cleanup_loop(self, interval_seconds: int) -> None:
+        """Periodic background task to clean up dead tasks.
+        
+        This runs continuously in the background, calling _cleanup_dead_tasks()
+        at regular intervals. It's designed to be safe and non-blocking.
+        
+        Args:
+            interval_seconds: How often to run cleanup (in seconds)
+        """
+        logger.info(f"🔄 Starting periodic dead task cleanup (interval: {interval_seconds}s)")
+        
+        while self._cleanup_running:
+            try:
+                # Wait for the interval (with early exit if flag changes)
+                await asyncio.sleep(interval_seconds)
+                
+                # Check flag again after sleep (might have changed during sleep)
+                if not self._cleanup_running:
+                    break
+                
+                # Run cleanup (already thread-safe and handles exceptions internally)
+                await self._cleanup_dead_tasks()
+                
+            except asyncio.CancelledError:
+                # Normal shutdown - exit gracefully
+                logger.debug("Periodic cleanup task cancelled (shutdown)")
+                break
+            except Exception as exc:
+                # Log error but continue running (don't crash the cleanup task)
+                logger.error(
+                    f"Error in periodic dead task cleanup: {exc}. "
+                    f"Continuing cleanup loop...",
+                    exc_info=True
+                )
+                # Wait a bit before retrying to avoid rapid error loops
+                await asyncio.sleep(5)
+        
+        logger.info("🛑 Periodic dead task cleanup stopped")
+
+    def start_periodic_cleanup(self, interval_seconds: int) -> None:
+        """Start the periodic cleanup task.
+        
+        Args:
+            interval_seconds: How often to run cleanup (in seconds)
+        """
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            logger.warning("Periodic cleanup task is already running")
+            return
+        
+        self._cleanup_running = True
+        self._cleanup_task = asyncio.create_task(
+            self._periodic_cleanup_loop(interval_seconds)
+        )
+        logger.info(f"✅ Started periodic dead task cleanup (interval: {interval_seconds}s)")
+
+    async def stop_periodic_cleanup(self) -> None:
+        """Stop the periodic cleanup task gracefully."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            return
+        
+        logger.info("🛑 Stopping periodic dead task cleanup...")
+        self._cleanup_running = False
+        
+        # Cancel the task
+        self._cleanup_task.cancel()
+        
+        try:
+            # Wait for task to finish (with timeout)
+            await asyncio.wait_for(self._cleanup_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Periodic cleanup task did not stop within timeout")
+        except asyncio.CancelledError:
+            # Expected - task was cancelled
+            pass
+        except Exception as exc:
+            logger.warning(f"Error stopping periodic cleanup task: {exc}")
+        
+        self._cleanup_task = None
+        logger.info("✅ Periodic dead task cleanup stopped")
 
 
     def register(self, payload: CreateStrategyRequest, account_uuid: Optional["UUID"] = None) -> StrategySummary:
@@ -579,6 +714,42 @@ class StrategyRunner:
             # asyncio.Lock is not re-entrant, so nested acquisition would deadlock
             self._tasks[strategy_id] = task
             summary.status = StrategyState.running
+        
+        # CRITICAL FIX: Check if task failed immediately after creation
+        # Give it a tiny moment to start, then check if it's already done (failed)
+        await asyncio.sleep(0.1)  # 100ms to allow task to start
+        if task.done():
+            # Task completed immediately - likely an error
+            try:
+                # Get the exception if any
+                exception = task.exception()
+                if exception:
+                    logger.error(
+                        f"Strategy {strategy_id} task failed immediately after start: {exception}",
+                        exc_info=exception
+                    )
+                else:
+                    logger.warning(
+                        f"Strategy {strategy_id} task completed immediately after start (no exception)"
+                    )
+            except Exception as exc:
+                logger.error(f"Error checking task exception for {strategy_id}: {exc}")
+            
+            # Clean up the dead task
+            async with self._lock:
+                self._tasks.pop(strategy_id, None)
+                summary.status = StrategyState.error
+                # Update database to reflect error status
+                self.state_manager.update_strategy_in_db(
+                    strategy_id,
+                    save_to_redis=True,
+                    status=StrategyState.error.value
+                )
+            
+            raise RuntimeError(
+                f"Strategy {strategy_id} task failed immediately after start. "
+                f"Check logs for details."
+            )
         
         # Update database FIRST (source of truth), then Redis
         # This prevents data loss if database update fails

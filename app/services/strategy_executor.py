@@ -425,6 +425,12 @@ class StrategyExecutor:
         prev_size = summary.position_size
         prev_entry = summary.entry_price
         
+        # Log position state before order for debugging
+        logger.debug(
+            f"[{summary.id}] Position state BEFORE order {order_response.order_id}: "
+            f"side={prev_side}, size={prev_size}, entry={prev_entry}"
+        )
+        
         # Update entry price and position size
         if order_response.side == "BUY":
             if summary.position_side == "SHORT":
@@ -463,6 +469,13 @@ class StrategyExecutor:
             (order_response.side == "BUY" and position_direction == "SHORT")
         )
         
+        # Log position detection for debugging
+        logger.debug(
+            f"[{summary.id}] Position detection for order {order_response.order_id}: "
+            f"prev_side={prev_side}, position_direction={position_direction}, "
+            f"is_opening={is_opening_order}, is_closing={is_closing_order}"
+        )
+        
         if is_opening_order:
             new_position = "LONG" if order_response.side == "BUY" else "SHORT"
             logger.info(
@@ -494,9 +507,6 @@ class StrategyExecutor:
                     from app.services.completed_trade_helper import create_completed_trades_on_position_close
                     from app.models.db_models import Trade as DBTrade
                     
-                    # Get database session
-                    db = self.order_manager.strategy_service.db_service.db
-                    
                     # Get strategy UUID first (summary.id is strategy_id string, not UUID)
                     db_strategy = self.order_manager.strategy_service.db_service.get_strategy(
                         self.order_manager.user_id,
@@ -509,36 +519,42 @@ class StrategyExecutor:
                         )
                     else:
                         # Get exit trade UUID (just saved)
-                        exit_trade = db.query(DBTrade).filter(
-                            DBTrade.strategy_id == db_strategy.id,  # Use UUID, not string
-                            DBTrade.order_id == order_response.order_id
-                        ).first()
-                    
-                        if exit_trade:
-                            # Create completed trades (non-blocking - fire and forget)
-                            asyncio.create_task(
-                                asyncio.to_thread(
-                                    create_completed_trades_on_position_close,
-                                    db,
-                                    self.order_manager.user_id,
-                                    summary.id,  # Strategy ID string
-                                    exit_trade.id,  # Exit trade UUID
-                                    order_response.order_id,  # Exit order ID
-                                    order_response.executed_qty,  # Exit quantity
-                                    float(order_response.avg_price or order_response.price),  # Exit price
-                                    position_direction,  # Position side (LONG or SHORT)
-                                    exit_reason,  # Exit reason
+                        # Use a temporary session to get exit trade ID (needed before background thread)
+                        from app.core.database import get_session_factory
+                        temp_db = get_session_factory()()
+                        try:
+                            exit_trade = temp_db.query(DBTrade).filter(
+                                DBTrade.strategy_id == db_strategy.id,  # Use UUID, not string
+                                DBTrade.order_id == order_response.order_id
+                            ).first()
+                            
+                            if exit_trade:
+                                # Create completed trades (non-blocking - fire and forget)
+                                # CRITICAL FIX: Don't pass database session - function creates its own (thread-safe)
+                                asyncio.create_task(
+                                    asyncio.to_thread(
+                                        create_completed_trades_on_position_close,
+                                        self.order_manager.user_id,
+                                        summary.id,  # Strategy ID string
+                                        exit_trade.id,  # Exit trade UUID
+                                        order_response.order_id,  # Exit order ID
+                                        order_response.executed_qty,  # Exit quantity
+                                        float(order_response.avg_price or order_response.price),  # Exit price
+                                        position_direction,  # Position side (LONG or SHORT)
+                                        exit_reason,  # Exit reason
+                                    )
                                 )
-                            )
-                            logger.debug(
-                                f"[{summary.id}] Creating completed trades for position close: "
-                                f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"[{summary.id}] Exit trade {order_response.order_id} not found in database. "
-                                f"Cannot create completed trades."
-                            )
+                                logger.debug(
+                                    f"[{summary.id}] Creating completed trades for position close: "
+                                    f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[{summary.id}] Exit trade {order_response.order_id} not found in database. "
+                                    f"Cannot create completed trades."
+                                )
+                        finally:
+                            temp_db.close()
                 except Exception as e:
                     # Don't fail position closing if completed trade creation fails
                     logger.warning(

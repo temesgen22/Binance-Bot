@@ -1848,10 +1848,106 @@ async def get_strategy_risk_status(
             logger.warning(f"Error getting risk config for strategy {strategy_id}: {e}")
             risk_config = None
         
+        # CRITICAL: Check account-level risk status FIRST
+        # If account is breached, ALL strategies for that account should be blocked
+        account_risk_status = None
+        account_daily_loss_usdt = 0.0
+        account_breach_reasons = []
+        
+        if account_id and risk_config:
+            try:
+                # Calculate account-level daily loss (across ALL strategies for this account)
+                trade_service = TradeService(db=db)
+                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # Get all trades for this account today
+                account_trades = trade_service.get_trades_by_account(user_id, account_id) or []
+                account_trades_today = [
+                    t for t in account_trades
+                    if hasattr(t, 'timestamp') and t.timestamp and t.timestamp >= today_start
+                ]
+                
+                # Calculate account-level daily loss from completed trades
+                from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
+                
+                # Get all strategies for this account
+                # Query strategies by account_id (account_id is the UUID foreign key)
+                account_uuid = None
+                try:
+                    db_account = db_service.get_account_by_id(user_id, account_id)
+                    if db_account:
+                        account_uuid = db_account.id
+                except Exception:
+                    pass
+                
+                account_strategies = []
+                if account_uuid:
+                    try:
+                        from app.models.db_models import Strategy
+                        account_strategies = db.query(Strategy).filter(
+                            Strategy.user_id == user_id,
+                            Strategy.account_id == account_uuid
+                        ).all()
+                    except Exception as e:
+                        logger.debug(f"Error getting strategies for account {account_id}: {e}")
+                
+                # Calculate total daily loss across all strategies for this account
+                account_total_daily_loss = 0.0
+                for acc_strategy in account_strategies:
+                    try:
+                        completed_trades = _get_completed_trades_from_database(
+                            db_service=db_service,
+                            user_id=user_id,
+                            strategy_uuid=acc_strategy.id,
+                            strategy_id=acc_strategy.strategy_id,
+                            start_datetime=today_start,
+                            end_datetime=None
+                        )
+                        for trade in completed_trades:
+                            pnl = _get_pnl_from_completed_trade(trade)
+                            account_total_daily_loss += pnl
+                    except Exception as e:
+                        logger.debug(f"Error getting completed trades for account strategy {acc_strategy.strategy_id}: {e}")
+                
+                account_daily_loss_usdt = account_total_daily_loss
+                
+                # Check if account-level daily loss exceeds limit
+                if risk_config.max_daily_loss_usdt:
+                    max_daily_loss = float(risk_config.max_daily_loss_usdt)
+                    if max_daily_loss > 0 and account_daily_loss_usdt < 0:
+                        loss_threshold = -max_daily_loss
+                        if account_daily_loss_usdt <= loss_threshold:
+                            account_risk_status = "breach"
+                            account_breach_reasons.append(
+                                f"Account daily loss limit exceeded: ${account_daily_loss_usdt:.2f} / -${max_daily_loss:.2f}"
+                            )
+                            logger.warning(
+                                f"Account '{account_id}' breached daily loss limit: "
+                                f"${account_daily_loss_usdt:.2f} <= -${max_daily_loss:.2f}"
+                            )
+                
+                # Check other account-level limits (drawdown, weekly loss, exposure)
+                # This uses the same logic as get_realtime_risk_status
+                # For now, we'll focus on daily loss as that's the most common breach
+                
+            except Exception as e:
+                logger.warning(f"Error checking account-level risk status for strategy {strategy_id}: {e}")
+                # Continue with strategy-level checks if account check fails
+        
         # Build risk checks and determine if strategy can trade
         # Default: strategy can trade unless explicitly blocked
         can_trade = True
         blocked_reasons = []
+        
+        # CRITICAL: If account is breached, block ALL strategies for that account
+        if account_risk_status == "breach":
+            can_trade = False
+            blocked_reasons.extend(account_breach_reasons)
+            blocked_reasons.append(f"Account '{account_id}' risk limit breached - all strategies blocked")
+            logger.warning(
+                f"Strategy {strategy_id} blocked: Account '{account_id}' has risk status 'breach'. "
+                f"Account-level daily loss: ${account_daily_loss_usdt:.2f}"
+            )
         
         # Check circuit breaker first (highest priority)
         if is_paused_by_risk:
@@ -1907,73 +2003,94 @@ async def get_strategy_risk_status(
                 
                 # ✅ FALLBACK: If no completed trades from database, use on-demand matching
                 if not all_completed_trades:
-                    today_trades = [t for t in today_trades if t and t.timestamp and t.timestamp >= today_start] if today_trades else []
-                    if today_trades:
+                    # Filter today's trades - ensure we only process database Trade objects (not OrderResponse)
+                    # Database Trade objects have 'strategy_id' attribute, OrderResponse objects don't
+                    today_trades_filtered = []
+                    for t in (today_trades or []):
+                        if not t:
+                            continue
+                        # Only process if it's a database Trade object (has strategy_id attribute)
+                        # Skip if it's already an OrderResponse (no strategy_id attribute)
+                        if hasattr(t, 'strategy_id') and hasattr(t, 'timestamp') and t.timestamp and t.timestamp >= today_start:
+                            today_trades_filtered.append(t)
+                        elif hasattr(t, 'timestamp') and t.timestamp and t.timestamp >= today_start:
+                            # Might be an OrderResponse - log warning and skip
+                            logger.debug(f"Skipping trade object without strategy_id attribute (likely OrderResponse): {type(t)}")
+                            continue
+                    
+                    if today_trades_filtered:
                         # CRITICAL: Match trades to completed positions (same logic as reports page)
                         from app.models.order import OrderResponse
                     
-                    # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
-                    trades_by_strategy_uuid = {}
-                    for db_trade in today_trades:
-                        if not db_trade:
-                            continue
-                        strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
-                        if not strategy_uuid:
-                            continue
+                        # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
+                        trades_by_strategy_uuid = {}
+                        for db_trade in today_trades_filtered:
+                            if not db_trade:
+                                continue
+                            # Ensure it's a database Trade object with strategy_id
+                            if not hasattr(db_trade, 'strategy_id'):
+                                logger.warning(f"Trade object missing strategy_id attribute: {type(db_trade)}")
+                                continue
+                            strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
+                            if not strategy_uuid:
+                                continue
+                            
+                            strategy_uuid_str = str(strategy_uuid)
+                            if strategy_uuid_str not in trades_by_strategy_uuid:
+                                trades_by_strategy_uuid[strategy_uuid_str] = []
+                            trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
                         
-                        strategy_uuid_str = str(strategy_uuid)
-                        if strategy_uuid_str not in trades_by_strategy_uuid:
-                            trades_by_strategy_uuid[strategy_uuid_str] = []
-                        trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
-                    
-                    # Convert and group OrderResponse objects by strategy
-                    trades_by_strategy = {}
-                    for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
-                        if not db_trades:
-                            continue
-                        try:
-                            # Convert database trades to OrderResponse format using helper
-                            order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
-                            if order_responses:
-                                trades_by_strategy[strategy_uuid_str] = order_responses
-                        except Exception as e:
-                            logger.warning(f"Error converting trades to OrderResponse for strategy {strategy_uuid_str}: {e}")
-                            continue
-                    
-                    # Match trades for each strategy
-                    all_completed_trades = []
-                    for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
-                        if not strategy_trades:
-                            continue
+                        # Convert and group OrderResponse objects by strategy
+                        trades_by_strategy = {}
+                        for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
+                            if not db_trades:
+                                continue
+                            try:
+                                # Convert database trades to OrderResponse format using helper
+                                order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
+                                if order_responses:
+                                    trades_by_strategy[strategy_uuid_str] = order_responses
+                            except Exception as e:
+                                logger.warning(f"Error converting trades to OrderResponse for strategy {strategy_uuid_str}: {e}")
+                                continue
                         
-                        strategy_name = "Unknown"
-                        symbol = strategy_trades[0].symbol if strategy_trades else ""
-                        leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
-                        strategy_id_str = "unknown"  # Default strategy_id string
-                        
-                        try:
-                            from uuid import UUID
-                            strategy_uuid_obj = UUID(strategy_uuid_str)
-                            db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
-                            if db_strategy:
-                                strategy_name = db_strategy.name or "Unknown"
-                                symbol = db_strategy.symbol or symbol
-                                leverage = db_strategy.leverage or leverage
-                                strategy_id_str = db_strategy.strategy_id or "unknown"
-                        except Exception as e:
-                            logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
-                        
-                        try:
-                            matched_trades = _match_trades_to_completed_positions(
-                                strategy_trades,
-                                strategy_id,  # Use strategy_id string, not UUID
-                                db_strategy.name or "Unknown",
-                                db_strategy.symbol or (strategy_trades[0].symbol if strategy_trades else ""),
-                                db_strategy.leverage or (strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1)
-                            )
-                            all_completed_trades.extend(matched_trades)
-                        except Exception as e:
-                            logger.warning(f"Error matching trades for strategy {strategy_id}: {e}")
+                        # Match trades for each strategy
+                        for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
+                            if not strategy_trades:
+                                continue
+                            
+                            # Initialize defaults
+                            strategy_name = "Unknown"
+                            symbol = strategy_trades[0].symbol if strategy_trades else ""
+                            leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
+                            strategy_id_str = strategy_id  # Use the function parameter as default
+                            db_strategy = None
+                            
+                            try:
+                                from uuid import UUID
+                                strategy_uuid_obj = UUID(strategy_uuid_str)
+                                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
+                                if db_strategy:
+                                    strategy_name = db_strategy.name or "Unknown"
+                                    symbol = db_strategy.symbol or symbol
+                                    leverage = db_strategy.leverage or leverage
+                                    strategy_id_str = db_strategy.strategy_id or strategy_id
+                            except Exception as e:
+                                logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
+                            
+                            try:
+                                matched_trades = _match_trades_to_completed_positions(
+                                    strategy_trades,
+                                    strategy_id_str,  # Use strategy_id string, not UUID
+                                    strategy_name,
+                                    symbol,
+                                    leverage
+                                )
+                                all_completed_trades.extend(matched_trades)
+                            except Exception as e:
+                                logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
+                                import traceback
+                                logger.debug(f"Traceback: {traceback.format_exc()}")
                 
                 # Calculate daily loss from completed trades
                 daily_loss_usdt = sum(
@@ -2056,11 +2173,31 @@ async def get_strategy_risk_status(
                 "limit_value": float(risk_config.max_portfolio_exposure_usdt) if risk_config.max_portfolio_exposure_usdt else None
             }
             
+            # CRITICAL: If account is breached, override strategy-level daily loss check
+            # Account-level breach takes precedence over strategy-level checks
+            if account_risk_status == "breach":
+                daily_loss_allowed = False
+                # Use account-level daily loss instead of strategy-level
+                daily_loss_usdt = account_daily_loss_usdt
+                logger.warning(
+                    f"Strategy {strategy_id}: Account '{account_id}' breached, "
+                    f"overriding strategy-level daily loss check. Account daily loss: ${account_daily_loss_usdt:.2f}"
+                )
+            
             risk_checks["daily_loss"] = {
                 "allowed": daily_loss_allowed,
-                "current_value": daily_loss_usdt,
+                "current_value": account_daily_loss_usdt if account_risk_status == "breach" else daily_loss_usdt,
                 "limit_value": float(risk_config.max_daily_loss_usdt) if risk_config.max_daily_loss_usdt else None
             }
+            
+            # Add account risk check if account is breached
+            if account_risk_status == "breach":
+                risk_checks["account_risk"] = {
+                    "allowed": False,
+                    "status": account_risk_status,
+                    "breach_reasons": account_breach_reasons,
+                    "account_daily_loss": account_daily_loss_usdt
+                }
             
             # CRITICAL: If daily_loss_allowed is False but daily_loss_usdt >= 0, this is a bug
             # Force it to True to prevent false blocking

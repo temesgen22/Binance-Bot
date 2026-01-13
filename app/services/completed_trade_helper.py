@@ -11,10 +11,10 @@ from loguru import logger
 
 from app.models.db_models import Trade, CompletedTradeOrder, Strategy
 from app.services.completed_trade_service import CompletedTradeService
+from app.core.database import get_session_factory
 
 
 def create_completed_trades_on_position_close(
-    db: Session,
     user_id: UUID,
     strategy_id: str,  # Strategy ID string (not UUID)
     exit_trade_id: UUID,  # Exit trade UUID (just saved)
@@ -34,8 +34,10 @@ def create_completed_trades_on_position_close(
     
     Called ON-WRITE when a position is closed.
     
+    CRITICAL: Creates its own database session (thread-safe).
+    SQLAlchemy sessions are NOT thread-safe and should not be shared.
+    
     Args:
-        db: Database session
         user_id: User UUID
         strategy_id: Strategy ID string (will be converted to UUID)
         exit_trade_id: Exit trade UUID (just saved to database)
@@ -57,6 +59,12 @@ def create_completed_trades_on_position_close(
         f"exit_trade_id={exit_trade_id}, exit_order_id={exit_order_id}, "
         f"exit_quantity={exit_quantity}, position_side={position_side}"
     )
+    
+    # CRITICAL FIX: Create a new database session for this thread
+    # SQLAlchemy sessions are NOT thread-safe and should not be shared across threads
+    # Use session factory to create a new session in this thread
+    session_factory = get_session_factory()
+    db = session_factory()
     
     try:
         # Get strategy UUID from database
@@ -241,6 +249,17 @@ def create_completed_trades_on_position_close(
             f"(duration={duration_ms:.2f}ms): {e}",
             exc_info=True
         )
+        # Rollback on error
+        try:
+            db.rollback()
+        except Exception:
+            pass
         # Don't fail position closing if completed trade creation fails
         return []
+    finally:
+        # CRITICAL: Always close the session
+        try:
+            db.close()
+        except Exception:
+            pass
 

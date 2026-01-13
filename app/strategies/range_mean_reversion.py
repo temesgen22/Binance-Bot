@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Optional, Literal, Tuple
 
 from loguru import logger
@@ -324,15 +325,21 @@ class RangeMeanReversionStrategy(Strategy):
         """
         try:
             # Get enough klines for range detection
+            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
             limit = max(self.lookback_period + 50, 200)
-            klines = self.client.get_klines(
+            klines = await asyncio.to_thread(
+                self.client.get_klines,
                 symbol=self.context.symbol,
                 interval=self.interval,
                 limit=limit
             )
             
             if not klines or len(klines) < self.lookback_period + 10:
-                current_price = self.client.get_price(self.context.symbol)
+                # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+                current_price = await asyncio.to_thread(
+                    self.client.get_price,
+                    self.context.symbol
+                )
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,
@@ -341,7 +348,11 @@ class RangeMeanReversionStrategy(Strategy):
                 )
             
             # Get current price (live)
-            live_price = self.client.get_price(self.context.symbol)
+            # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+            live_price = await asyncio.to_thread(
+                self.client.get_price,
+                self.context.symbol
+            )
             
             # BUG FIX: Check for duplicate/older candles BEFORE any processing
             # This prevents processing the same candle multiple times
@@ -361,7 +372,7 @@ class RangeMeanReversionStrategy(Strategy):
             # CRITICAL FIX: If older candle received, do TP/SL only and return immediately
             # Do NOT update last_closed_candle_time to prevent corrupting forward-only logic
             if self.last_closed_candle_time is not None and last_closed_time < self.last_closed_candle_time:
-                logger.warning(
+                logger.debug(
                     f"[{self.context.id}] Skipping OLDER candle: time={last_closed_time} "
                     f"(last_processed={self.last_closed_candle_time}). "
                     f"Only checking TP/SL if in position, then returning."
@@ -578,7 +589,11 @@ class RangeMeanReversionStrategy(Strategy):
             
         except Exception as e:
             logger.exception(f"[{self.context.id}] Error in range mean-reversion evaluation: {e}")
-            current_price = self.client.get_price(self.context.symbol)
+            # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
+            current_price = await asyncio.to_thread(
+                self.client.get_price,
+                self.context.symbol
+            )
             return StrategySignal(
                 action="HOLD",
                 symbol=self.context.symbol,

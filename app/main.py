@@ -323,6 +323,11 @@ def create_app() -> FastAPI:
             app.state.background_tasks: list[asyncio.Task] = []
             logger.info("✅ Application state configured")
             
+            # Start periodic dead task cleanup (must be in lifespan where event loop exists)
+            cleanup_interval = settings.dead_task_cleanup_interval_seconds
+            runner.start_periodic_cleanup(cleanup_interval)
+            logger.info(f"✅ Started periodic dead task cleanup (interval: {cleanup_interval}s)")
+            
             # Restore running strategies after server restart
             # This ensures strategies that were running before restart are automatically started
             logger.info("🔄 Restoring running strategies...")
@@ -413,6 +418,15 @@ def create_app() -> FastAPI:
             # Shutdown - handle gracefully even if cancelled
             # Note: CancelledError may be raised during shutdown, which is expected behavior
             try:
+                # Stop periodic cleanup first (before stopping strategies)
+                try:
+                    if hasattr(app.state, 'strategy_runner') and app.state.strategy_runner:
+                        runner_instance = app.state.strategy_runner
+                        if hasattr(runner_instance, 'stop_periodic_cleanup'):
+                            await runner_instance.stop_periodic_cleanup()
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.debug(f"Error stopping periodic cleanup: {type(e).__name__}")
+                
                 # Stop all running strategies
                 try:
                     if hasattr(app.state, 'strategy_runner') and app.state.strategy_runner:
