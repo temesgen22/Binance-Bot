@@ -181,6 +181,7 @@ class StrategyRunner:
             trades=self._trades,
             lock=self._lock,
             notification_service=notification_service,  # Pass notification service for risk alerts
+            strategy_runner=self,  # Pass self so order manager can pause strategies
             # Factories can be set later if needed - they're optional
             # portfolio_risk_manager_factory=...,
             # circuit_breaker_factory=...,
@@ -1133,6 +1134,124 @@ class StrategyRunner:
         self._tasks.pop(strategy_id, None)  # Should already be removed by stop(), but just in case
         
         logger.info(f"✅ Strategy {strategy_id} ({summary.name}) deleted permanently")
+
+    async def pause_all_strategies_for_account(
+        self,
+        account_id: str,
+        reason: str = "Daily or weekly loss limit exceeded"
+    ) -> list[str]:
+        """Pause all running strategies for an account when risk limits are exceeded.
+        
+        This method:
+        1. Finds all running strategies for the account
+        2. Updates their status to "paused_by_risk" in database
+        3. Cancels their running tasks
+        4. Logs account-level enforcement event
+        
+        Args:
+            account_id: Account ID string (e.g., "default", "account1")
+            reason: Reason for pausing (e.g., "Daily loss limit exceeded")
+            
+        Returns:
+            List of strategy IDs that were paused
+        """
+        if not (self.strategy_service and self.user_id):
+            logger.warning(
+                f"Cannot pause strategies for account {account_id}: "
+                f"strategy_service or user_id not available"
+            )
+            return []
+        
+        try:
+            # Get account UUID
+            account = self.strategy_service.db_service.get_account_by_id(
+                self.user_id, account_id
+            )
+            if not account:
+                logger.warning(f"Account not found: {account_id}")
+                return []
+            
+            # Get all running strategies for this account
+            from app.models.db_models import Strategy
+            strategies = self.strategy_service.db_service.db.query(Strategy).filter(
+                Strategy.user_id == self.user_id,
+                Strategy.account_id == account.id,
+                Strategy.status == "running"
+            ).all()
+            
+            if not strategies:
+                logger.debug(f"No running strategies found for account {account_id}")
+                return []
+            
+            paused_strategies = []
+            for db_strategy in strategies:
+                strategy_id = db_strategy.strategy_id
+                
+                # Update status to paused_by_risk in database
+                db_strategy.status = "paused_by_risk"
+                paused_strategies.append(strategy_id)
+                
+                # Update in-memory summary if exists
+                if strategy_id in self._strategies:
+                    summary = self._strategies[strategy_id]
+                    from app.models.strategy import StrategyState
+                    summary.status = StrategyState.paused_by_risk
+                    
+                    # Cancel the running task if exists
+                    if strategy_id in self._tasks:
+                        task = self._tasks[strategy_id]
+                        if not task.done():
+                            logger.info(
+                                f"Cancelling task for strategy {strategy_id} "
+                                f"due to account risk limit: {reason}"
+                            )
+                            task.cancel()
+                            # Wait a bit for task to cancel
+                            try:
+                                await asyncio.wait_for(task, timeout=2.0)
+                            except (asyncio.CancelledError, asyncio.TimeoutError):
+                                pass
+                            # Remove from tasks dict
+                            async with self._lock:
+                                self._tasks.pop(strategy_id, None)
+                
+                logger.info(
+                    f"✅ Paused strategy {strategy_id} ({db_strategy.name}) "
+                    f"for account {account_id}: {reason}"
+                )
+            
+            # Commit database changes
+            self.strategy_service.db_service.db.commit()
+            
+            # Log account-level enforcement event
+            if paused_strategies:
+                self.strategy_service.db_service.create_system_event(
+                    event_type="ACCOUNT_STRATEGIES_PAUSED",
+                    event_level="WARNING",
+                    message=f"All strategies paused for account {account_id}: {reason}. "
+                           f"Paused {len(paused_strategies)} strategies: {', '.join(paused_strategies)}",
+                    account_id=account.id,
+                    strategy_id=None,  # Account-level event, not strategy-specific
+                    event_metadata={
+                        "account_id": account_id,
+                        "reason": reason,
+                        "paused_strategies": paused_strategies,
+                        "paused_count": len(paused_strategies)
+                    }
+                )
+                
+                logger.warning(
+                    f"🛑 PAUSED {len(paused_strategies)} strategies for account {account_id}: {reason}"
+                )
+            
+            return paused_strategies
+            
+        except Exception as e:
+            logger.error(
+                f"Error pausing strategies for account {account_id}: {e}",
+                exc_info=True
+            )
+            return []
 
     def list_strategies(self) -> list[StrategySummary]:
         """List all strategies.

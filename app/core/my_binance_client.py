@@ -807,13 +807,24 @@ class BinanceClient:
             logger.debug(f"Could not parse order updateTime: {exc}")
         
         # Commission parsing (actual fee from Binance)
+        # NOTE: Binance order response doesn't include commission - must fetch from user trades
         commission = None
         commission_asset = None
         try:
+            # Try order response first (usually not present)
             commission_str = final_response.get("commission") or final_response.get("commissionFee")
             if commission_str:
                 commission = float(commission_str)
-            commission_asset = final_response.get("commissionAsset")
+                commission_asset = final_response.get("commissionAsset")
+            
+            # If not in order response, fetch from user trades endpoint
+            if commission is None and order_id:
+                try:
+                    commission, commission_asset = self._get_commission_from_user_trades(symbol, order_id)
+                    if commission:
+                        logger.debug(f"Fetched commission {commission} {commission_asset} from user trades for order {order_id}")
+                except Exception as exc:
+                    logger.debug(f"Could not fetch commission from user trades: {exc}")
         except (ValueError, TypeError) as exc:
             logger.debug(f"Could not parse commission: {exc}")
         
@@ -828,8 +839,23 @@ class BinanceClient:
         try:
             # Try to get leverage from current position using existing method
             leverage = self.get_current_leverage(symbol)
+            # If position is closed (leverage not available), try to get from order response
+            if leverage is None:
+                leverage_str = final_response.get("leverage")
+                if leverage_str:
+                    try:
+                        leverage = int(float(leverage_str))
+                    except (ValueError, TypeError):
+                        pass
         except Exception as exc:
             logger.debug(f"Could not get leverage from position info: {exc}")
+            # Fallback: try order response
+            try:
+                leverage_str = final_response.get("leverage")
+                if leverage_str:
+                    leverage = int(float(leverage_str))
+            except (ValueError, TypeError):
+                pass
         
         # Order type and time in force
         order_type_from_response = final_response.get("type")
@@ -901,6 +927,18 @@ class BinanceClient:
                         margin_type = pos_margin_type
         except Exception as exc:
             logger.debug(f"Could not get initial margin/margin type from position info: {exc}")
+        
+        # If margin_type still None and position is closed, try to get from account info
+        if margin_type is None:
+            try:
+                rest_client = self._ensure()
+                account_info = rest_client.futures_account()
+                if account_info:
+                    # Try to get margin type from account (default is usually CROSSED)
+                    # Note: This is a fallback - individual positions can have different margin types
+                    margin_type = "CROSSED"  # Default fallback
+            except Exception as exc:
+                logger.debug(f"Could not get margin type from account info: {exc}")
         
         # Realized PnL - this is typically available from user trades endpoint, not order response
         # We'll leave it None for now as it requires querying a different endpoint
@@ -1405,6 +1443,63 @@ class BinanceClient:
         except Exception as exc:
             logger.warning(f"Unexpected error getting funding fees: {exc}")
             return []
+
+    def _get_commission_from_user_trades(
+        self,
+        symbol: str,
+        order_id: int,
+    ) -> tuple[Optional[float], Optional[str]]:
+        """Get commission from Binance user trades endpoint.
+        
+        Binance order response doesn't include commission, so we need to fetch it
+        from the user trades endpoint using the order_id.
+        
+        Args:
+            symbol: Trading symbol
+            order_id: Binance order ID
+            
+        Returns:
+            Tuple of (commission, commission_asset) or (None, None) if not found
+        """
+        rest = self._ensure()
+        if rest is None:
+            return None, None
+        
+        try:
+            # Fetch user trades for this symbol, limit to recent trades
+            # We'll search for trades matching this order_id
+            user_trades = rest.futures_account_trades(symbol=symbol, limit=100)
+            
+            if not user_trades:
+                return None, None
+            
+            # Find trades matching this order_id and sum commission
+            total_commission = 0.0
+            commission_asset = None
+            
+            for trade in user_trades:
+                trade_order_id = trade.get("orderId")
+                if trade_order_id == order_id:
+                    # Commission is in the trade record
+                    commission_str = trade.get("commission")
+                    if commission_str:
+                        total_commission += float(commission_str)
+                        # Commission asset (usually USDT)
+                        if not commission_asset:
+                            commission_asset = trade.get("commissionAsset", "USDT")
+            
+            return total_commission if total_commission > 0 else None, commission_asset
+        except ClientError as exc:
+            error_code = getattr(exc, 'code', None)
+            status_code = getattr(exc, 'status_code', None)
+            if status_code == 429:
+                logger.warning(f"Rate limit fetching commission for order {order_id}: {exc}")
+            else:
+                logger.debug(f"Could not fetch commission from user trades for order {order_id}: {exc}")
+            return None, None
+        except Exception as exc:
+            logger.debug(f"Unexpected error fetching commission from user trades: {exc}")
+            return None, None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_open_position(self, symbol: str) -> Optional[Dict[str, Any]]:

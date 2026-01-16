@@ -257,6 +257,7 @@ class Strategy(Base):
     trades = relationship("Trade", back_populates="strategy", cascade="all, delete-orphan")
     trade_pairs = relationship("TradePair", back_populates="strategy", cascade="all, delete-orphan")
     metrics = relationship("StrategyMetric", back_populates="strategy", cascade="all, delete-orphan")
+    completed_trades = relationship("CompletedTrade", back_populates="strategy", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("leverage >= 1 AND leverage <= 50", name="strategies_leverage_check"),
@@ -1044,6 +1045,7 @@ class CompletedTrade(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     
     # Relationships
+    strategy = relationship("Strategy", back_populates="completed_trades")
     orders = relationship("CompletedTradeOrder", back_populates="completed_trade", cascade="all, delete-orphan")
     
     __table_args__ = (

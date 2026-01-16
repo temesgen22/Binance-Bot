@@ -232,7 +232,8 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unexpected exceptions."""
-    logger.exception(f"Unexpected error: {exc}", exc_info=exc)
+    # Use % formatting to avoid KeyError when exception message contains curly braces
+    logger.exception("Unexpected error: %s", exc, exc_info=exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

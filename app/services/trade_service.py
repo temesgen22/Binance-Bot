@@ -38,11 +38,64 @@ class TradeService:
         return f"binance_bot:user:{user_id}:trades:recent:{strategy_id}"
     
     def _order_response_to_trade_dict(self, order: OrderResponse, strategy_id: UUID, user_id: UUID) -> dict:
-        """Convert OrderResponse to Trade database model dict."""
+        """Convert OrderResponse to Trade database model dict.
+        
+        Infers position_side from order side and exit_reason if not provided by Binance
+        (one-way mode doesn't return positionSide from Binance).
+        Also calculates missing fields like avg_price, notional_value, etc.
+        """
         # Calculate remaining_qty if orig_qty is available
         remaining_qty = None
         if order.orig_qty is not None and order.executed_qty is not None:
             remaining_qty = max(0.0, order.orig_qty - order.executed_qty)
+        
+        # ✅ INFER position_side if not provided by Binance (one-way mode)
+        # In one-way mode, Binance doesn't return positionSide, so we infer it:
+        # - If exit_reason is set, we're closing a position:
+        #   * SELL order with exit_reason = closing LONG position
+        #   * BUY order with exit_reason = closing SHORT position
+        # - If no exit_reason, we're opening a position:
+        #   * BUY order = opening LONG position
+        #   * SELL order = opening SHORT position
+        position_side = order.position_side
+        if not position_side:
+            if order.exit_reason and order.exit_reason != "UNKNOWN":
+                # Closing a position: infer from order side
+                if order.side == "SELL":
+                    position_side = "LONG"  # SELL closes LONG
+                elif order.side == "BUY":
+                    position_side = "SHORT"  # BUY closes SHORT
+            else:
+                # Opening a position: infer from order side
+                if order.side == "BUY":
+                    position_side = "LONG"  # BUY opens LONG
+                elif order.side == "SELL":
+                    position_side = "SHORT"  # SELL opens SHORT
+        
+        # ✅ CALCULATE avg_price if missing (use price as fallback)
+        avg_price = order.avg_price
+        if avg_price is None and order.price:
+            avg_price = order.price
+        
+        # ✅ CALCULATE notional_value if missing
+        notional_value = order.notional_value
+        if notional_value is None and avg_price and order.executed_qty:
+            notional_value = avg_price * order.executed_qty
+        
+        # ✅ CALCULATE cummulative_quote_qty if missing (use notional_value as fallback)
+        cummulative_quote_qty = order.cummulative_quote_qty
+        if cummulative_quote_qty is None and notional_value:
+            cummulative_quote_qty = notional_value
+        
+        # ✅ SET default order_type if missing (MARKET is most common)
+        order_type = order.order_type
+        if not order_type:
+            order_type = "MARKET"  # Default for most orders
+        
+        # ✅ SET default time_in_force if missing (GTC is most common)
+        time_in_force = order.time_in_force
+        if not time_in_force and order_type == "LIMIT":
+            time_in_force = "GTC"  # Good Till Cancel for limit orders
         
         return {
             "strategy_id": strategy_id,
@@ -51,26 +104,26 @@ class TradeService:
             "client_order_id": order.client_order_id,
             "symbol": order.symbol,
             "side": order.side,
-            "order_type": order.order_type,
+            "order_type": order_type,
             "status": order.status,
             "price": order.price,
-            "avg_price": order.avg_price,
+            "avg_price": avg_price,
             "executed_qty": order.executed_qty,
             "orig_qty": order.orig_qty,
             "remaining_qty": remaining_qty,
-            "notional_value": order.notional_value,
-            "cummulative_quote_qty": order.cummulative_quote_qty,
+            "notional_value": notional_value,
+            "cummulative_quote_qty": cummulative_quote_qty,
             "initial_margin": order.initial_margin,
             "commission": order.commission,
             "commission_asset": order.commission_asset,
             "realized_pnl": order.realized_pnl,
-            "position_side": order.position_side,
+            "position_side": position_side,  # Now inferred if missing
             "leverage": order.leverage,
             "margin_type": order.margin_type,
             "exit_reason": order.exit_reason,
             "timestamp": order.timestamp or datetime.now(timezone.utc),
             "update_time": order.update_time,
-            "time_in_force": order.time_in_force,
+            "time_in_force": time_in_force,
             "working_type": order.working_type,
             "stop_price": order.stop_price,
             "meta": {}  # Can be extended later
@@ -177,8 +230,46 @@ class TradeService:
                 existing_trade.commission_asset = order.commission_asset
             if order.notional_value is not None:
                 existing_trade.notional_value = order.notional_value
+            elif existing_trade.notional_value is None and existing_trade.avg_price and existing_trade.executed_qty:
+                # Calculate notional_value if missing
+                existing_trade.notional_value = existing_trade.avg_price * existing_trade.executed_qty
+            
             if order.cummulative_quote_qty is not None:
                 existing_trade.cummulative_quote_qty = order.cummulative_quote_qty
+            elif existing_trade.cummulative_quote_qty is None and existing_trade.notional_value:
+                # Use notional_value as fallback
+                existing_trade.cummulative_quote_qty = existing_trade.notional_value
+            
+            # Update leverage and margin_type if available
+            if order.leverage is not None:
+                existing_trade.leverage = order.leverage
+            if order.margin_type:
+                existing_trade.margin_type = order.margin_type
+            if order.initial_margin is not None:
+                existing_trade.initial_margin = order.initial_margin
+            
+            # ✅ INFER position_side if missing (same logic as in _order_response_to_trade_dict)
+            if not existing_trade.position_side:
+                if order.exit_reason and order.exit_reason != "UNKNOWN":
+                    # Closing a position
+                    if order.side == "SELL":
+                        existing_trade.position_side = "LONG"  # SELL closes LONG
+                    elif order.side == "BUY":
+                        existing_trade.position_side = "SHORT"  # BUY closes SHORT
+                else:
+                    # Opening a position
+                    if order.side == "BUY":
+                        existing_trade.position_side = "LONG"  # BUY opens LONG
+                    elif order.side == "SELL":
+                        existing_trade.position_side = "SHORT"  # SELL opens SHORT
+            
+            # ✅ SET default order_type if missing
+            if not existing_trade.order_type:
+                existing_trade.order_type = order.order_type or "MARKET"
+            
+            # ✅ SET default time_in_force if missing
+            if not existing_trade.time_in_force and existing_trade.order_type == "LIMIT":
+                existing_trade.time_in_force = order.time_in_force or "GTC"
             
             # Commit the update
             try:
@@ -215,7 +306,7 @@ class TradeService:
                             f"Found existing trade {existing_trade.id} for order {order.order_id}. "
                             f"This is expected for concurrent order execution."
                         )
-                        # Update it with latest data (same as above)
+                        # Update it with latest data (same as regular update path above)
                         existing_trade.status = order.status
                         existing_trade.executed_qty = order.executed_qty
                         existing_trade.avg_price = order.avg_price
@@ -224,6 +315,46 @@ class TradeService:
                             existing_trade.orig_qty = order.orig_qty
                         if existing_trade.orig_qty is not None and existing_trade.executed_qty is not None:
                             existing_trade.remaining_qty = max(0.0, existing_trade.orig_qty - existing_trade.executed_qty)
+                        
+                        # ✅ CRITICAL: Update all fields including commission, leverage, margin_type
+                        if order.commission is not None:
+                            existing_trade.commission = order.commission
+                        if order.commission_asset:
+                            existing_trade.commission_asset = order.commission_asset
+                        if order.notional_value is not None:
+                            existing_trade.notional_value = order.notional_value
+                        elif existing_trade.notional_value is None and existing_trade.avg_price and existing_trade.executed_qty:
+                            existing_trade.notional_value = existing_trade.avg_price * existing_trade.executed_qty
+                        if order.cummulative_quote_qty is not None:
+                            existing_trade.cummulative_quote_qty = order.cummulative_quote_qty
+                        elif existing_trade.cummulative_quote_qty is None and existing_trade.notional_value:
+                            existing_trade.cummulative_quote_qty = existing_trade.notional_value
+                        if order.leverage is not None:
+                            existing_trade.leverage = order.leverage
+                        if order.margin_type:
+                            existing_trade.margin_type = order.margin_type
+                        if order.initial_margin is not None:
+                            existing_trade.initial_margin = order.initial_margin
+                        
+                        # ✅ INFER position_side if missing
+                        if not existing_trade.position_side:
+                            if order.exit_reason and order.exit_reason != "UNKNOWN":
+                                if order.side == "SELL":
+                                    existing_trade.position_side = "LONG"
+                                elif order.side == "BUY":
+                                    existing_trade.position_side = "SHORT"
+                            else:
+                                if order.side == "BUY":
+                                    existing_trade.position_side = "LONG"
+                                elif order.side == "SELL":
+                                    existing_trade.position_side = "SHORT"
+                        
+                        # ✅ SET default order_type and time_in_force if missing
+                        if not existing_trade.order_type:
+                            existing_trade.order_type = order.order_type or "MARKET"
+                        if not existing_trade.time_in_force and existing_trade.order_type == "LIMIT":
+                            existing_trade.time_in_force = order.time_in_force or "GTC"
+                        
                         try:
                             self.db_service.db.commit()
                         except Exception as update_e:

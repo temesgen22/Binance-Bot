@@ -762,6 +762,152 @@ class TestDataConsistency:
             assert trade.strategy_id == test_strategy.id
 
 
+class TestPositionSideInference:
+    """Test position_side inference when not provided by Binance (one-way mode)."""
+    
+    def test_position_side_inferred_from_buy_order_opening(self, trade_service, test_user, test_strategy):
+        """Test that BUY order without position_side infers LONG (opening position)."""
+        order = make_order_response(
+            order_id=2001,
+            symbol="BTCUSDT",
+            side="BUY",
+            price=50000.0,
+            executed_qty=0.001
+        )
+        # position_side is None (one-way mode)
+        order.position_side = None
+        order.exit_reason = None  # No exit reason = opening position
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order
+        )
+        
+        assert db_trade.position_side == "LONG"  # BUY opens LONG
+    
+    def test_position_side_inferred_from_sell_order_opening(self, trade_service, test_user, test_strategy):
+        """Test that SELL order without position_side infers SHORT (opening position)."""
+        order = make_order_response(
+            order_id=2002,
+            symbol="BTCUSDT",
+            side="SELL",
+            price=50000.0,
+            executed_qty=0.001
+        )
+        order.position_side = None
+        order.exit_reason = None  # No exit reason = opening position
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order
+        )
+        
+        assert db_trade.position_side == "SHORT"  # SELL opens SHORT
+    
+    def test_position_side_inferred_from_sell_order_closing(self, trade_service, test_user, test_strategy):
+        """Test that SELL order with exit_reason infers LONG (closing LONG position)."""
+        order = make_order_response(
+            order_id=2003,
+            symbol="BTCUSDT",
+            side="SELL",
+            price=51000.0,
+            executed_qty=0.001
+        )
+        order.position_side = None
+        order.exit_reason = "TAKE_PROFIT"  # Exit reason = closing position
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order
+        )
+        
+        assert db_trade.position_side == "LONG"  # SELL closes LONG
+    
+    def test_position_side_inferred_from_buy_order_closing(self, trade_service, test_user, test_strategy):
+        """Test that BUY order with exit_reason infers SHORT (closing SHORT position)."""
+        order = make_order_response(
+            order_id=2004,
+            symbol="BTCUSDT",
+            side="BUY",
+            price=49000.0,
+            executed_qty=0.001
+        )
+        order.position_side = None
+        order.exit_reason = "STOP_LOSS"  # Exit reason = closing position
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order
+        )
+        
+        assert db_trade.position_side == "SHORT"  # BUY closes SHORT
+    
+    def test_position_side_preserved_when_provided(self, trade_service, test_user, test_strategy):
+        """Test that position_side from Binance (hedge mode) is preserved."""
+        order = make_order_response(
+            order_id=2005,
+            symbol="BTCUSDT",
+            side="BUY",
+            price=50000.0,
+            executed_qty=0.001
+        )
+        order.position_side = "LONG"  # Provided by Binance (hedge mode)
+        order.exit_reason = None
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order
+        )
+        
+        assert db_trade.position_side == "LONG"  # Preserved from Binance
+    
+    def test_position_side_inferred_in_update(self, trade_service, test_user, test_strategy):
+        """Test that position_side is inferred when updating existing trade."""
+        # First save without position_side
+        order1 = make_order_response(
+            order_id=2006,
+            symbol="BTCUSDT",
+            side="BUY",
+            price=50000.0,
+            executed_qty=0.001
+        )
+        order1.position_side = None
+        order1.exit_reason = None
+        
+        db_trade = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order1
+        )
+        
+        assert db_trade.position_side == "LONG"  # Inferred
+        
+        # Update with exit_reason
+        order2 = make_order_response(
+            order_id=2006,  # Same order_id
+            symbol="BTCUSDT",
+            side="SELL",
+            price=51000.0,
+            executed_qty=0.001,
+            status="FILLED"
+        )
+        order2.position_side = None
+        order2.exit_reason = "TAKE_PROFIT"
+        
+        db_trade_updated = trade_service.save_trade(
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            order=order2
+        )
+        
+        assert db_trade_updated.position_side == "LONG"  # Inferred from SELL + exit_reason
+
+
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
     

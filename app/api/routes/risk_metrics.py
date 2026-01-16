@@ -2021,7 +2021,7 @@ async def get_strategy_risk_status(
                     if today_trades_filtered:
                         # CRITICAL: Match trades to completed positions (same logic as reports page)
                         from app.models.order import OrderResponse
-                    
+                        
                         # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
                         trades_by_strategy_uuid = {}
                         for db_trade in today_trades_filtered:
@@ -2039,55 +2039,55 @@ async def get_strategy_risk_status(
                             if strategy_uuid_str not in trades_by_strategy_uuid:
                                 trades_by_strategy_uuid[strategy_uuid_str] = []
                             trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
+                    
+                    # Convert and group OrderResponse objects by strategy
+                    trades_by_strategy = {}
+                    for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
+                        if not db_trades:
+                            continue
+                        try:
+                            # Convert database trades to OrderResponse format using helper
+                            order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
+                            if order_responses:
+                                trades_by_strategy[strategy_uuid_str] = order_responses
+                        except Exception as e:
+                            logger.warning(f"Error converting trades to OrderResponse for strategy {strategy_uuid_str}: {e}")
+                            continue
+                    
+                    # Match trades for each strategy
+                    for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
+                        if not strategy_trades:
+                            continue
                         
-                        # Convert and group OrderResponse objects by strategy
-                        trades_by_strategy = {}
-                        for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
-                            if not db_trades:
-                                continue
-                            try:
-                                # Convert database trades to OrderResponse format using helper
-                                order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
-                                if order_responses:
-                                    trades_by_strategy[strategy_uuid_str] = order_responses
-                            except Exception as e:
-                                logger.warning(f"Error converting trades to OrderResponse for strategy {strategy_uuid_str}: {e}")
-                                continue
+                        # Initialize defaults
+                        strategy_name = "Unknown"
+                        symbol = strategy_trades[0].symbol if strategy_trades else ""
+                        leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
+                        strategy_id_str = strategy_id  # Use the function parameter as default
+                        db_strategy = None
                         
-                        # Match trades for each strategy
-                        for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
-                            if not strategy_trades:
-                                continue
-                            
-                            # Initialize defaults
-                            strategy_name = "Unknown"
-                            symbol = strategy_trades[0].symbol if strategy_trades else ""
-                            leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
-                            strategy_id_str = strategy_id  # Use the function parameter as default
-                            db_strategy = None
-                            
-                            try:
-                                from uuid import UUID
-                                strategy_uuid_obj = UUID(strategy_uuid_str)
-                                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
-                                if db_strategy:
-                                    strategy_name = db_strategy.name or "Unknown"
-                                    symbol = db_strategy.symbol or symbol
-                                    leverage = db_strategy.leverage or leverage
-                                    strategy_id_str = db_strategy.strategy_id or strategy_id
-                            except Exception as e:
-                                logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
-                            
-                            try:
-                                matched_trades = _match_trades_to_completed_positions(
-                                    strategy_trades,
-                                    strategy_id_str,  # Use strategy_id string, not UUID
-                                    strategy_name,
-                                    symbol,
-                                    leverage
-                                )
-                                all_completed_trades.extend(matched_trades)
-                            except Exception as e:
+                        try:
+                            from uuid import UUID
+                            strategy_uuid_obj = UUID(strategy_uuid_str)
+                            db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
+                            if db_strategy:
+                                strategy_name = db_strategy.name or "Unknown"
+                                symbol = db_strategy.symbol or symbol
+                                leverage = db_strategy.leverage or leverage
+                                strategy_id_str = db_strategy.strategy_id or strategy_id
+                        except Exception as e:
+                            logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
+                        
+                        try:
+                            matched_trades = _match_trades_to_completed_positions(
+                                strategy_trades,
+                                strategy_id_str,  # Use strategy_id string, not UUID
+                                strategy_name,
+                                symbol,
+                                leverage
+                            )
+                            all_completed_trades.extend(matched_trades)
+                        except Exception as e:
                                 logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
                                 import traceback
                                 logger.debug(f"Traceback: {traceback.format_exc()}")
@@ -2197,7 +2197,7 @@ async def get_strategy_risk_status(
                     "status": account_risk_status,
                     "breach_reasons": account_breach_reasons,
                     "account_daily_loss": account_daily_loss_usdt
-                }
+            }
             
             # CRITICAL: If daily_loss_allowed is False but daily_loss_usdt >= 0, this is a bug
             # Force it to True to prevent false blocking

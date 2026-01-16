@@ -179,6 +179,17 @@ class CompletedTradeService:
         # Get account_id from strategy
         account_id = entry_trade.strategy.account_id if entry_trade.strategy else None
         
+        # Get leverage from trades, fallback to strategy
+        leverage = entry_trade.leverage or exit_trade.leverage
+        if leverage is None and entry_trade.strategy:
+            leverage = entry_trade.strategy.leverage
+        
+        # Get margin_type from trades, fallback to default
+        margin_type = entry_trade.margin_type or exit_trade.margin_type
+        if margin_type is None:
+            # Default to CROSSED if not specified (most common)
+            margin_type = "CROSSED"
+        
         # 8. Create completed_trade record
         completed_trade = CompletedTrade(
             strategy_id=strategy_id,
@@ -194,14 +205,14 @@ class CompletedTradeService:
             quantity=quantity,
             pnl_usd=pnl_usd,
             pnl_pct=pnl_pct,
-            fee_paid=fee_paid,
+            fee_paid=fee_paid,  # Sum of entry_fee + exit_fee
             funding_fee=funding_fee,
             entry_order_id=entry_trade.order_id,
             exit_order_id=exit_trade.order_id,
-            leverage=entry_trade.leverage,
+            leverage=leverage,
             exit_reason=exit_trade.exit_reason,
-            initial_margin=entry_trade.initial_margin,
-            margin_type=exit_trade.margin_type,
+            initial_margin=entry_trade.initial_margin or exit_trade.initial_margin,  # Use entry, fallback to exit
+            margin_type=margin_type,
             notional_value=entry_trade.notional_value,
         )
         self.db.add(completed_trade)
@@ -231,6 +242,9 @@ class CompletedTradeService:
             timestamp=exit_trade.timestamp,
         )
         self.db.add(exit_relation)
+        
+        # Flush to ensure CompletedTradeOrder records are visible in the query below
+        self.db.flush()
         
         # 10. ✅ CRITICAL: Validate allocation invariants AFTER creating junction records
         entry_sum = self.db.query(

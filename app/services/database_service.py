@@ -629,14 +629,37 @@ class DatabaseService:
         return strategy
     
     def delete_strategy(self, user_id: UUID, strategy_id: str) -> bool:
-        """Delete a strategy."""
+        """Delete a strategy.
+        
+        This will cascade delete:
+        - All trades (via CASCADE foreign key)
+        - All completed_trades (via CASCADE foreign key)
+        - All completed_trade_orders (via CASCADE from completed_trades)
+        - All trade_pairs (via CASCADE relationship)
+        - All metrics (via CASCADE relationship)
+        """
+        from app.models.db_models import CompletedTrade
+        
         strategy = self.get_strategy(user_id, strategy_id)
         if not strategy:
             return False
         
+        # Log what will be deleted (for debugging)
+        trade_count = len(strategy.trades) if strategy.trades else 0
+        completed_trade_count = len(strategy.completed_trades) if strategy.completed_trades else 0
+        logger.info(
+            f"Deleting strategy {strategy_id}: "
+            f"{trade_count} trades, {completed_trade_count} completed trades will be cascade deleted"
+        )
+        
+        # Delete strategy - CASCADE will handle related records
+        # Foreign keys with CASCADE:
+        # - trades.strategy_id -> CASCADE (deletes all trades)
+        # - completed_trades.strategy_id -> CASCADE (deletes all completed_trades)
+        # - completed_trade_orders.completed_trade_id -> CASCADE (deletes when completed_trade deleted)
         self.db.delete(strategy)
         with self._transaction(error_message=f"Failed to delete strategy {strategy_id}"):
-            logger.info(f"Deleted strategy {strategy_id} for user {user_id}")
+            logger.info(f"✅ Deleted strategy {strategy_id} for user {user_id} (cascade deleted {trade_count} trades, {completed_trade_count} completed trades)")
         return True
     
     # ============================================

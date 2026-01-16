@@ -48,6 +48,7 @@ class StrategyOrderManager:
         portfolio_risk_manager_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account PortfolioRiskManager
         circuit_breaker_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account CircuitBreaker
         dynamic_sizing_factory: Optional[Callable[[str], any]] = None,  # Factory for per-account DynamicPositionSizer
+        strategy_runner: Optional[any] = None,  # StrategyRunner instance for pausing strategies
         notification_service: Optional["NotificationService"] = None,  # Notification service for risk alerts
     ) -> None:
         """Initialize the order manager.
@@ -211,6 +212,20 @@ class StrategyOrderManager:
                     limit_value=limit_value,
                     symbol=signal.symbol,
                 )
+                
+                # CRITICAL: If daily or weekly loss limit exceeded, pause ALL strategies for this account
+                if limit_type in ("DAILY_LOSS", "WEEKLY_LOSS") and self.strategy_runner:
+                    logger.warning(
+                        f"🛑 {limit_type} limit exceeded for account {account_id}. "
+                        f"Pausing all strategies for this account."
+                    )
+                    # Pause all strategies for this account (non-blocking)
+                    asyncio.create_task(
+                        self.strategy_runner.pause_all_strategies_for_account(
+                            account_id=account_id,
+                            reason=f"{limit_type.replace('_', ' ').title()} limit exceeded: {reason}"
+                        )
+                    )
                 
                 # Option 1: Reject order
                 if not portfolio_risk_manager.config.auto_reduce_order_size:

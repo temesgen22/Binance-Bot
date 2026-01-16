@@ -9,9 +9,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from loguru import logger
 
-from app.models.db_models import Trade, CompletedTradeOrder, Strategy
+from app.models.db_models import Trade, CompletedTradeOrder, Strategy, Account
 from app.services.completed_trade_service import CompletedTradeService
 from app.core.database import get_session_factory
+from app.core.my_binance_client import BinanceClient
 
 
 def create_completed_trades_on_position_close(
@@ -58,9 +59,9 @@ def create_completed_trades_on_position_close(
     """
     start_time = datetime.now(timezone.utc)
     logger.info(
-        f"[{strategy_id}] Starting completed trade creation: "
+        f"[{strategy_id}] 🔵 Starting completed trade creation: "
         f"exit_trade_id={exit_trade_id}, exit_order_id={exit_order_id}, "
-        f"exit_quantity={exit_quantity}, position_side={position_side}"
+        f"exit_quantity={exit_quantity}, position_side={position_side}, exit_reason={exit_reason}"
     )
     
     # CRITICAL FIX: Create a new database session for this thread (unless provided for testing)
@@ -78,34 +79,93 @@ def create_completed_trades_on_position_close(
         # Note: strategy_id can be either UUID string or strategy_id string
         # Try UUID first, then strategy_id string
         from uuid import UUID as UUIDType
+        db_strategy = None
         try:
             strategy_uuid_obj = UUIDType(str(strategy_id))
             db_strategy = db.query(Strategy).filter(
                 Strategy.id == strategy_uuid_obj,
                 Strategy.user_id == user_id
             ).first()
-        except (ValueError, TypeError):
+            if db_strategy:
+                logger.debug(
+                    f"[{strategy_id}] Found strategy by UUID: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
+                )
+        except (ValueError, TypeError) as e:
+            logger.debug(
+                f"[{strategy_id}] Not a valid UUID ({e}), trying strategy_id string lookup"
+            )
             # Not a UUID, try strategy_id string
             db_strategy = db.query(Strategy).filter(
                 Strategy.strategy_id == strategy_id,
                 Strategy.user_id == user_id
             ).first()
+            if db_strategy:
+                logger.debug(
+                    f"[{strategy_id}] Found strategy by strategy_id string: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
+                )
         
         if not db_strategy:
+            # Log more details to help debug
             logger.warning(
-                f"[{strategy_id}] Cannot create completed trades: Strategy not found in database"
+                f"[{strategy_id}] Cannot create completed trades: Strategy not found in database. "
+                f"user_id={user_id}, strategy_id_type={type(strategy_id)}. "
+                f"Trying to query database for strategy..."
+            )
+            # Try to see if strategy exists at all (for debugging)
+            all_strategies = db.query(Strategy).filter(Strategy.user_id == user_id).all()
+            logger.debug(
+                f"[{strategy_id}] Found {len(all_strategies)} strategies for user {user_id}. "
+                f"Strategy IDs: {[s.strategy_id for s in all_strategies[:5]]}"
             )
             return []
         
         strategy_uuid = db_strategy.id
         
-        # Get exit trade
-        exit_trade = db.query(Trade).filter(Trade.id == exit_trade_id).first()
+        # Get exit trade and validate it belongs to the same strategy
+        exit_trade = db.query(Trade).filter(
+            Trade.id == exit_trade_id,
+            Trade.strategy_id == strategy_uuid  # ✅ CRITICAL: Ensure exit trade belongs to same strategy
+        ).first()
         if not exit_trade:
             logger.warning(
-                f"Cannot create completed trades: Exit trade {exit_trade_id} not found"
+                f"[{strategy_id}] Cannot create completed trades: Exit trade {exit_trade_id} not found "
+                f"or does not belong to strategy {strategy_uuid}"
             )
             return []
+        
+        # Log exit trade details for debugging
+        logger.debug(
+            f"[{strategy_id}] Exit trade validation: order_id={exit_trade.order_id}, "
+            f"strategy_id={exit_trade.strategy_id}, timestamp={exit_trade.timestamp}, "
+            f"side={exit_trade.side}, price={exit_trade.avg_price or exit_trade.price}"
+        )
+        
+        # ✅ CRITICAL: Validate position_side matches exit trade side
+        # LONG position closes with SELL, SHORT position closes with BUY
+        # NOTE: This validation helps catch state sync issues, but we log as warning instead of error
+        # to allow the system to continue and use the exit trade side as the source of truth
+        if position_side == "LONG" and exit_trade.side != "SELL":
+            logger.warning(
+                f"[{strategy_id}] ⚠️ Position side mismatch: LONG position but exit trade is {exit_trade.side} "
+                f"(expected SELL). Order ID: {exit_trade.order_id}. "
+                f"Using exit trade side as source of truth. This may indicate a state sync issue."
+            )
+            # Don't return - continue with exit trade side as source of truth
+            # Update position_side to match exit trade
+            if exit_trade.side == "BUY":
+                position_side = "SHORT"  # BUY closes SHORT
+                logger.info(f"[{strategy_id}] Corrected position_side to SHORT based on exit trade")
+        elif position_side == "SHORT" and exit_trade.side != "BUY":
+            logger.warning(
+                f"[{strategy_id}] ⚠️ Position side mismatch: SHORT position but exit trade is {exit_trade.side} "
+                f"(expected BUY). Order ID: {exit_trade.order_id}. "
+                f"Using exit trade side as source of truth. This may indicate a state sync issue."
+            )
+            # Don't return - continue with exit trade side as source of truth
+            # Update position_side to match exit trade
+            if exit_trade.side == "SELL":
+                position_side = "LONG"  # SELL closes LONG
+                logger.info(f"[{strategy_id}] Corrected position_side to LONG based on exit trade")
         
         # Determine entry side based on position_side
         # LONG position: entry was BUY, exit is SELL
@@ -116,7 +176,7 @@ def create_completed_trades_on_position_close(
             entry_side = "SELL"
         else:
             logger.warning(
-                f"Cannot create completed trades: Invalid position_side {position_side}"
+                f"[{strategy_id}] Cannot create completed trades: Invalid position_side {position_side}"
             )
             return []
         
@@ -187,7 +247,7 @@ def create_completed_trades_on_position_close(
                 # SHORT: (entry_price - exit_price) * quantity - fees
                 gross_pnl = (entry_price - exit_price) * close_qty
             
-            # Calculate fees (proportional)
+            # Calculate fees (proportional) - sum of entry + exit fees
             entry_fee = 0.0
             if entry_trade.commission is not None and entry_trade.executed_qty and entry_trade.executed_qty > 0:
                 entry_fee = float(entry_trade.commission) * (close_qty / float(entry_trade.executed_qty))
@@ -196,15 +256,81 @@ def create_completed_trades_on_position_close(
             if exit_trade.commission is not None and exit_trade.executed_qty and exit_trade.executed_qty > 0:
                 exit_fee = float(exit_trade.commission) * (close_qty / float(exit_trade.executed_qty))
             
-            total_fee = entry_fee + exit_fee
+            total_fee = entry_fee + exit_fee  # Sum of entry + exit fees
             net_pnl = gross_pnl - total_fee
             
             # Calculate PnL percentage
             entry_notional = entry_price * close_qty
             pnl_pct = (net_pnl / entry_notional) * 100 if entry_notional > 0 else 0.0
             
+            # Fetch funding fees from Binance API
+            funding_fee = 0.0
+            try:
+                # Get account_id from strategy
+                account_id = db_strategy.account_id if db_strategy else None
+                if account_id:
+                    # Get account from database
+                    account = db.query(Account).filter(Account.id == account_id).first()
+                    if account:
+                        # Create BinanceClient from account config
+                        from app.services.account_service import AccountService
+                        account_service = AccountService(db)
+                        
+                        # Get account config (decrypted)
+                        account_config = account_service._db_account_to_config(account)
+                        
+                        # Create BinanceClient
+                        binance_client = BinanceClient(
+                            api_key=account_config.api_key,
+                            api_secret=account_config.api_secret,
+                            testnet=account_config.testnet
+                        )
+                        
+                        # Fetch funding fees for the period between entry and exit
+                        entry_time_ms = int(entry_trade.timestamp.timestamp() * 1000)
+                        exit_time_ms = int(exit_trade.timestamp.timestamp() * 1000)
+                        
+                        funding_fees = binance_client.get_funding_fees(
+                            symbol=entry_trade.symbol,
+                            start_time=entry_time_ms,
+                            end_time=exit_time_ms,
+                            limit=1000
+                        )
+                        
+                        # Sum funding fees (negative = paid, positive = received)
+                        # For completed trades, we sum all funding fees (absolute value)
+                        # Negative income = we paid funding fees (LONG position)
+                        # Positive income = we received funding fees (SHORT position)
+                        # For reporting, we track the absolute value of all funding fees
+                        for fee_record in funding_fees:
+                            income = float(fee_record.get("income", 0))
+                            # Sum absolute value of all funding fees (both paid and received)
+                            funding_fee += abs(income)
+                        
+                        if funding_fee > 0:
+                            logger.debug(
+                                f"[{strategy_id}] Fetched funding fees: {funding_fee:.8f} USDT "
+                                f"for period {entry_trade.timestamp} to {exit_trade.timestamp}"
+                            )
+            except Exception as exc:
+                logger.warning(
+                    f"[{strategy_id}] Could not fetch funding fees: {exc}. "
+                    f"Using default 0.0. This is non-critical.",
+                    exc_info=True
+                )
+                funding_fee = 0.0
+            
             # Create completed trade
             try:
+                # Log entry/exit trade details for debugging
+                logger.debug(
+                    f"[{strategy_id}] Matching entry/exit trades: "
+                    f"entry_order_id={entry_trade.order_id}, entry_timestamp={entry_trade.timestamp}, "
+                    f"entry_price={entry_price}, exit_order_id={exit_order_id}, "
+                    f"exit_timestamp={exit_trade.timestamp}, exit_price={exit_price}, "
+                    f"close_qty={close_qty}, position_side={position_side}"
+                )
+                
                 completed_trade = completed_trade_service.create_completed_trade(
                     user_id=user_id,
                     strategy_id=strategy_uuid,
@@ -213,20 +339,40 @@ def create_completed_trades_on_position_close(
                     quantity=close_qty,
                     pnl_usd=net_pnl,
                     pnl_pct=pnl_pct,
-                    funding_fee=0.0,  # TODO: Calculate funding fees
+                    funding_fee=funding_fee,  # Fetched from Binance API
                 )
                 completed_trade_ids.append(completed_trade.id)
                 logger.info(
-                    f"Created completed trade {completed_trade.id} for strategy {strategy_id}: "
-                    f"entry={entry_trade.order_id}, exit={exit_order_id}, qty={close_qty}, pnl={net_pnl:.2f}"
+                    f"[{strategy_id}] ✅ Created completed trade {completed_trade.id}: "
+                    f"entry={entry_trade.order_id} (ts={entry_trade.timestamp}), "
+                    f"exit={exit_order_id} (ts={exit_trade.timestamp}), "
+                    f"qty={close_qty}, pnl={net_pnl:.2f}"
                 )
             except ValueError as e:
                 # Handle idempotency (already exists) - this is expected
-                if "already exists" in str(e).lower() or "allocation in progress" in str(e).lower():
-                    logger.debug(f"Skipping duplicate completed trade: {e}")
+                error_msg = str(e).lower()
+                if "already exists" in error_msg or "allocation in progress" in error_msg or "duplicate" in error_msg or "idempotency" in error_msg:
+                    logger.debug(
+                        f"[{strategy_id}] Skipping duplicate/idempotent completed trade: {e}. "
+                        f"Entry={entry_trade.order_id}, Exit={exit_order_id}"
+                    )
                     continue
-                # Re-raise other errors
-                logger.error(f"Failed to create completed trade: {e}")
+                # Re-raise other validation errors with full context
+                logger.error(
+                    f"[{strategy_id}] ❌ Failed to create completed trade: {e}. "
+                    f"Entry trade: order_id={entry_trade.order_id}, side={entry_trade.side}, "
+                    f"Exit trade: order_id={exit_order_id}, side={exit_trade.side}, "
+                    f"Position side: {position_side}, Close qty: {close_qty}",
+                    exc_info=True
+                )
+                raise
+            except Exception as e:
+                # Catch any other unexpected errors
+                logger.error(
+                    f"[{strategy_id}] ❌ Unexpected error creating completed trade: {e}. "
+                    f"Entry trade: order_id={entry_trade.order_id}, Exit trade: order_id={exit_order_id}",
+                    exc_info=True
+                )
                 raise
             
             remaining_exit_qty -= close_qty

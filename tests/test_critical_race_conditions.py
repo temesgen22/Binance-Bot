@@ -1529,7 +1529,7 @@ class TestPersistenceOrdering:
             # Run indefinitely (or at least longer than the 0.5s verification delay)
             while True:
                 await asyncio.sleep(1.0)
-        
+
         with patch.object(strategy_runner.executor, 'run_loop', side_effect=mock_run_loop_func):
 
             

@@ -238,6 +238,14 @@ class StrategyExecutor:
                     )
                 
                 # 7) Execute order based on synced state + fresh signal
+                # OPTIMIZATION: Skip _execute_order() entirely for HOLD signals to avoid unnecessary overhead
+                # HOLD signals don't need order execution, risk checks, or klines fetching
+                if signal.action == "HOLD":
+                    # HOLD is expected behavior, not a skip - no need to track in meta
+                    # Just continue to next iteration
+                    await asyncio.sleep(strategy.context.interval_seconds)
+                    continue
+                
                 # CRITICAL: Pass account-specific risk and executor to ensure orders go to correct account
                 # Also pass strategy instance so we can sync state immediately after order execution
                 # CRITICAL: Add timeout to prevent strategy from getting stuck if order execution hangs
@@ -405,12 +413,13 @@ class StrategyExecutor:
             except Exception as e:
                 logger.debug(f"Failed to save order execution meta to database: {e}")
         else:
-            # Order was skipped (HOLD signal, risk blocked, etc.)
+            # Order was skipped (risk blocked, insufficient balance, etc.)
+            # NOTE: HOLD signals are now handled earlier in the loop and never reach _execute_order()
             summary.meta['last_skip_time'] = current_time.isoformat()
             summary.meta['orders_skipped_count'] = summary.meta.get('orders_skipped_count', 0) + 1
         
         if not order_response:
-            return  # Order was skipped (e.g., HOLD signal)
+            return  # Order was skipped (e.g., risk blocked, insufficient balance)
         
         # Track the trade
         self.order_manager.track_trade(
@@ -429,6 +438,55 @@ class StrategyExecutor:
         logger.debug(
             f"[{summary.id}] Position state BEFORE order {order_response.order_id}: "
             f"side={prev_side}, size={prev_size}, entry={prev_entry}"
+        )
+        
+        # Determine position direction and exit reason for logging (BEFORE updating position state)
+        # This must be done before mutation to correctly detect position changes
+        position_direction = prev_side  # Position before order execution
+        exit_reason = signal.exit_reason or "UNKNOWN"
+        
+        # ✅ CRITICAL FIX #1: If exit_reason is set (not UNKNOWN), we're definitely closing a position
+        # This is the most reliable indicator - exit_reason only exists when closing
+        if exit_reason and exit_reason != "UNKNOWN":
+            # Exit reason means we're closing - infer position side from order side
+            if order_response.side == "SELL":
+                position_direction = "LONG"  # SELL closes LONG
+                logger.info(
+                    f"[{summary.id}] ✅ Exit reason detected ({exit_reason}) - inferring closing LONG position "
+                    f"from SELL order. prev_side={prev_side}, prev_size={prev_size}"
+                )
+            elif order_response.side == "BUY":
+                position_direction = "SHORT"  # BUY closes SHORT
+                logger.info(
+                    f"[{summary.id}] ✅ Exit reason detected ({exit_reason}) - inferring closing SHORT position "
+                    f"from BUY order. prev_side={prev_side}, prev_size={prev_size}"
+                )
+        # ✅ CRITICAL FIX #2: If position_side is None but position_size > 0, infer position side from order
+        # This handles cases where position_side is out of sync but position_size is correct
+        elif position_direction is None and prev_size and prev_size > 0:
+            # Infer position side from order side (opposite of what opens)
+            # SELL order with position = closing LONG, BUY order with position = closing SHORT
+            if order_response.side == "SELL":
+                position_direction = "LONG"  # SELL closes LONG
+                logger.warning(
+                    f"[{summary.id}] Position side was None but position_size={prev_size} > 0. "
+                    f"Inferring LONG position from SELL order (closing position)."
+                )
+            elif order_response.side == "BUY":
+                position_direction = "SHORT"  # BUY closes SHORT
+                logger.warning(
+                    f"[{summary.id}] Position side was None but position_size={prev_size} > 0. "
+                    f"Inferring SHORT position from BUY order (closing position)."
+                )
+        
+        # Determine if this is opening or closing (BEFORE updating position state)
+        is_opening_order = (
+            (order_response.side == "BUY" and position_direction is None) or
+            (order_response.side == "SELL" and position_direction is None)
+        )
+        is_closing_order = (
+            (order_response.side == "SELL" and position_direction == "LONG") or
+            (order_response.side == "BUY" and position_direction == "SHORT")
         )
         
         # Update entry price and position size
@@ -455,20 +513,6 @@ class StrategyExecutor:
                 summary.position_size = order_response.executed_qty
                 summary.position_side = "SHORT"
         
-        # Determine position direction and exit reason for logging
-        position_direction = prev_side  # Position before order execution
-        exit_reason = signal.exit_reason or "UNKNOWN"
-        
-        # Determine if this is opening or closing
-        is_opening_order = (
-            (order_response.side == "BUY" and position_direction is None) or
-            (order_response.side == "SELL" and position_direction is None)
-        )
-        is_closing_order = (
-            (order_response.side == "SELL" and position_direction == "LONG") or
-            (order_response.side == "BUY" and position_direction == "SHORT")
-        )
-        
         # Log position detection for debugging
         logger.debug(
             f"[{summary.id}] Position detection for order {order_response.order_id}: "
@@ -494,6 +538,18 @@ class StrategyExecutor:
                     )
                 )
         elif is_closing_order:
+            # ✅ CRITICAL: Ensure position_direction is set correctly for completed trade creation
+            if position_direction is None:
+                # Fallback: infer from order side if we have exit_reason
+                if exit_reason and exit_reason != "UNKNOWN":
+                    if order_response.side == "SELL":
+                        position_direction = "LONG"  # SELL closes LONG
+                    elif order_response.side == "BUY":
+                        position_direction = "SHORT"  # BUY closes SHORT
+                    logger.warning(
+                        f"[{summary.id}] Position direction was None but is_closing_order=True. "
+                        f"Inferred {position_direction} from order side {order_response.side} and exit_reason {exit_reason}"
+                    )
             logger.info(
                 f"[{summary.id}] 🔴 CLOSE {position_direction} position (reason: {exit_reason}): "
                 f"{order_response.side} {order_response.symbol} "
@@ -531,22 +587,38 @@ class StrategyExecutor:
                             if exit_trade:
                                 # Create completed trades (non-blocking - fire and forget)
                                 # CRITICAL FIX: Don't pass database session - function creates its own (thread-safe)
-                                asyncio.create_task(
-                                    asyncio.to_thread(
-                                        create_completed_trades_on_position_close,
-                                        self.order_manager.user_id,
-                                        summary.id,  # Strategy ID string
-                                        exit_trade.id,  # Exit trade UUID
-                                        order_response.order_id,  # Exit order ID
-                                        order_response.executed_qty,  # Exit quantity
-                                        float(order_response.avg_price or order_response.price),  # Exit price
-                                        position_direction,  # Position side (LONG or SHORT)
-                                        exit_reason,  # Exit reason
-                                    )
-                                )
+                                async def create_completed_trades_task():
+                                    """Wrapper to catch and log errors from background task."""
+                                    try:
+                                        # Pass strategy UUID as string for better lookup reliability
+                                        await asyncio.to_thread(
+                                            create_completed_trades_on_position_close,
+                                            self.order_manager.user_id,
+                                            str(db_strategy.id),  # Pass UUID as string for better lookup
+                                            exit_trade.id,  # Exit trade UUID
+                                            order_response.order_id,  # Exit order ID
+                                            order_response.executed_qty,  # Exit quantity
+                                            float(order_response.avg_price or order_response.price),  # Exit price
+                                            position_direction,  # Position side (LONG or SHORT)
+                                            exit_reason,  # Exit reason
+                                        )
+                                        logger.info(
+                                            f"[{summary.id}] ✅ Completed trade creation task finished successfully "
+                                            f"for exit_order_id={order_response.order_id}"
+                                        )
+                                    except Exception as task_error:
+                                        # Log error but don't fail the main flow
+                                        logger.error(
+                                            f"[{summary.id}] ❌ CRITICAL: Background task failed to create completed trades "
+                                            f"for exit_order_id={order_response.order_id}, position_side={position_direction}: {task_error}",
+                                            exc_info=True
+                                        )
+                                
+                                asyncio.create_task(create_completed_trades_task())
                                 logger.debug(
-                                    f"[{summary.id}] Creating completed trades for position close: "
-                                    f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}"
+                                    f"[{summary.id}] Started background task to create completed trades: "
+                                    f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}, "
+                                    f"position_side={position_direction}"
                                 )
                             else:
                                 logger.warning(
@@ -561,6 +633,72 @@ class StrategyExecutor:
                         f"[{summary.id}] Failed to create completed trades on position close: {e}",
                         exc_info=True
                     )
+            else:
+                # ✅ FALLBACK: If is_closing_order was False but we have exit_reason and position_size was > 0,
+                # we might still need to create completed trades (position detection failed)
+                if exit_reason and exit_reason != "UNKNOWN" and prev_size and prev_size > 0:
+                    logger.warning(
+                        f"[{summary.id}] ⚠️ Position detection failed (is_closing_order=False) but exit_reason={exit_reason} "
+                        f"and prev_size={prev_size} suggest position was closed. Attempting to create completed trades anyway."
+                    )
+                    # Try to create completed trades with inferred position side
+                    inferred_position_side = "LONG" if order_response.side == "SELL" else "SHORT"
+                    if self.order_manager.strategy_service and self.order_manager.user_id:
+                        try:
+                            from app.services.completed_trade_helper import create_completed_trades_on_position_close
+                            from app.models.db_models import Trade as DBTrade
+                            
+                            db_strategy = self.order_manager.strategy_service.db_service.get_strategy(
+                                self.order_manager.user_id,
+                                summary.id
+                            )
+                            
+                            if db_strategy:
+                                from app.core.database import get_session_factory
+                                temp_db = get_session_factory()()
+                                try:
+                                    exit_trade = temp_db.query(DBTrade).filter(
+                                        DBTrade.strategy_id == db_strategy.id,
+                                        DBTrade.order_id == order_response.order_id
+                                    ).first()
+                                    
+                                    if exit_trade:
+                                        async def create_completed_trades_fallback_task():
+                                            try:
+                                                # Pass strategy UUID as string for better lookup
+                                                await asyncio.to_thread(
+                                                    create_completed_trades_on_position_close,
+                                                    self.order_manager.user_id,
+                                                    str(db_strategy.id),  # Pass UUID as string
+                                                    exit_trade.id,
+                                                    order_response.order_id,
+                                                    order_response.executed_qty,
+                                                    float(order_response.avg_price or order_response.price),
+                                                    inferred_position_side,  # Use inferred position side
+                                                    exit_reason,
+                                                )
+                                                logger.info(
+                                                    f"[{summary.id}] ✅ Fallback completed trade creation finished successfully "
+                                                    f"for exit_order_id={order_response.order_id}, inferred_position_side={inferred_position_side}"
+                                                )
+                                            except Exception as task_error:
+                                                logger.error(
+                                                    f"[{summary.id}] ❌ Fallback completed trade creation failed: {task_error}",
+                                                    exc_info=True
+                                                )
+                                        
+                                        asyncio.create_task(create_completed_trades_fallback_task())
+                                        logger.info(
+                                            f"[{summary.id}] 🔵 Started FALLBACK completed trade creation: "
+                                            f"exit_order_id={order_response.order_id}, inferred_position_side={inferred_position_side}"
+                                        )
+                                finally:
+                                    temp_db.close()
+                        except Exception as e:
+                            logger.warning(
+                                f"[{summary.id}] Fallback completed trade creation setup failed: {e}",
+                                exc_info=True
+                            )
             
             # Send Telegram notification for closing position
             if self.notifications:

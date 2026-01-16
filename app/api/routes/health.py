@@ -173,14 +173,15 @@ def readiness(
 def health(
     db: Session = Depends(get_db_session_dependency),
     client: BinanceClient = Depends(get_binance_client)
-) -> dict[str, str | float]:
+) -> dict[str, str | float | None]:
     """Health check endpoint (backward compatibility).
     
     Checks database, Redis (if enabled), and Binance API connections.
     This is used by Docker health checks, so it must verify critical services.
     
     Returns:
-        Status and BTC price if all critical services are working
+        Status and BTC price if all critical services are working.
+        btc_price may be None if Binance API is unavailable.
         
     Raises:
         HTTPException: If database, Redis, or Binance API is unreachable
@@ -264,7 +265,7 @@ def health(
         "status": "ok" if db_status == "ok" else "error",
         "database": db_status,
         "redis": redis_status,
-        "btc_price": btc_price
+        "btc_price": btc_price if btc_price is not None else None  # Explicitly allow None
     }
 
 
