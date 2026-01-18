@@ -102,9 +102,30 @@ class StrategyExecutor:
         
         try:
             while True:
+                # CRITICAL FIX: Refresh strategy status from database to catch pause_by_risk updates
+                # This ensures strategies see their paused status even if they're already in the loop
+                if self.order_manager.strategy_service and self.order_manager.user_id:
+                    try:
+                        db_strategy = self.order_manager.strategy_service.db_service.get_strategy(
+                            self.order_manager.user_id,
+                            summary.id
+                        )
+                        if db_strategy:
+                            # Update summary status from database
+                            db_status = StrategyState(db_strategy.status)
+                            if summary.status != db_status:
+                                logger.info(
+                                    f"[{summary.id}] Strategy status changed from {summary.status} to {db_status} "
+                                    f"(refreshed from database)"
+                                )
+                                summary.status = db_status
+                    except Exception as refresh_error:
+                        # Don't fail the loop if status refresh fails
+                        logger.debug(f"[{summary.id}] Failed to refresh status from database: {refresh_error}")
+                
                 # Check if strategy was paused by risk management
-                # If status is paused_by_risk, exit the loop (strategy is stopped)
-                if summary.status == StrategyState.paused_by_risk:
+                # If status is stopped_by_risk, exit the loop (strategy is stopped)
+                if summary.status == StrategyState.stopped_by_risk:
                     logger.info(f"[{summary.id}] Strategy paused by risk management, exiting loop")
                     break
                 
@@ -266,6 +287,34 @@ class StrategyExecutor:
                         summary.meta = {}
                     summary.meta['last_order_timeout'] = current_time.isoformat()
                     summary.meta['order_timeout_count'] = summary.meta.get('order_timeout_count', 0) + 1
+                except RiskLimitExceededError as risk_exc:
+                    # CRITICAL: If daily/weekly loss limit exceeded, the strategy has been paused
+                    # Exit the loop IMMEDIATELY - no point continuing if limits are exceeded
+                    # Check if it's a daily/weekly loss by examining the error message
+                    error_msg = str(risk_exc).lower()
+                    limit_type = None
+                    if "daily loss" in error_msg:
+                        limit_type = "DAILY_LOSS"
+                    elif "weekly loss" in error_msg:
+                        limit_type = "WEEKLY_LOSS"
+                    
+                    # Also check details dict if available
+                    if not limit_type and isinstance(risk_exc.details, dict):
+                        limit_type = risk_exc.details.get('limit_type')
+                    
+                    if limit_type in ("DAILY_LOSS", "WEEKLY_LOSS"):
+                        logger.warning(
+                            f"[{summary.id}] {limit_type} limit exceeded - strategy paused. "
+                            f"Exiting execution loop immediately."
+                        )
+                        # Exit the loop immediately - strategy has been paused
+                        break
+                    else:
+                        # Other risk limits (exposure, drawdown) - log but continue
+                        logger.error(
+                            f"[{summary.id}] Risk limit exceeded (non-daily/weekly): {risk_exc}. "
+                            f"Strategy loop will continue."
+                        )
                 except Exception as order_exc:
                     # Log but don't crash the loop - allow strategy to continue
                     logger.error(

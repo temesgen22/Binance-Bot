@@ -22,7 +22,7 @@ from app.models.db_models import (
     Backtest, BacktestTrade, StrategyMetric, SystemEvent,
     WalkForwardAnalysis, WalkForwardWindow, WalkForwardEquityPoint,
     SensitivityAnalysis, SensitivityParameterResult,
-    StrategyParameterHistory
+    StrategyParameterHistory, StrategyRiskConfig
 )
 
 
@@ -660,6 +660,260 @@ class DatabaseService:
         self.db.delete(strategy)
         with self._transaction(error_message=f"Failed to delete strategy {strategy_id}"):
             logger.info(f"✅ Deleted strategy {strategy_id} for user {user_id} (cascade deleted {trade_count} trades, {completed_trade_count} completed trades)")
+        return True
+    
+    # ============================================
+    # STRATEGY RISK CONFIG OPERATIONS
+    # ============================================
+    
+    def create_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str,  # String ID (e.g., "strategy-1"), NOT UUID
+        max_daily_loss_usdt: Optional[float] = None,
+        max_daily_loss_pct: Optional[float] = None,
+        max_weekly_loss_usdt: Optional[float] = None,
+        max_weekly_loss_pct: Optional[float] = None,
+        max_drawdown_pct: Optional[float] = None,
+        max_exposure_usdt: Optional[float] = None,
+        max_exposure_pct: Optional[float] = None,
+        enabled: bool = True,
+        override_account_limits: bool = False,
+        use_more_restrictive: bool = True,
+        timezone: str = "UTC",
+        daily_loss_reset_time: Optional[datetime] = None,
+        weekly_loss_reset_day: Optional[int] = None
+    ) -> StrategyRiskConfig:
+        """Create a new strategy risk configuration.
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+                Must convert to Strategy.id (UUID) for database foreign key
+        
+        Returns:
+            Created StrategyRiskConfig
+        
+        Raises:
+            IntegrityError: If strategy_id not found or config already exists
+        """
+        # Get strategy to get UUID for foreign key
+        strategy = self.get_strategy(user_id, strategy_id)
+        if not strategy:
+            raise ValueError(f"Strategy {strategy_id} not found for user {user_id}")
+        
+        # Create config with Strategy.id (UUID) as foreign key
+        config = StrategyRiskConfig(
+            strategy_id=strategy.id,  # Use UUID from Strategy.id
+            user_id=user_id,
+            max_daily_loss_usdt=max_daily_loss_usdt,
+            max_daily_loss_pct=max_daily_loss_pct,
+            max_weekly_loss_usdt=max_weekly_loss_usdt,
+            max_weekly_loss_pct=max_weekly_loss_pct,
+            max_drawdown_pct=max_drawdown_pct,
+            max_exposure_usdt=max_exposure_usdt,
+            max_exposure_pct=max_exposure_pct,
+            enabled=enabled,
+            override_account_limits=override_account_limits,
+            use_more_restrictive=use_more_restrictive,
+            timezone=timezone,
+            daily_loss_reset_time=daily_loss_reset_time,
+            weekly_loss_reset_day=weekly_loss_reset_day
+        )
+        self.db.add(config)
+        with self._transaction(config, error_message=f"Failed to create strategy risk config for {strategy_id}"):
+            logger.info(f"Created strategy risk config for strategy {strategy_id}")
+        return config
+    
+    def get_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str  # String ID (e.g., "strategy-1"), NOT UUID
+    ) -> Optional[StrategyRiskConfig]:
+        """Get strategy risk configuration (sync).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+        
+        Returns:
+            StrategyRiskConfig if found, None otherwise
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy_risk_config() with AsyncSession")
+        
+        # Get strategy to get UUID
+        strategy = self.get_strategy(user_id, strategy_id)
+        if not strategy:
+            return None
+        
+        # Load with strategy relationship to access strategy.strategy_id (string)
+        from sqlalchemy.orm import joinedload
+        config = self.db.query(StrategyRiskConfig).options(
+            joinedload(StrategyRiskConfig.strategy)
+        ).filter(
+            StrategyRiskConfig.strategy_id == strategy.id,
+            StrategyRiskConfig.user_id == user_id
+        ).first()
+        
+        return config
+    
+    async def async_get_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str  # String ID (e.g., "strategy-1"), NOT UUID
+    ) -> Optional[StrategyRiskConfig]:
+        """Get strategy risk configuration (async).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+        
+        Returns:
+            StrategyRiskConfig if found, None otherwise
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_strategy_risk_config() with Session")
+        
+        # Get strategy to get UUID
+        strategy = await self.async_get_strategy(user_id, strategy_id)
+        if not strategy:
+            return None
+        
+        # Load with strategy relationship to access strategy.strategy_id (string)
+        from sqlalchemy.orm import selectinload
+        result = await self.db.execute(
+            select(StrategyRiskConfig)
+            .options(selectinload(StrategyRiskConfig.strategy))
+            .filter(
+                StrategyRiskConfig.strategy_id == strategy.id,
+                StrategyRiskConfig.user_id == user_id
+            )
+        )
+        return result.scalar_one_or_none()
+    
+    def update_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str,  # String ID (e.g., "strategy-1"), NOT UUID
+        updates: dict  # Dictionary of fields to update
+    ) -> Optional[StrategyRiskConfig]:
+        """Update strategy risk configuration (sync).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+            updates: Dictionary of fields to update (from Pydantic model.model_dump(exclude_unset=True))
+        
+        Returns:
+            Updated StrategyRiskConfig if found, None otherwise
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_update_strategy_risk_config() with AsyncSession")
+        
+        # Get existing config
+        db_config = self.get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            return None
+        
+        # Update fields
+        for key, value in updates.items():
+            if hasattr(db_config, key):
+                setattr(db_config, key, value)
+        
+        with self._transaction(db_config, error_message=f"Failed to update strategy risk config for {strategy_id}"):
+            logger.info(f"Updated strategy risk config for strategy {strategy_id}")
+        
+        return db_config
+    
+    async def async_update_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str,  # String ID (e.g., "strategy-1"), NOT UUID
+        updates: dict  # Dictionary of fields to update
+    ) -> Optional[StrategyRiskConfig]:
+        """Update strategy risk configuration (async).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+            updates: Dictionary of fields to update
+        
+        Returns:
+            Updated StrategyRiskConfig if found, None otherwise
+        """
+        if not self._is_async:
+            raise RuntimeError("Use update_strategy_risk_config() with Session")
+        
+        # Get existing config
+        db_config = await self.async_get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            return None
+        
+        # Update fields
+        for key, value in updates.items():
+            if hasattr(db_config, key):
+                setattr(db_config, key, value)
+        
+        self.db.add(db_config)
+        await self.db.commit()
+        await self.db.refresh(db_config)
+        
+        return db_config
+    
+    def delete_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str  # String ID (e.g., "strategy-1"), NOT UUID
+    ) -> bool:
+        """Delete strategy risk configuration (sync).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_delete_strategy_risk_config() with AsyncSession")
+        
+        # Get config
+        db_config = self.get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            return False
+        
+        self.db.delete(db_config)
+        with self._transaction(error_message=f"Failed to delete strategy risk config for {strategy_id}"):
+            logger.info(f"Deleted strategy risk config for strategy {strategy_id}")
+        
+        return True
+    
+    async def async_delete_strategy_risk_config(
+        self,
+        user_id: UUID,
+        strategy_id: str  # String ID (e.g., "strategy-1"), NOT UUID
+    ) -> bool:
+        """Delete strategy risk configuration (async).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy string ID (e.g., "strategy-1"), NOT UUID
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        if not self._is_async:
+            raise RuntimeError("Use delete_strategy_risk_config() with Session")
+        
+        # Get config
+        db_config = await self.async_get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            return False
+        
+        await self.db.delete(db_config)
+        await self.db.commit()
+        
         return True
     
     # ============================================

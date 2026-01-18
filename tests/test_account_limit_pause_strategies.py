@@ -541,4 +541,193 @@ class TestAccountLimitPauseStrategies:
         for strategy in strategies_after:
             assert strategy.status == "paused_by_risk", \
                 f"Strategy {strategy.strategy_id} should be paused_by_risk after pause, got {strategy.status}"
+    
+    @pytest.mark.asyncio
+    async def test_pause_closes_positions_and_cancels_tp_sl(
+        self,
+        test_db,
+        test_user,
+        test_account_1,
+        test_strategies_account_1,
+        strategy_runner
+    ):
+        """Test that pausing strategies closes positions and cancels TP/SL orders."""
+        
+        # Mock BinanceClient and client manager
+        mock_client = MagicMock()
+        mock_client.get_open_position = MagicMock(return_value={
+            "positionAmt": "0.001",
+            "entryPrice": "40000.0",
+            "unRealizedProfit": "-5.50",
+            "markPrice": "40000.0"
+        })
+        mock_client.close_position = MagicMock(return_value=MagicMock(
+            side="SELL",
+            symbol="BTCUSDT",
+            executed_qty=0.001,
+            avg_price=40000.0,
+            price=40000.0,
+            order_id=12345,
+            status="FILLED"
+        ))
+        
+        # Mock client manager
+        strategy_runner.client_manager = MagicMock()
+        strategy_runner.client_manager.get_client = MagicMock(return_value=mock_client)
+        strategy_runner._get_account_client = MagicMock(return_value=mock_client)
+        
+        # Mock order manager to track TP/SL cancellation
+        mock_order_manager = MagicMock()
+        mock_order_manager.cancel_tp_sl_orders = AsyncMock()
+        strategy_runner.order_manager = mock_order_manager
+        
+        # Mock trade service
+        mock_trade_service = MagicMock()
+        mock_trade_service.save_trade = MagicMock()
+        strategy_runner.trade_service = mock_trade_service
+        
+        # Add strategies to in-memory cache with positions
+        from app.models.strategy import StrategySummary, StrategyState
+        for i, db_strategy in enumerate(test_strategies_account_1):
+            summary = StrategySummary(
+                id=db_strategy.strategy_id,
+                name=db_strategy.name,
+                symbol=db_strategy.symbol,
+                strategy_type=db_strategy.strategy_type,
+                status=StrategyState.running,
+                leverage=db_strategy.leverage,
+                risk_per_trade=float(db_strategy.risk_per_trade),
+                fixed_amount=float(db_strategy.fixed_amount) if db_strategy.fixed_amount else None,
+                params=db_strategy.params or {},
+                account_id="account1",
+                position_size=0.001,  # Has position
+                position_side="LONG",
+                entry_price=40000.0
+            )
+            strategy_runner._strategies[db_strategy.strategy_id] = summary
+        
+        # Pause strategies
+        paused_strategies = await strategy_runner.pause_all_strategies_for_account(
+            account_id="account1",
+            reason="Daily loss limit exceeded"
+        )
+        
+        # Verify strategies were paused
+        assert len(paused_strategies) == 3, "Should pause 3 strategies"
+        
+        # Verify TP/SL orders were cancelled for each strategy
+        assert mock_order_manager.cancel_tp_sl_orders.call_count == 3, \
+            "Should cancel TP/SL orders for all 3 strategies"
+        
+        # Verify positions were closed for each strategy
+        assert mock_client.get_open_position.call_count == 3, \
+            "Should check position for all 3 strategies"
+        assert mock_client.close_position.call_count == 3, \
+            "Should close position for all 3 strategies"
+        
+        # Verify closing trades were saved
+        assert mock_trade_service.save_trade.call_count == 3, \
+            "Should save closing trade for all 3 strategies"
+    
+    @pytest.mark.asyncio
+    async def test_pause_handles_strategies_without_positions(
+        self,
+        test_db,
+        test_user,
+        test_account_1,
+        test_strategies_account_1,
+        strategy_runner
+    ):
+        """Test that pausing works correctly when strategies have no open positions."""
+        
+        # Mock BinanceClient
+        mock_client = MagicMock()
+        mock_client.get_open_position = MagicMock(return_value=None)  # No position
+        
+        # Mock client manager
+        strategy_runner.client_manager = MagicMock()
+        strategy_runner.client_manager.get_client = MagicMock(return_value=mock_client)
+        strategy_runner._get_account_client = MagicMock(return_value=mock_client)
+        
+        # Mock order manager
+        mock_order_manager = MagicMock()
+        mock_order_manager.cancel_tp_sl_orders = AsyncMock()
+        strategy_runner.order_manager = mock_order_manager
+        
+        # Add strategies to in-memory cache without positions
+        from app.models.strategy import StrategySummary, StrategyState
+        for db_strategy in test_strategies_account_1:
+            summary = StrategySummary(
+                id=db_strategy.strategy_id,
+                name=db_strategy.name,
+                symbol=db_strategy.symbol,
+                strategy_type=db_strategy.strategy_type,
+                status=StrategyState.running,
+                leverage=db_strategy.leverage,
+                risk_per_trade=float(db_strategy.risk_per_trade),
+                fixed_amount=float(db_strategy.fixed_amount) if db_strategy.fixed_amount else None,
+                params=db_strategy.params or {},
+                account_id="account1",
+                position_size=None,  # No position
+                position_side=None,
+                entry_price=None
+            )
+            strategy_runner._strategies[db_strategy.strategy_id] = summary
+        
+        # Pause strategies
+        paused_strategies = await strategy_runner.pause_all_strategies_for_account(
+            account_id="account1",
+            reason="Daily loss limit exceeded"
+        )
+        
+        # Verify strategies were paused
+        assert len(paused_strategies) == 3, "Should pause 3 strategies"
+        
+        # Verify TP/SL orders were still cancelled (even without positions)
+        assert mock_order_manager.cancel_tp_sl_orders.call_count == 3, \
+            "Should cancel TP/SL orders even if no positions"
+        
+        # Verify position was checked but not closed (no position exists)
+        assert mock_client.get_open_position.call_count == 3, \
+            "Should check position for all strategies"
+        assert mock_client.close_position.call_count == 0, \
+            "Should not close position if none exists"
+    
+    @pytest.mark.asyncio
+    async def test_pause_is_blocking_not_background_task(
+        self,
+        test_db,
+        test_user,
+        test_account_1,
+        test_strategies_account_1,
+        strategy_runner
+    ):
+        """Test that pause_all_strategies_for_account is blocking (awaited), not a background task."""
+        
+        import asyncio
+        from unittest.mock import patch
+        
+        # Track when pause completes
+        pause_completed = False
+        
+        async def track_pause():
+            nonlocal pause_completed
+            await strategy_runner.pause_all_strategies_for_account(
+                account_id="account1",
+                reason="Daily loss limit exceeded"
+            )
+            pause_completed = True
+        
+        # Run pause and verify it completes synchronously
+        await track_pause()
+        
+        # Verify pause completed (not a background task)
+        assert pause_completed, "Pause should complete synchronously (not background task)"
+        
+        # Verify strategies are paused in database
+        paused_count = test_db.query(Strategy).filter(
+            Strategy.account_id == test_account_1.id,
+            Strategy.status == "paused_by_risk"
+        ).count()
+        assert paused_count == 3, "All strategies should be paused synchronously"
 

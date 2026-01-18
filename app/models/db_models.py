@@ -258,12 +258,13 @@ class Strategy(Base):
     trade_pairs = relationship("TradePair", back_populates="strategy", cascade="all, delete-orphan")
     metrics = relationship("StrategyMetric", back_populates="strategy", cascade="all, delete-orphan")
     completed_trades = relationship("CompletedTrade", back_populates="strategy", cascade="all, delete-orphan")
+    risk_config = relationship("StrategyRiskConfig", back_populates="strategy", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("leverage >= 1 AND leverage <= 50", name="strategies_leverage_check"),
         CheckConstraint("risk_per_trade > 0 AND risk_per_trade < 1", name="strategies_risk_check"),
         CheckConstraint("max_positions >= 1 AND max_positions <= 5", name="strategies_max_positions_check"),
-        CheckConstraint("status IN ('stopped', 'running', 'error', 'paused_by_risk')", name="strategies_status_check"),
+        CheckConstraint("status IN ('stopped', 'running', 'error', 'stopped_by_risk')", name="strategies_status_check"),
         CheckConstraint("position_side IS NULL OR position_side IN ('LONG', 'SHORT')", name="strategies_position_side_check"),
         CheckConstraint("last_signal IS NULL OR last_signal IN ('BUY', 'SELL', 'HOLD')", name="strategies_last_signal_check"),
         Index("idx_strategies_params", "params", postgresql_using="gin"),
@@ -908,6 +909,47 @@ class RiskManagementConfig(Base):
     __table_args__ = (
         # Unique constraint: one config per account
         Index("idx_risk_config_user_account_unique", "user_id", "account_id", unique=True),
+    )
+
+
+class StrategyRiskConfig(Base):
+    """Strategy-level risk management configuration."""
+    __tablename__ = "strategy_risk_config"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(PGUUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Strategy-Level Limits
+    max_daily_loss_usdt = Column(Numeric(20, 8), nullable=True)
+    max_daily_loss_pct = Column(Numeric(10, 6), nullable=True)
+    max_weekly_loss_usdt = Column(Numeric(20, 8), nullable=True)
+    max_weekly_loss_pct = Column(Numeric(10, 6), nullable=True)
+    max_drawdown_pct = Column(Numeric(10, 6), nullable=True)
+    max_exposure_usdt = Column(Numeric(20, 8), nullable=True)
+    max_exposure_pct = Column(Numeric(10, 6), nullable=True)
+
+    # Behavior Settings
+    enabled = Column(Boolean, nullable=False, default=True)
+    override_account_limits = Column(Boolean, nullable=False, default=False)  # Strategy limits replace account limits
+    use_more_restrictive = Column(Boolean, nullable=False, default=True)  # Use most restrictive of both
+
+    # Loss Reset (optional - defaults to account-level)
+    daily_loss_reset_time = Column(DateTime(timezone=False), nullable=True)  # TIME type stored as datetime
+    weekly_loss_reset_day = Column(Integer, nullable=True)  # 1=Monday, 7=Sunday
+    timezone = Column(String(50), nullable=False, default="UTC")
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    strategy = relationship("Strategy", back_populates="risk_config")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index("idx_strategy_risk_config_strategy_id", "strategy_id", unique=True),
+        Index("idx_strategy_risk_config_user_id", "user_id"),
     )
 
 

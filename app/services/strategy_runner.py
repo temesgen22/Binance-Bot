@@ -249,7 +249,7 @@ class StrategyRunner:
                 sid for sid, summary in self.state_manager._strategies.items()
                 if summary.status == StrategyState.running
             ]
-            # Note: Strategies with status 'paused_by_risk' are NOT restored (they're effectively stopped)
+            # Note: Strategies with status 'stopped_by_risk' are NOT restored (they're effectively stopped)
             
             logger.info(f"Found {len(running_strategies)} strategies with status=running to restore")
             
@@ -860,7 +860,7 @@ class StrategyRunner:
                 logger.info(
                     f"🔴 MANUAL CLOSE: Closing {position_side} position for strategy {strategy_id}: "
                     f"{position['positionAmt']} {summary.symbol} @ {position['entryPrice']} "
-                    f"(Unrealized PnL: {position['unRealizedProfit']:.2f} USDT)"
+                    f"(Unrealized PnL: {float(position.get('unRealizedProfit', 0)):.2f} USDT)"
                 )
                 # BUG FIX: Wrap sync BinanceClient call in to_thread to avoid blocking event loop
                 close_order = await asyncio.to_thread(account_client.close_position, summary.symbol)
@@ -1140,20 +1140,20 @@ class StrategyRunner:
         account_id: str,
         reason: str = "Daily or weekly loss limit exceeded"
     ) -> list[str]:
-        """Pause all running strategies for an account when risk limits are exceeded.
+        """Stop all running strategies for an account when risk limits are exceeded.
         
         This method:
         1. Finds all running strategies for the account
-        2. Updates their status to "paused_by_risk" in database
-        3. Cancels their running tasks
+        2. Updates their status to "stopped_by_risk" in database
+        3. Cancels their running tasks and closes positions
         4. Logs account-level enforcement event
         
         Args:
             account_id: Account ID string (e.g., "default", "account1")
-            reason: Reason for pausing (e.g., "Daily loss limit exceeded")
+            reason: Reason for stopping (e.g., "Daily loss limit exceeded")
             
         Returns:
-            List of strategy IDs that were paused
+            List of strategy IDs that were stopped
         """
         if not (self.strategy_service and self.user_id):
             logger.warning(
@@ -1187,41 +1187,110 @@ class StrategyRunner:
             for db_strategy in strategies:
                 strategy_id = db_strategy.strategy_id
                 
-                # Update status to paused_by_risk in database
-                db_strategy.status = "paused_by_risk"
-                paused_strategies.append(strategy_id)
-                
-                # Update in-memory summary if exists
-                if strategy_id in self._strategies:
-                    summary = self._strategies[strategy_id]
-                    from app.models.strategy import StrategyState
-                    summary.status = StrategyState.paused_by_risk
+                # CRITICAL FIX: Use stop() function to fully stop the strategy
+                # This ensures proper cleanup: cancels TP/SL, closes positions, cancels tasks
+                # Then we update status to stopped_by_risk instead of stopped
+                try:
+                    # Call the full stop method for the strategy
+                    # This will handle cancelling TP/SL, closing positions, and cancelling the task
+                    await self.stop(strategy_id)
                     
-                    # Cancel the running task if exists
+                    # After stopping, explicitly set status to stopped_by_risk (override the "stopped" status)
+                    db_strategy.status = "stopped_by_risk"
+                    self.strategy_service.db_service.db.commit()  # Commit the status change
+                    
+                    # CRITICAL: Refresh database object to ensure changes are visible
+                    self.strategy_service.db_service.db.refresh(db_strategy)
+                    
+                    # Update in-memory summary IMMEDIATELY to prevent stale status
+                    if strategy_id in self._strategies:
+                        summary = self._strategies[strategy_id]
+                        from app.models.strategy import StrategyState
+                        summary.status = StrategyState.stopped_by_risk
+                    
+                    # Also update in state manager to sync Redis cache
+                    self.state_manager.update_strategy_in_db(
+                        strategy_id,
+                        save_to_redis=True,
+                        status=StrategyState.stopped_by_risk.value
+                    )
+                    
+                    # CRITICAL: Force refresh from database in StrategyService cache
+                    # This ensures list_strategies() will return updated status
+                    if self.strategy_service and hasattr(self.strategy_service, 'db_service'):
+                        try:
+                            # Invalidate Redis cache if exists
+                            if self.strategy_service.redis and self.strategy_service.redis.enabled:
+                                cache_key = self.strategy_service._redis_key(self.user_id, strategy_id)
+                                self.strategy_service.redis.delete(cache_key)
+                        except Exception as cache_exc:
+                            logger.debug(f"Failed to invalidate cache for strategy {strategy_id}: {cache_exc}")
+                    
+                    logger.info(
+                        f"✅ Fully stopped and marked as stopped_by_risk strategy {strategy_id} ({db_strategy.name}) "
+                        f"for account {account_id}: {reason}"
+                    )
+                except Exception as stop_exc:
+                    logger.error(
+                        f"Error stopping strategy {strategy_id} during account-level pause: {stop_exc}",
+                        exc_info=True
+                    )
+                    # If stopping fails, at least mark as stopped_by_risk in DB and cancel task manually
+                    db_strategy.status = "stopped_by_risk"
+                    self.strategy_service.db_service.db.commit()
+                    
+                    # Cancel task manually if stop() failed
                     if strategy_id in self._tasks:
                         task = self._tasks[strategy_id]
                         if not task.done():
-                            logger.info(
-                                f"Cancelling task for strategy {strategy_id} "
-                                f"due to account risk limit: {reason}"
-                            )
+                            logger.warning(f"Manually cancelling task for strategy {strategy_id} after stop() failed")
                             task.cancel()
-                            # Wait a bit for task to cancel
                             try:
                                 await asyncio.wait_for(task, timeout=2.0)
                             except (asyncio.CancelledError, asyncio.TimeoutError):
                                 pass
-                            # Remove from tasks dict
                             async with self._lock:
                                 self._tasks.pop(strategy_id, None)
+                    
+                    if strategy_id in self._strategies:
+                        summary = self._strategies[strategy_id]
+                        from app.models.strategy import StrategyState
+                        summary.status = StrategyState.stopped_by_risk
                 
-                logger.info(
-                    f"✅ Paused strategy {strategy_id} ({db_strategy.name}) "
-                    f"for account {account_id}: {reason}"
-                )
+                paused_strategies.append(strategy_id)
             
-            # Commit database changes
+            # CRITICAL: Final commit to ensure all status changes are persisted
             self.strategy_service.db_service.db.commit()
+            
+            # CRITICAL: Force expire all cached objects to ensure fresh queries see updated status
+            # This prevents SQLAlchemy from returning stale cached objects with old status
+            try:
+                self.strategy_service.db_service.db.expire_all()
+            except Exception as expire_exc:
+                logger.debug(f"Failed to expire database cache: {expire_exc}")
+            
+            # CRITICAL: Verify all strategies were actually stopped by checking database
+            if paused_strategies:
+                from app.models.db_models import Strategy
+                # Refresh query to ensure we get latest status
+                paused_count_verified = self.strategy_service.db_service.db.query(Strategy).filter(
+                    Strategy.user_id == self.user_id,
+                    Strategy.account_id == account.id,
+                    Strategy.strategy_id.in_(paused_strategies),
+                    Strategy.status == "stopped_by_risk"
+                ).count()
+                
+                if paused_count_verified != len(paused_strategies):
+                    logger.error(
+                        f"⚠️ CRITICAL: Only {paused_count_verified}/{len(paused_strategies)} strategies "
+                        f"verified as stopped_by_risk in database after pause operation! "
+                        f"Some strategies may still be running."
+                    )
+                else:
+                    logger.info(
+                        f"✅ Verified: {paused_count_verified}/{len(paused_strategies)} strategies "
+                        f"successfully stopped and status set to stopped_by_risk in database"
+                    )
             
             # Log account-level enforcement event
             if paused_strategies:
@@ -1241,7 +1310,7 @@ class StrategyRunner:
                 )
                 
                 logger.warning(
-                    f"🛑 PAUSED {len(paused_strategies)} strategies for account {account_id}: {reason}"
+                    f"🛑 STOPPED {len(paused_strategies)} strategies for account {account_id}: {reason}"
                 )
             
             return paused_strategies
@@ -1259,6 +1328,9 @@ class StrategyRunner:
         In multi-user mode, loads from database via StrategyService.
         In single-user mode, returns in-memory strategies.
         
+        CRITICAL: Always loads fresh status from database to ensure consistency.
+        This prevents stale status showing "running" when strategies are actually stopped_by_risk.
+        
         Note: This method is sync, so it doesn't use locks. Dictionary reads are generally
         safe in Python (GIL protection), but for consistency, consider making this async
         if called from async contexts.
@@ -1266,12 +1338,16 @@ class StrategyRunner:
         # Multi-user mode: load from database if available
         if self.strategy_service and self.user_id:
             try:
+                # CRITICAL: Always load fresh from database to get latest status
+                # This ensures stopped_by_risk status is visible immediately
                 strategies = self.strategy_service.list_strategies(self.user_id)
                 # CRITICAL FIX: Create a copy to avoid race conditions with async tasks modifying the dict
-                # Update in-memory cache (note: not protected with lock since this is sync method)
-                # For thread safety, consider making this method async
+                # Update in-memory cache with fresh status from database
+                # This ensures in-memory cache matches database (source of truth)
                 strategies_copy = []
                 for summary in strategies:
+                    # CRITICAL: Update in-memory cache with fresh status from database
+                    # This prevents stale "running" status when strategies are actually stopped_by_risk
                     self._strategies[summary.id] = summary
                     strategies_copy.append(summary)
                 return strategies_copy

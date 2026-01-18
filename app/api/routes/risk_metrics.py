@@ -36,13 +36,18 @@ from app.models.risk_management import (
     EnforcementHistoryResponse,
     EnforcementEventResponse,
     RealTimeRiskStatusResponse,
-    StrategyRiskStatusResponse
+    StrategyRiskStatusResponse,
+    StrategyRiskConfigCreate,
+    StrategyRiskConfigUpdate,
+    StrategyRiskConfigResponse
 )
+from app.models.order import OrderResponse
 from sqlalchemy.orm import Session
 from app.models.db_models import User, Account
 
 # Import dependencies from the correct location
-from app.api.deps import get_current_user, get_db_session_dependency, get_client_manager, get_account_service
+from app.api.deps import get_current_user, get_db_session_dependency, get_client_manager, get_account_service, get_strategy_runner
+from app.services.strategy_runner import StrategyRunner
 
 
 router = APIRouter(prefix="/api/risk", tags=["risk-metrics"])
@@ -52,7 +57,13 @@ router = APIRouter(prefix="/api/risk", tags=["risk-metrics"])
 # Helper Functions to Eliminate Repetitive Code
 # ============================================================================
 
-from app.risk.utils import get_pnl_from_completed_trade, get_timestamp_from_completed_trade
+from app.risk.utils import (
+    get_pnl_from_completed_trade,
+    get_timestamp_from_completed_trade,
+    calculate_today_start,
+    calculate_week_start,
+    calculate_realized_pnl_from_trades
+)
 
 def _convert_db_trades_to_order_responses(
     db_trades: List[DBTrade],
@@ -786,8 +797,8 @@ async def get_daily_risk_report(
                     if client:
                         balance = await asyncio.to_thread(client.futures_account_balance)
                         current_balance = float(balance)
-                        if daily_trades:
-                            daily_pnl = sum(float(t.realized_pnl or 0) for t in daily_trades)
+                        if all_completed_trades:
+                            daily_pnl = sum(_get_pnl_from_completed_trade(t) for t in all_completed_trades)
                             initial_balance = current_balance - daily_pnl
                             if initial_balance <= 0:
                                 initial_balance = current_balance * 0.5
@@ -988,8 +999,8 @@ async def get_weekly_risk_report(
                     if client:
                         balance = await asyncio.to_thread(client.futures_account_balance)
                         current_balance = float(balance)
-                        if weekly_trades:
-                            weekly_pnl = sum(float(t.realized_pnl or 0) for t in weekly_trades)
+                        if all_completed_trades:
+                            weekly_pnl = sum(_get_pnl_from_completed_trade(t) for t in all_completed_trades)
                             initial_balance = current_balance - weekly_pnl
                             if initial_balance <= 0:
                                 initial_balance = current_balance * 0.5
@@ -1580,21 +1591,17 @@ async def get_realtime_risk_status(
                     logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
         
         # Calculate daily PnL (realized only) from completed trades
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        daily_completed_trades = [
-            t for t in all_completed_trades
-            if (getattr(t, 'exit_time', None) or getattr(t, 'entry_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= today_start
-        ]
-        daily_pnl_usdt = sum(_get_pnl_from_completed_trade(t) for t in daily_completed_trades)
+        # CRITICAL: Use the same time window as risk checks (respects timezone/reset time from config)
+        # Use helper functions to eliminate code duplication
+        tz_str = risk_config.timezone or "UTC"
+        today_start = calculate_today_start(tz_str, risk_config.daily_loss_reset_time)
+        daily_pnl_usdt = calculate_realized_pnl_from_trades(all_completed_trades, today_start)
         
         # Calculate weekly PnL (realized only) from completed trades
-        days_since_monday = datetime.now(timezone.utc).weekday()
-        week_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_since_monday)
-        weekly_completed_trades = [
-            t for t in all_completed_trades
-            if (getattr(t, 'exit_time', None) or getattr(t, 'entry_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= week_start
-        ]
-        weekly_pnl_usdt = sum(_get_pnl_from_completed_trade(t) for t in weekly_completed_trades)
+        # Use the same timezone and reset day as risk checks
+        reset_day = risk_config.weekly_loss_reset_day or 1  # 1=Monday, 7=Sunday
+        week_start = calculate_week_start(tz_str, reset_day)
+        weekly_pnl_usdt = calculate_realized_pnl_from_trades(all_completed_trades, week_start)
         
         # Get account balance for percentage calculations
         account_balance = 0.0
@@ -1666,10 +1673,10 @@ async def get_realtime_risk_status(
             breach_reasons.append(("DRAWDOWN_LIMIT_BREACH", f"Drawdown limit exceeded: {current_drawdown_pct:.2f}% >= {risk_config.max_drawdown_pct * 100:.2f}%"))
         elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt):
             risk_status = "breach"
-            breach_reasons.append(("DAILY_LOSS_LIMIT_BREACH", f"Daily loss limit exceeded: ${daily_pnl_usdt:.2f} <= -${risk_config.max_daily_loss_usdt:.2f}"))
+            breach_reasons.append(("DAILY_LOSS_LIMIT_BREACH", f"Daily loss limit exceeded: ${abs(daily_pnl_usdt):.2f} / ${risk_config.max_daily_loss_usdt:.2f}"))
         elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt):
             risk_status = "breach"
-            breach_reasons.append(("WEEKLY_LOSS_LIMIT_BREACH", f"Weekly loss limit exceeded: ${weekly_pnl_usdt:.2f} <= -${risk_config.max_weekly_loss_usdt:.2f}"))
+            breach_reasons.append(("WEEKLY_LOSS_LIMIT_BREACH", f"Weekly loss limit exceeded: ${abs(weekly_pnl_usdt):.2f} / ${risk_config.max_weekly_loss_usdt:.2f}"))
         elif risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt:
             risk_status = "breach"
             breach_reasons.append(("PORTFOLIO_EXPOSURE_LIMIT_BREACH", f"Portfolio exposure limit exceeded: ${total_exposure_usdt:.2f} >= ${risk_config.max_portfolio_exposure_usdt:.2f}"))
@@ -1786,6 +1793,7 @@ async def get_strategy_risk_status(
     strategy_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session_dependency),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
 ) -> StrategyRiskStatusResponse:
     """Get risk status for a specific strategy.
     
@@ -1833,45 +1841,155 @@ async def get_strategy_risk_status(
             logger.warning(f"Error getting enforcement events for strategy {strategy_id}: {e}")
             last_event = None
         
-        # Check if strategy is paused by risk (circuit breaker active)
+        # Check if strategy is stopped by risk (circuit breaker active)
         # Handle status as string or enum
         strategy_status = str(db_strategy.status) if hasattr(db_strategy, 'status') and db_strategy.status else None
-        is_paused_by_risk = strategy_status == "paused_by_risk"
-        circuit_breaker_active = is_paused_by_risk
+        is_stopped_by_risk = strategy_status == "stopped_by_risk"
+        circuit_breaker_active = is_stopped_by_risk
         
-        # Get risk config to check limits
-        risk_config = None
+        # Get account-level risk config
+        account_risk_config = None
         try:
             risk_service = RiskManagementService(db=db, redis_storage=None)
-            risk_config = risk_service.get_risk_config(user_id, account_id or "default")
+            account_risk_config = risk_service.get_risk_config(user_id, account_id or "default")
         except Exception as e:
-            logger.warning(f"Error getting risk config for strategy {strategy_id}: {e}")
-            risk_config = None
+            logger.warning(f"Error getting account risk config for strategy {strategy_id}: {e}")
+            account_risk_config = None
+        
+        # Get strategy-level risk config if available
+        strategy_risk_config = None
+        try:
+            db_strategy_risk_config = db_service.get_strategy_risk_config(user_id, strategy_id)
+            if db_strategy_risk_config:
+                from app.models.risk_management import StrategyRiskConfigResponse
+                strategy_risk_config = StrategyRiskConfigResponse.from_orm(db_strategy_risk_config)
+                logger.info(f"Loaded strategy-level risk config for strategy {strategy_id}: enabled={strategy_risk_config.enabled}, daily_loss_limit={strategy_risk_config.max_daily_loss_usdt}, weekly_loss_limit={strategy_risk_config.max_weekly_loss_usdt}")
+        except Exception as e:
+            logger.info(f"Strategy {strategy_id} has no strategy-level risk config: {e}. Using account-level config only.")
+            strategy_risk_config = None
+        
+        # Get effective risk config by merging account + strategy configs
+        # This handles priority modes: override, more_restrictive, strategy_only
+        # Same logic as PortfolioRiskManager.get_effective_risk_config()
+        risk_config = account_risk_config  # Default to account config
+        
+        if strategy_risk_config and strategy_risk_config.enabled and account_risk_config:
+            try:
+                from app.models.risk_management import RiskManagementConfigResponse
+                
+                # Convert strategy config to RiskManagementConfigResponse format
+                # StrategyRiskConfigResponse uses max_exposure_usdt, RiskManagementConfigResponse uses max_portfolio_exposure_usdt
+                strategy_config_conv = RiskManagementConfigResponse(
+                    id=strategy_risk_config.id if hasattr(strategy_risk_config, 'id') else account_risk_config.id,
+                    user_id=strategy_risk_config.user_id if hasattr(strategy_risk_config, 'user_id') else account_risk_config.user_id,
+                    account_id=account_id or "default",
+                    timezone=strategy_risk_config.timezone or account_risk_config.timezone or "UTC",
+                    max_portfolio_exposure_usdt=getattr(strategy_risk_config, 'max_exposure_usdt', None) or account_risk_config.max_portfolio_exposure_usdt,
+                    max_portfolio_exposure_pct=getattr(strategy_risk_config, 'max_exposure_pct', None) or account_risk_config.max_portfolio_exposure_pct,
+                    max_daily_loss_usdt=strategy_risk_config.max_daily_loss_usdt or account_risk_config.max_daily_loss_usdt,
+                    max_daily_loss_pct=strategy_risk_config.max_daily_loss_pct or account_risk_config.max_daily_loss_pct,
+                    max_weekly_loss_usdt=strategy_risk_config.max_weekly_loss_usdt or account_risk_config.max_weekly_loss_usdt,
+                    max_weekly_loss_pct=strategy_risk_config.max_weekly_loss_pct or account_risk_config.max_weekly_loss_pct,
+                    max_drawdown_pct=strategy_risk_config.max_drawdown_pct or account_risk_config.max_drawdown_pct,
+                    daily_loss_reset_time=strategy_risk_config.daily_loss_reset_time or account_risk_config.daily_loss_reset_time,
+                    weekly_loss_reset_day=strategy_risk_config.weekly_loss_reset_day or account_risk_config.weekly_loss_reset_day,
+                    auto_reduce_order_size=account_risk_config.auto_reduce_order_size if account_risk_config else False,  # Strategy config doesn't have this - use account config
+                    created_at=strategy_risk_config.created_at if hasattr(strategy_risk_config, 'created_at') else account_risk_config.created_at,
+                    updated_at=strategy_risk_config.updated_at if hasattr(strategy_risk_config, 'updated_at') else account_risk_config.updated_at,
+                )
+                
+                # Priority Rule 1: Override mode - strategy limits replace account limits
+                if strategy_risk_config.override_account_limits:
+                    risk_config = strategy_config_conv
+                    logger.info(f"Strategy {strategy_id}: Using override mode - strategy limits only (daily: {risk_config.max_daily_loss_usdt}, weekly: {risk_config.max_weekly_loss_usdt})")
+                
+                # Priority Rule 2: More restrictive mode - use most restrictive of both
+                elif strategy_risk_config.use_more_restrictive:
+                    # Take minimum (most restrictive) for loss limits
+                    # Take maximum (most restrictive) for exposure limits
+                    strategy_exposure = getattr(strategy_risk_config, 'max_exposure_usdt', None)
+                    account_exposure = account_risk_config.max_portfolio_exposure_usdt
+                    risk_config = RiskManagementConfigResponse(
+                        id=account_risk_config.id,
+                        user_id=account_risk_config.user_id,
+                        account_id=account_id or "default",
+                        timezone=strategy_risk_config.timezone or account_risk_config.timezone or "UTC",
+                        max_portfolio_exposure_usdt=min(x for x in [strategy_exposure, account_exposure] if x is not None) if (strategy_exposure and account_exposure) else (strategy_exposure or account_exposure),
+                        max_portfolio_exposure_pct=min(
+                            x for x in [getattr(strategy_risk_config, 'max_exposure_pct', None), account_risk_config.max_portfolio_exposure_pct]
+                            if x is not None
+                        ) if (getattr(strategy_risk_config, 'max_exposure_pct', None) and account_risk_config.max_portfolio_exposure_pct) else (getattr(strategy_risk_config, 'max_exposure_pct', None) or account_risk_config.max_portfolio_exposure_pct),
+                        max_daily_loss_usdt=min(
+                            x for x in [strategy_risk_config.max_daily_loss_usdt, account_risk_config.max_daily_loss_usdt]
+                            if x is not None
+                        ) if (strategy_risk_config.max_daily_loss_usdt and account_risk_config.max_daily_loss_usdt) else (strategy_risk_config.max_daily_loss_usdt or account_risk_config.max_daily_loss_usdt),
+                        max_daily_loss_pct=min(
+                            x for x in [strategy_risk_config.max_daily_loss_pct, account_risk_config.max_daily_loss_pct]
+                            if x is not None
+                        ) if (strategy_risk_config.max_daily_loss_pct and account_risk_config.max_daily_loss_pct) else (strategy_risk_config.max_daily_loss_pct or account_risk_config.max_daily_loss_pct),
+                        max_weekly_loss_usdt=min(
+                            x for x in [strategy_risk_config.max_weekly_loss_usdt, account_risk_config.max_weekly_loss_usdt]
+                            if x is not None
+                        ) if (strategy_risk_config.max_weekly_loss_usdt and account_risk_config.max_weekly_loss_usdt) else (strategy_risk_config.max_weekly_loss_usdt or account_risk_config.max_weekly_loss_usdt),
+                        max_weekly_loss_pct=min(
+                            x for x in [strategy_risk_config.max_weekly_loss_pct, account_risk_config.max_weekly_loss_pct]
+                            if x is not None
+                        ) if (strategy_risk_config.max_weekly_loss_pct and account_risk_config.max_weekly_loss_pct) else (strategy_risk_config.max_weekly_loss_pct or account_risk_config.max_weekly_loss_pct),
+                        max_drawdown_pct=min(
+                            x for x in [strategy_risk_config.max_drawdown_pct, account_risk_config.max_drawdown_pct]
+                            if x is not None
+                        ) if (strategy_risk_config.max_drawdown_pct and account_risk_config.max_drawdown_pct) else (strategy_risk_config.max_drawdown_pct or account_risk_config.max_drawdown_pct),
+                        daily_loss_reset_time=strategy_risk_config.daily_loss_reset_time or account_risk_config.daily_loss_reset_time,
+                        weekly_loss_reset_day=strategy_risk_config.weekly_loss_reset_day or account_risk_config.weekly_loss_reset_day,
+                        auto_reduce_order_size=account_risk_config.auto_reduce_order_size if account_risk_config else False,  # Strategy config doesn't have this - use account config
+                        created_at=account_risk_config.created_at,
+                        updated_at=account_risk_config.updated_at,
+                    )
+                    logger.info(f"Strategy {strategy_id}: Using more restrictive mode - merged limits (daily: {risk_config.max_daily_loss_usdt}, weekly: {risk_config.max_weekly_loss_usdt})")
+                
+                # Priority Rule 3: Strategy-only mode - use strategy limits, ignore account limits
+                else:
+                    risk_config = strategy_config_conv
+                    logger.info(f"Strategy {strategy_id}: Using strategy-only mode - strategy limits only (daily: {risk_config.max_daily_loss_usdt}, weekly: {risk_config.max_weekly_loss_usdt})")
+            except Exception as e:
+                logger.warning(f"Error merging strategy and account risk config for strategy {strategy_id}: {e}. Using account-level config only.")
+                risk_config = account_risk_config
         
         # CRITICAL: Check account-level risk status FIRST
-        # If account is breached, ALL strategies for that account should be blocked
+        # If account is breached, strategies WITHOUT override/strategy-only mode should be blocked
+        # Strategies with override/strategy-only mode are independent of account limits
         account_risk_status = None
         account_daily_loss_usdt = 0.0
+        account_weekly_loss_usdt = 0.0
         account_breach_reasons = []
         
-        if account_id and risk_config:
+        # CRITICAL: Use account_risk_config for account-level checks, NOT risk_config
+        # risk_config might be strategy-only config in override/strategy-only mode
+        account_check_config = account_risk_config  # Always use account-level config for account checks
+        
+        if account_id and account_check_config:
             try:
-                # Calculate account-level daily loss (across ALL strategies for this account)
-                trade_service = TradeService(db=db)
-                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                
-                # Get all trades for this account today
-                account_trades = trade_service.get_trades_by_account(user_id, account_id) or []
-                account_trades_today = [
-                    t for t in account_trades
-                    if hasattr(t, 'timestamp') and t.timestamp and t.timestamp >= today_start
-                ]
-                
-                # Calculate account-level daily loss from completed trades
+                # Calculate account-level daily and weekly loss (across ALL strategies for this account)
+                # CRITICAL: Use same timezone/reset time as get_realtime_risk_status for consistency
+                from zoneinfo import ZoneInfo
                 from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
                 
+                # Use helper functions to eliminate code duplication (same logic as get_realtime_risk_status)
+                # CRITICAL: Use account_check_config (account_risk_config) for timezone/reset times
+                tz_str = getattr(account_check_config, 'timezone', None) or "UTC"
+                # Ensure timezone_str is a string, not a MagicMock
+                if not isinstance(tz_str, str):
+                    tz_str = "UTC"
+                today_start = calculate_today_start(tz_str, getattr(account_check_config, 'daily_loss_reset_time', None))
+                reset_day = getattr(account_check_config, 'weekly_loss_reset_day', None)
+                # Ensure reset_day is an integer, not a MagicMock
+                if not isinstance(reset_day, int):
+                    reset_day = 1  # 1=Monday, 7=Sunday
+                week_start = calculate_week_start(tz_str, reset_day)
+                
+                trade_service = TradeService(db=db)
+                
                 # Get all strategies for this account
-                # Query strategies by account_id (account_id is the UUID foreign key)
                 account_uuid = None
                 try:
                     db_account = db_service.get_account_by_id(user_id, account_id)
@@ -1891,44 +2009,74 @@ async def get_strategy_risk_status(
                     except Exception as e:
                         logger.debug(f"Error getting strategies for account {account_id}: {e}")
                 
-                # Calculate total daily loss across all strategies for this account
-                account_total_daily_loss = 0.0
+                # Calculate total daily and weekly loss across all strategies for this account
+                account_all_completed_trades = []
                 for acc_strategy in account_strategies:
                     try:
+                        # Get all completed trades for this strategy (no date filter yet - we'll filter later)
                         completed_trades = _get_completed_trades_from_database(
                             db_service=db_service,
                             user_id=user_id,
                             strategy_uuid=acc_strategy.id,
                             strategy_id=acc_strategy.strategy_id,
-                            start_datetime=today_start,
+                            start_datetime=None,  # Get all trades, filter by exit_time later
                             end_datetime=None
                         )
-                        for trade in completed_trades:
-                            pnl = _get_pnl_from_completed_trade(trade)
-                            account_total_daily_loss += pnl
+                        account_all_completed_trades.extend(completed_trades)
                     except Exception as e:
                         logger.debug(f"Error getting completed trades for account strategy {acc_strategy.strategy_id}: {e}")
                 
-                account_daily_loss_usdt = account_total_daily_loss
+                # Use helper function to calculate PnL from completed trades (eliminates duplication)
+                account_daily_loss_usdt = calculate_realized_pnl_from_trades(account_all_completed_trades, today_start)
+                account_weekly_loss_usdt = calculate_realized_pnl_from_trades(account_all_completed_trades, week_start)
+                
+                # Get trade counts for logging (optional)
+                account_daily_completed_trades = [
+                    t for t in account_all_completed_trades
+                    if (getattr(t, 'exit_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= today_start
+                ]
+                account_weekly_completed_trades = [
+                    t for t in account_all_completed_trades
+                    if (getattr(t, 'exit_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= week_start
+                ]
+                
+                logger.debug(
+                    f"Account '{account_id}' PnL: daily={account_daily_loss_usdt:.2f} "
+                    f"(from {len(account_daily_completed_trades)} trades), "
+                    f"weekly={account_weekly_loss_usdt:.2f} (from {len(account_weekly_completed_trades)} trades)"
+                )
                 
                 # Check if account-level daily loss exceeds limit
-                if risk_config.max_daily_loss_usdt:
-                    max_daily_loss = float(risk_config.max_daily_loss_usdt)
+                # CRITICAL: Use account_check_config (account_risk_config) limits, not risk_config
+                if account_check_config.max_daily_loss_usdt:
+                    max_daily_loss = float(account_check_config.max_daily_loss_usdt)
                     if max_daily_loss > 0 and account_daily_loss_usdt < 0:
-                        loss_threshold = -max_daily_loss
-                        if account_daily_loss_usdt <= loss_threshold:
+                        # Use absolute values for clarity: |loss| >= limit means limit exceeded
+                        if abs(account_daily_loss_usdt) >= max_daily_loss:
                             account_risk_status = "breach"
                             account_breach_reasons.append(
-                                f"Account daily loss limit exceeded: ${account_daily_loss_usdt:.2f} / -${max_daily_loss:.2f}"
+                                f"Account daily loss limit exceeded: ${abs(account_daily_loss_usdt):.2f} / ${max_daily_loss:.2f}"
                             )
                             logger.warning(
                                 f"Account '{account_id}' breached daily loss limit: "
-                                f"${account_daily_loss_usdt:.2f} <= -${max_daily_loss:.2f}"
+                                f"${abs(account_daily_loss_usdt):.2f} >= ${max_daily_loss:.2f}"
                             )
                 
-                # Check other account-level limits (drawdown, weekly loss, exposure)
-                # This uses the same logic as get_realtime_risk_status
-                # For now, we'll focus on daily loss as that's the most common breach
+                # Check if account-level weekly loss exceeds limit
+                # CRITICAL: Use account_check_config (account_risk_config) limits, not risk_config
+                if account_check_config.max_weekly_loss_usdt:
+                    max_weekly_loss = float(account_check_config.max_weekly_loss_usdt)
+                    if max_weekly_loss > 0 and account_weekly_loss_usdt < 0:
+                        # Use absolute values for clarity: |loss| >= limit means limit exceeded
+                        if abs(account_weekly_loss_usdt) >= max_weekly_loss:
+                            account_risk_status = "breach"
+                            account_breach_reasons.append(
+                                f"Account weekly loss limit exceeded: ${abs(account_weekly_loss_usdt):.2f} / ${max_weekly_loss:.2f}"
+                            )
+                            logger.warning(
+                                f"Account '{account_id}' breached weekly loss limit: "
+                                f"${abs(account_weekly_loss_usdt):.2f} >= ${max_weekly_loss:.2f}"
+                            )
                 
             except Exception as e:
                 logger.warning(f"Error checking account-level risk status for strategy {strategy_id}: {e}")
@@ -1939,21 +2087,143 @@ async def get_strategy_risk_status(
         can_trade = True
         blocked_reasons = []
         
-        # CRITICAL: If account is breached, block ALL strategies for that account
-        if account_risk_status == "breach":
+        # CRITICAL: If account is breached, block strategies that are NOT in override/strategy-only mode
+        # Strategies with override/strategy-only mode are independent and should only be checked against their own limits
+        strategy_is_independent = (
+            strategy_risk_config and 
+            strategy_risk_config.enabled and 
+            (strategy_risk_config.override_account_limits or 
+             (not strategy_risk_config.use_more_restrictive and not strategy_risk_config.override_account_limits))
+        )
+        
+        if account_risk_status == "breach" and not strategy_is_independent:
+            # Account-level breach affects this strategy (not in override/strategy-only mode)
             can_trade = False
             blocked_reasons.extend(account_breach_reasons)
             blocked_reasons.append(f"Account '{account_id}' risk limit breached - all strategies blocked")
             logger.warning(
                 f"Strategy {strategy_id} blocked: Account '{account_id}' has risk status 'breach'. "
-                f"Account-level daily loss: ${account_daily_loss_usdt:.2f}"
+                f"Account-level daily loss: ${account_daily_loss_usdt:.2f}, weekly loss: ${account_weekly_loss_usdt:.2f}"
+            )
+            
+            # CRITICAL FIX: Automatically pause all strategies for this account when breach is detected
+            # This ensures strategies are paused even if they're not executing orders
+            # Determine the limit type from breach reasons
+            # CRITICAL: Check for both daily and weekly - use same logic for both
+            limit_type = None
+            daily_breach_detected = any("daily loss" in reason.lower() for reason in account_breach_reasons)
+            weekly_breach_detected = any("weekly loss" in reason.lower() for reason in account_breach_reasons)
+            
+            if daily_breach_detected:
+                limit_type = "DAILY_LOSS"
+            elif weekly_breach_detected:
+                limit_type = "WEEKLY_LOSS"
+            
+            # CRITICAL: If daily OR weekly loss breached, set circuit_breaker_active = True
+            # This ensures UI shows "Paused" instead of "Blocked"
+            # Both daily and weekly should trigger the same stopping behavior
+            if limit_type:
+                circuit_breaker_active = True
+                is_stopped_by_risk = True  # Treat as stopped_by_risk even if status not updated yet
+                # Refresh strategy status from database after auto-pause
+                db.refresh(db_strategy)
+                strategy_status = str(db_strategy.status) if hasattr(db_strategy, 'status') and db_strategy.status else None
+            
+            # CRITICAL: Both DAILY_LOSS and WEEKLY_LOSS should trigger pause_all_strategies_for_account
+            # This ensures strategies are stopped when either limit is exceeded
+            if runner and account_id and limit_type:
+                try:
+                    # CRITICAL: Get account object first (needed for account.id)
+                    account = db_service.get_account_by_id(user_id, account_id)
+                    running_strategies = []
+                    if not account:
+                        logger.warning(f"Cannot auto-pause: account {account_id} not found")
+                    else:
+                        # CRITICAL: Only auto-pause if strategies are actually running
+                        # Don't pause if they're already stopped_by_risk (prevent duplicate pauses)
+                        from app.models.db_models import Strategy
+                        running_strategies = db.query(Strategy).filter(
+                            Strategy.user_id == current_user.id,
+                            Strategy.account_id == account.id,
+                            Strategy.status == "running"
+                        ).all()
+                    
+                    # Also check if current strategy is still running
+                    current_strategy_running = (strategy_status == "running")
+                    
+                    if (running_strategies or current_strategy_running) and account:
+                        logger.warning(
+                            f"🛑 Auto-pausing {len(running_strategies) + (1 if current_strategy_running else 0)} strategies for account {account_id} "
+                            f"due to {limit_type} breach detected in risk status check"
+                        )
+                        # Pause all strategies for this account (only running ones)
+                        paused_strategies = await runner.pause_all_strategies_for_account(
+                            account_id=account_id,
+                            reason=f"{limit_type.replace('_', ' ').title()} limit exceeded: {', '.join(account_breach_reasons)}"
+                        )
+                        
+                        # CRITICAL: Wait a moment for database commit to complete
+                        import asyncio
+                        await asyncio.sleep(0.1)  # 100ms for DB commit
+                        
+                        # CRITICAL: Force refresh from database to get updated status
+                        # Wait a bit more to ensure all database commits completed
+                        await asyncio.sleep(0.2)  # 200ms total for all commits
+                        db.expire_all()  # Expire all cached objects to force fresh query
+                        
+                        # Reload strategy from database to get fresh status
+                        db_strategy_fresh = db.query(Strategy).filter(
+                            Strategy.user_id == current_user.id,
+                            Strategy.strategy_id == strategy_id
+                        ).first()
+                        
+                        if db_strategy_fresh:
+                            strategy_status = str(db_strategy_fresh.status) if hasattr(db_strategy_fresh, 'status') and db_strategy_fresh.status else None
+                            is_stopped_by_risk = strategy_status == "stopped_by_risk"
+                            circuit_breaker_active = is_stopped_by_risk
+                            
+                            # CRITICAL: If status is still "running", the pause may have failed
+                            if strategy_status == "running":
+                                logger.error(
+                                    f"⚠️ CRITICAL: Strategy {strategy_id} status is still 'running' after auto-pause! "
+                                    f"This indicates pause_all_strategies_for_account() did not complete successfully. "
+                                    f"Paused strategies: {paused_strategies}"
+                                )
+                                # Force set to stopped_by_risk in response to show correct risk status
+                                is_stopped_by_risk = True
+                                circuit_breaker_active = True
+                            else:
+                                logger.info(
+                                    f"✅ Auto-pause completed: {len(paused_strategies)} strategies paused. "
+                                    f"Current strategy {strategy_id} status: {strategy_status} (stopped_by_risk={is_stopped_by_risk})"
+                                )
+                        else:
+                            logger.warning(f"Could not refresh strategy {strategy_id} from database after auto-pause")
+                            # If we can't refresh, assume it should be paused since we just paused it
+                            is_stopped_by_risk = True
+                            circuit_breaker_active = True
+                except Exception as pause_error:
+                    # Log error but don't fail the risk status check
+                    logger.error(
+                        f"Failed to auto-pause strategies for account {account_id} during risk status check: {pause_error}",
+                        exc_info=True
+                    )
+        elif account_risk_status == "breach" and strategy_is_independent:
+            # Account is breached but this strategy is independent (override/strategy-only mode)
+            # Don't block - let strategy-level checks handle it
+            # CRITICAL: Do NOT auto-pause strategies when they are independent
+            # Independent strategies should only be checked against their own limits
+            logger.debug(
+                f"Strategy {strategy_id} is independent (override/strategy-only mode). "
+                f"Account breach ({account_risk_status}) does not affect this strategy. "
+                f"Strategy will be evaluated against its own limits only."
             )
         
         # Check circuit breaker first (highest priority)
-        if is_paused_by_risk:
+        if is_stopped_by_risk:
             can_trade = False
-            blocked_reasons.append("Strategy paused by risk management (circuit breaker)")
-            logger.debug(f"Strategy {strategy_id} is paused by risk - blocking trade")
+            blocked_reasons.append("Strategy stopped by risk management (circuit breaker)")
+            logger.debug(f"Strategy {strategy_id} is stopped by risk - blocking trade")
         
         risk_checks = {}
         
@@ -1966,6 +2236,7 @@ async def get_strategy_risk_status(
             # CRITICAL: Use trade matching to calculate from completed trade cycles
             today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             daily_loss_usdt = 0.0  # Default to 0 (no loss) if we can't get trades
+            weekly_loss_usdt = 0.0  # Default to 0 (no loss) if we can't get trades
             try:
                 # Only get trades if we have a valid account_id
                 today_trades = []
@@ -2018,12 +2289,13 @@ async def get_strategy_risk_status(
                             logger.debug(f"Skipping trade object without strategy_id attribute (likely OrderResponse): {type(t)}")
                             continue
                     
+                    # Initialize trades_by_strategy_uuid outside the if block to avoid UnboundLocalError
+                    trades_by_strategy_uuid = {}
                     if today_trades_filtered:
                         # CRITICAL: Match trades to completed positions (same logic as reports page)
                         from app.models.order import OrderResponse
                         
                         # Group by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
-                        trades_by_strategy_uuid = {}
                         for db_trade in today_trades_filtered:
                             if not db_trade:
                                 continue
@@ -2092,20 +2364,48 @@ async def get_strategy_risk_status(
                                 import traceback
                                 logger.debug(f"Traceback: {traceback.format_exc()}")
                 
-                # Calculate daily loss from completed trades
-                daily_loss_usdt = sum(
-                    _get_pnl_from_completed_trade(t)
-                    for t in all_completed_trades
-                )
-                logger.debug(f"Strategy {strategy_id}: Found {len(all_completed_trades)} completed trades today, daily_loss={daily_loss_usdt:.2f}")
+                # Calculate daily and weekly loss from completed trades
+                # Use same timezone/reset time as risk checks for consistency
+                # Use helper functions to eliminate code duplication
+                tz_str = getattr(risk_config, 'timezone', None) or "UTC"
+                # Ensure timezone_str is a string, not a MagicMock
+                if not isinstance(tz_str, str):
+                    tz_str = "UTC"
+                today_start = calculate_today_start(tz_str, getattr(risk_config, 'daily_loss_reset_time', None))
+                daily_loss_usdt = calculate_realized_pnl_from_trades(all_completed_trades, today_start)
+                
+                reset_day = getattr(risk_config, 'weekly_loss_reset_day', None)
+                # Ensure reset_day is an integer, not a MagicMock
+                if not isinstance(reset_day, int):
+                    reset_day = 1  # 1=Monday, 7=Sunday
+                week_start = calculate_week_start(tz_str, reset_day)
+                weekly_loss_usdt = calculate_realized_pnl_from_trades(all_completed_trades, week_start)
+                
+                # Get trade counts for logging (optional)
+                daily_completed_trades = [
+                    t for t in all_completed_trades
+                    if (getattr(t, 'exit_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= today_start
+                ]
+                weekly_completed_trades = [
+                    t for t in all_completed_trades
+                    if (getattr(t, 'exit_time', None) or datetime.min.replace(tzinfo=timezone.utc)) >= week_start
+                ]
+                logger.debug(f"Strategy {strategy_id}: Found {len(daily_completed_trades)} completed trades today, daily_loss={daily_loss_usdt:.2f}")
+                logger.debug(f"Strategy {strategy_id}: Found {len(weekly_completed_trades)} completed trades this week, weekly_loss={weekly_loss_usdt:.2f}")
             except Exception as e:
                 logger.warning(f"Error getting trades for risk status: {e}")
                 daily_loss_usdt = 0.0  # Default to 0 if we can't get trades
+                weekly_loss_usdt = 0.0  # Default to 0 if we can't get trades
             
             # Ensure daily_loss_usdt is a valid number
             if not isinstance(daily_loss_usdt, (int, float)) or daily_loss_usdt != daily_loss_usdt:  # Check for NaN
                 logger.warning(f"Invalid daily_loss_usdt value: {daily_loss_usdt}, defaulting to 0.0")
                 daily_loss_usdt = 0.0
+            
+            # Ensure weekly_loss_usdt is a valid number
+            if not isinstance(weekly_loss_usdt, (int, float)) or weekly_loss_usdt != weekly_loss_usdt:  # Check for NaN
+                logger.warning(f"Invalid weekly_loss_usdt value: {weekly_loss_usdt}, defaulting to 0.0")
+                weekly_loss_usdt = 0.0
             
             # Portfolio exposure check (simplified - would need actual open positions)
             # For now, assume no exposure if we can't calculate it
@@ -2144,13 +2444,14 @@ async def get_strategy_risk_status(
                         # If daily_loss_usdt >= 0 (no trades = 0, or profit > 0), NEVER block
                         if daily_loss_usdt < 0:
                             # Only block if loss exceeds threshold
-                            if daily_loss_usdt <= loss_threshold:
+                            # Use absolute values for clarity: |loss| >= limit means limit exceeded
+                            if abs(daily_loss_usdt) >= max_daily_loss:
                                 daily_loss_allowed = False
                                 can_trade = False
-                                blocked_reasons.append(f"Daily loss limit exceeded: ${daily_loss_usdt:.2f} / -${max_daily_loss:.2f}")
-                                logger.warning(f"Strategy {strategy_id} blocked: daily loss {daily_loss_usdt:.2f} <= threshold {loss_threshold:.2f}")
+                                blocked_reasons.append(f"Daily loss limit exceeded: ${abs(daily_loss_usdt):.2f} / ${max_daily_loss:.2f}")
+                                logger.warning(f"Strategy {strategy_id} blocked: daily loss ${abs(daily_loss_usdt):.2f} >= limit ${max_daily_loss:.2f}")
                             else:
-                                logger.debug(f"Strategy {strategy_id} has daily loss {daily_loss_usdt:.2f} but within limit {loss_threshold:.2f}")
+                                logger.debug(f"Strategy {strategy_id} has daily loss ${abs(daily_loss_usdt):.2f} but within limit ${max_daily_loss:.2f}")
                         else:
                             # daily_loss_usdt >= 0 means no loss or profit - NEVER block
                             logger.debug(f"Strategy {strategy_id} has no daily loss (value={daily_loss_usdt:.2f} >= 0), allowing trade")
@@ -2184,10 +2485,84 @@ async def get_strategy_risk_status(
                     f"overriding strategy-level daily loss check. Account daily loss: ${account_daily_loss_usdt:.2f}"
                 )
             
+            # Add account and strategy level limits for display
+            account_daily_limit = float(account_risk_config.max_daily_loss_usdt) if account_risk_config and account_risk_config.max_daily_loss_usdt else None
+            strategy_daily_limit = float(strategy_risk_config.max_daily_loss_usdt) if strategy_risk_config and strategy_risk_config.enabled and strategy_risk_config.max_daily_loss_usdt else None
+            effective_daily_limit = float(risk_config.max_daily_loss_usdt) if risk_config.max_daily_loss_usdt else None
+            
             risk_checks["daily_loss"] = {
                 "allowed": daily_loss_allowed,
-                "current_value": account_daily_loss_usdt if account_risk_status == "breach" else daily_loss_usdt,
-                "limit_value": float(risk_config.max_daily_loss_usdt) if risk_config.max_daily_loss_usdt else None
+                # Use absolute value for display - show positive loss amounts
+                "current_value": abs(account_daily_loss_usdt) if account_risk_status == "breach" else abs(daily_loss_usdt),
+                "limit_value": effective_daily_limit,  # Effective limit (merged)
+                "account_limit_value": account_daily_limit,  # Account-level limit
+                "strategy_limit_value": strategy_daily_limit  # Strategy-level limit (if configured)
+            }
+            
+            # Check weekly loss limit
+            # max_weekly_loss_usdt is stored as positive (e.g., 500 means max loss is -500)
+            # weekly_loss_usdt is negative when there's a loss (e.g., -100), positive or zero for profit/no trades
+            # CRITICAL: If weekly_loss_usdt >= 0 (no loss or profit), NEVER block
+            weekly_loss_allowed = True
+            max_weekly_loss = risk_config.max_weekly_loss_usdt
+            if max_weekly_loss is not None:
+                try:
+                    max_weekly_loss = float(max_weekly_loss)
+                    if max_weekly_loss > 0:
+                        # Convert positive limit to negative threshold
+                        loss_threshold = -max_weekly_loss
+                        logger.debug(f"Weekly loss check: current={weekly_loss_usdt:.2f}, threshold={loss_threshold:.2f}, limit={max_weekly_loss:.2f}")
+                        
+                        # CRITICAL SAFEGUARD: Only check if there's an actual loss (weekly_loss_usdt < 0)
+                        # If weekly_loss_usdt >= 0 (no trades = 0, or profit > 0), NEVER block
+                        if weekly_loss_usdt < 0:
+                            # Only block if loss exceeds threshold
+                            # Use absolute values for clarity: |loss| >= limit means limit exceeded
+                            if abs(weekly_loss_usdt) >= max_weekly_loss:
+                                weekly_loss_allowed = False
+                                can_trade = False
+                                blocked_reasons.append(f"Weekly loss limit exceeded: ${abs(weekly_loss_usdt):.2f} / ${max_weekly_loss:.2f}")
+                                logger.warning(f"Strategy {strategy_id} blocked: weekly loss ${abs(weekly_loss_usdt):.2f} >= limit ${max_weekly_loss:.2f}")
+                            else:
+                                logger.debug(f"Strategy {strategy_id} has weekly loss ${abs(weekly_loss_usdt):.2f} but within limit ${max_weekly_loss:.2f}")
+                        else:
+                            # weekly_loss_usdt >= 0 means no loss or profit - NEVER block
+                            logger.debug(f"Strategy {strategy_id} has no weekly loss (value={weekly_loss_usdt:.2f} >= 0), allowing trade")
+                    else:
+                        logger.debug(f"Invalid max_weekly_loss_usdt value (must be > 0): {max_weekly_loss}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid max_weekly_loss_usdt value: {max_weekly_loss}, error: {e}")
+            else:
+                logger.debug(f"No weekly loss limit configured for strategy {strategy_id}")
+            
+            # CRITICAL: Ensure weekly_loss_allowed is True if weekly_loss_usdt >= 0 (no loss or profit)
+            if weekly_loss_usdt >= 0:
+                weekly_loss_allowed = True
+                logger.debug(f"Strategy {strategy_id}: weekly_loss_usdt={weekly_loss_usdt:.2f} >= 0, forcing weekly_loss_allowed=True")
+            
+            # CRITICAL: If account is breached, override strategy-level weekly loss check
+            # Account-level breach takes precedence over strategy-level checks
+            if account_risk_status == "breach":
+                weekly_loss_allowed = False
+                # Use account-level weekly loss instead of strategy-level
+                weekly_loss_usdt = account_weekly_loss_usdt
+                logger.warning(
+                    f"Strategy {strategy_id}: Account '{account_id}' breached, "
+                    f"overriding strategy-level weekly loss check. Account weekly loss: ${account_weekly_loss_usdt:.2f}"
+                )
+            
+            # Add account and strategy level limits for display
+            account_weekly_limit = float(account_risk_config.max_weekly_loss_usdt) if account_risk_config and account_risk_config.max_weekly_loss_usdt else None
+            strategy_weekly_limit = float(strategy_risk_config.max_weekly_loss_usdt) if strategy_risk_config and strategy_risk_config.enabled and strategy_risk_config.max_weekly_loss_usdt else None
+            effective_weekly_limit = float(risk_config.max_weekly_loss_usdt) if risk_config.max_weekly_loss_usdt else None
+            
+            risk_checks["weekly_loss"] = {
+                "allowed": weekly_loss_allowed,
+                # Use absolute value for display - show positive loss amounts
+                "current_value": abs(account_weekly_loss_usdt) if account_risk_status == "breach" else abs(weekly_loss_usdt),
+                "limit_value": effective_weekly_limit,  # Effective limit (merged)
+                "account_limit_value": account_weekly_limit,  # Account-level limit
+                "strategy_limit_value": strategy_weekly_limit  # Strategy-level limit (if configured)
             }
             
             # Add account risk check if account is breached
@@ -2196,8 +2571,84 @@ async def get_strategy_risk_status(
                     "allowed": False,
                     "status": account_risk_status,
                     "breach_reasons": account_breach_reasons,
-                    "account_daily_loss": account_daily_loss_usdt
-            }
+                    "account_daily_loss": account_daily_loss_usdt,
+                    "account_weekly_loss": account_weekly_loss_usdt
+                }
+            
+            # CRITICAL: If strategy-level daily or weekly loss limit exceeded, stop the strategy
+            # This ensures strategies are stopped even if they're not executing orders
+            # Only stop if it's a strategy-level breach (not account-level, which is handled above)
+            strategy_level_breach_detected = False
+            strategy_limit_type = None
+            
+            if not daily_loss_allowed and account_risk_status != "breach":
+                # Strategy-level daily loss breach (not account-level)
+                strategy_level_breach_detected = True
+                strategy_limit_type = "DAILY_LOSS"
+                logger.warning(
+                    f"🛑 Strategy-level {strategy_limit_type} limit exceeded for strategy {strategy_id}. "
+                    f"Stopping this strategy only."
+                )
+            elif not weekly_loss_allowed and account_risk_status != "breach":
+                # Strategy-level weekly loss breach (not account-level)
+                strategy_level_breach_detected = True
+                strategy_limit_type = "WEEKLY_LOSS"
+                logger.warning(
+                    f"🛑 Strategy-level {strategy_limit_type} limit exceeded for strategy {strategy_id}. "
+                    f"Stopping this strategy only."
+                )
+            
+            # Stop the strategy if strategy-level limit is breached
+            if strategy_level_breach_detected and runner and strategy_limit_type:
+                try:
+                    # Check if strategy is still running
+                    if strategy_status == "running":
+                        logger.warning(
+                            f"🛑 Stopping strategy {strategy_id} due to {strategy_limit_type} breach detected in risk status check"
+                        )
+                        # Stop only this specific strategy (not all strategies in account)
+                        stopped_summary = await runner.stop(strategy_id)
+                        
+                        # Update status to stopped_by_risk
+                        if db_strategy:
+                            db_strategy.status = "stopped_by_risk"
+                            db.commit()
+                            db.refresh(db_strategy)
+                            
+                            # Update in-memory summary
+                            from app.models.strategy import StrategyState
+                            if stopped_summary:
+                                stopped_summary.status = StrategyState.stopped_by_risk
+                            
+                            # Update flags
+                            is_stopped_by_risk = True
+                            circuit_breaker_active = True
+                            strategy_status = "stopped_by_risk"
+                            
+                            logger.info(
+                                f"✅ Strategy {strategy_id} stopped due to {strategy_limit_type} limit exceeded. "
+                                f"Status updated to stopped_by_risk."
+                            )
+                        else:
+                            logger.warning(f"Could not update strategy {strategy_id} status - db_strategy not found")
+                    else:
+                        logger.debug(
+                            f"Strategy {strategy_id} is already stopped (status: {strategy_status}), "
+                            f"not attempting to stop again."
+                        )
+                        # Still set flags to ensure correct response
+                        if strategy_status == "stopped_by_risk":
+                            is_stopped_by_risk = True
+                            circuit_breaker_active = True
+                except Exception as stop_error:
+                    # Log error but don't fail the risk status check
+                    logger.error(
+                        f"Failed to stop strategy {strategy_id} due to {strategy_limit_type} limit: {stop_error}",
+                        exc_info=True
+                    )
+                    # Still set flags to show it should be stopped
+                    is_stopped_by_risk = True
+                    circuit_breaker_active = True
             
             # CRITICAL: If daily_loss_allowed is False but daily_loss_usdt >= 0, this is a bug
             # Force it to True to prevent false blocking
@@ -2218,7 +2669,7 @@ async def get_strategy_risk_status(
                     else:
                         # Circuit breaker is active, add a reason if missing
                         if not any("circuit breaker" in r.lower() or "paused" in r.lower() for r in blocked_reasons):
-                            blocked_reasons.append("Strategy paused by risk management (circuit breaker)")
+                            blocked_reasons.append("Strategy stopped by risk management (circuit breaker)")
                             logger.debug(f"Strategy {strategy_id}: Circuit breaker active, added blocked reason")
                 # Ensure can_trade and blocked_reasons are consistent
                 if not can_trade and len(blocked_reasons) == 0 and not circuit_breaker_active:
@@ -2238,6 +2689,7 @@ async def get_strategy_risk_status(
             risk_checks = {
                 "portfolio_exposure": {"allowed": True, "current_value": 0.0, "limit_value": None},
                 "daily_loss": {"allowed": True, "current_value": 0.0, "limit_value": None},
+                "weekly_loss": {"allowed": True, "current_value": 0.0, "limit_value": None},
                 "circuit_breaker": {"allowed": True, "active": False}
             }
             # can_trade remains True (default)
@@ -2245,7 +2697,7 @@ async def get_strategy_risk_status(
         # CRITICAL FINAL VALIDATION: Ensure can_trade is only False if there's a real blocking reason
         # This prevents false positives where strategies are blocked incorrectly
         # Rule: can_trade can only be False if:
-        #   1. Circuit breaker is active (is_paused_by_risk), OR
+        #   1. Circuit breaker is active (is_stopped_by_risk), OR
         #   2. There are explicit blocked_reasons
         # If neither condition is met, force can_trade = True
         if not can_trade:
@@ -2273,7 +2725,7 @@ async def get_strategy_risk_status(
                 can_trade = True
             elif circuit_breaker_active and len(blocked_reasons) == 0:
                 # Circuit breaker is active but no reason - add one
-                blocked_reasons.append("Strategy paused by risk management (circuit breaker)")
+                blocked_reasons.append("Strategy stopped by risk management (circuit breaker)")
                 logger.debug(f"Strategy {strategy_id}: Added circuit breaker blocked reason")
         
         # Log final status for debugging
@@ -2294,18 +2746,26 @@ async def get_strategy_risk_status(
             last_enforcement_event=last_event
         )
         
-        # CRITICAL FINAL SAFETY CHECK: If daily_loss_usdt = 0 (no trades), NEVER block
+        # CRITICAL FINAL SAFETY CHECK: If both daily_loss and weekly_loss are 0 (no trades), NEVER block
         # This is the ultimate safeguard to prevent false blocking of strategies with zero trades
+        # BUT: Must check BOTH daily and weekly - a strategy can have weekly loss even if daily_loss = 0
         daily_loss_value = response.risk_checks.get('daily_loss', {}).get('current_value', None)
-        if daily_loss_value == 0.0 and not response.circuit_breaker_active:
-            # If there are no trades (daily_loss = 0) and circuit breaker is not active,
+        weekly_loss_value = response.risk_checks.get('weekly_loss', {}).get('current_value', None)
+        
+        # Only override can_trade if BOTH daily and weekly loss are 0 AND circuit breaker is not active
+        # This ensures we don't override valid weekly loss blocks
+        if (daily_loss_value == 0.0 or daily_loss_value is None) and \
+           (weekly_loss_value == 0.0 or weekly_loss_value is None) and \
+           not response.circuit_breaker_active:
+            # If there are no trades (both daily_loss and weekly_loss = 0) and circuit breaker is not active,
             # the strategy MUST be able to trade, regardless of any other conditions
             if not response.can_trade:
                 logger.error(
-                    f"CRITICAL BUG: Strategy {strategy_id} has daily_loss=0.0 (no trades) but can_trade=False! "
-                    f"This is a logic error. Forcing can_trade=True and clearing invalid blocked_reasons."
+                    f"CRITICAL BUG: Strategy {strategy_id} has daily_loss={daily_loss_value} and weekly_loss={weekly_loss_value} "
+                    f"(no trades) but can_trade=False! This is a logic error. Forcing can_trade=True and clearing invalid blocked_reasons."
                 )
                 # Force can_trade=True and remove any invalid blocked reasons
+                # Only remove reasons related to daily loss or portfolio exposure (not weekly loss if daily=0 and weekly=0)
                 invalid_reasons = [r for r in response.blocked_reasons if "Daily loss" in r or "Portfolio exposure" in r]
                 if invalid_reasons:
                     logger.warning(f"Removing invalid blocked reasons for zero-trade strategy: {invalid_reasons}")
@@ -2345,4 +2805,262 @@ async def get_strategy_risk_status(
         error_traceback = traceback.format_exc()
         logger.error(f"Error getting strategy risk status for {strategy_id}: {e}\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Error getting strategy risk status: {str(e)}")
+
+
+# ============================================================================
+# STRATEGY-LEVEL RISK CONFIG ENDPOINTS
+# ============================================================================
+
+@router.post("/config/strategies/{strategy_id}", response_model=StrategyRiskConfigResponse, status_code=201)
+async def create_strategy_risk_config(
+    strategy_id: str,
+    config_data: StrategyRiskConfigCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+) -> StrategyRiskConfigResponse:
+    """Create strategy-level risk configuration.
+    
+    Args:
+        strategy_id: Strategy ID (string, e.g., "strategy-1")
+        config_data: Strategy risk config data
+        current_user: Current authenticated user
+        db: Database session
+    
+    Returns:
+        Created strategy risk config
+    """
+    try:
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        db_service = DatabaseService(db=db)
+        
+        # Verify strategy exists
+        db_strategy = db_service.get_strategy(user_id, strategy_id)
+        if not db_strategy:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Strategy '{strategy_id}' not found"
+            )
+        
+        # Check if config already exists
+        existing_config = db_service.get_strategy_risk_config(user_id, strategy_id)
+        if existing_config:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Risk config already exists for strategy '{strategy_id}'. Use PUT to update."
+            )
+        
+        # Convert daily_loss_reset_time from time to datetime if provided
+        daily_loss_reset_time_dt = None
+        if config_data.daily_loss_reset_time:
+            from datetime import datetime, time
+            today = datetime.now().date()
+            daily_loss_reset_time_dt = datetime.combine(today, config_data.daily_loss_reset_time)
+        
+        # Create config
+        db_config = db_service.create_strategy_risk_config(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            max_daily_loss_usdt=config_data.max_daily_loss_usdt,
+            max_daily_loss_pct=config_data.max_daily_loss_pct,
+            max_weekly_loss_usdt=config_data.max_weekly_loss_usdt,
+            max_weekly_loss_pct=config_data.max_weekly_loss_pct,
+            max_drawdown_pct=config_data.max_drawdown_pct,
+            max_exposure_usdt=config_data.max_exposure_usdt,
+            max_exposure_pct=config_data.max_exposure_pct,
+            enabled=config_data.enabled,
+            override_account_limits=config_data.override_account_limits,
+            use_more_restrictive=config_data.use_more_restrictive,
+            timezone=config_data.timezone or "UTC",
+            daily_loss_reset_time=daily_loss_reset_time_dt,
+            weekly_loss_reset_day=config_data.weekly_loss_reset_day
+        )
+        
+        # Refresh to load relationship
+        db.refresh(db_config)
+        db.refresh(db_config.strategy)  # Load strategy relationship for from_orm
+        
+        # Convert to response model
+        return StrategyRiskConfigResponse.from_orm(db_config)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error creating strategy risk config for {strategy_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating strategy risk config: {str(e)}"
+        )
+
+
+@router.get("/config/strategies/{strategy_id}", response_model=StrategyRiskConfigResponse)
+async def get_strategy_risk_config(
+    strategy_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+) -> StrategyRiskConfigResponse:
+    """Get strategy-level risk configuration.
+    
+    Args:
+        strategy_id: Strategy ID (string, e.g., "strategy-1")
+        current_user: Current authenticated user
+        db: Database session
+    
+    Returns:
+        Strategy risk config
+    """
+    try:
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        db_service = DatabaseService(db=db)
+        
+        # Verify strategy exists
+        db_strategy = db_service.get_strategy(user_id, strategy_id)
+        if not db_strategy:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Strategy '{strategy_id}' not found"
+            )
+        
+        # Get config
+        db_config = db_service.get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Risk config not found for strategy '{strategy_id}'"
+            )
+        
+        # Refresh to load relationship
+        db.refresh(db_config)
+        db.refresh(db_config.strategy)  # Load strategy relationship for from_orm
+        
+        # Convert to response model
+        return StrategyRiskConfigResponse.from_orm(db_config)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting strategy risk config for {strategy_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting strategy risk config: {str(e)}"
+        )
+
+
+@router.put("/config/strategies/{strategy_id}", response_model=StrategyRiskConfigResponse)
+async def update_strategy_risk_config(
+    strategy_id: str,
+    config_data: StrategyRiskConfigUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+) -> StrategyRiskConfigResponse:
+    """Update strategy-level risk configuration.
+    
+    Args:
+        strategy_id: Strategy ID (string, e.g., "strategy-1")
+        config_data: Strategy risk config update data (all fields optional)
+        current_user: Current authenticated user
+        db: Database session
+    
+    Returns:
+        Updated strategy risk config
+    """
+    try:
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        db_service = DatabaseService(db=db)
+        
+        # Verify strategy exists
+        db_strategy = db_service.get_strategy(user_id, strategy_id)
+        if not db_strategy:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Strategy '{strategy_id}' not found"
+            )
+        
+        # Get existing config
+        db_config = db_service.get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Risk config not found for strategy '{strategy_id}'. Use POST to create."
+            )
+        
+        # Update fields (only update provided fields)
+        update_dict = config_data.model_dump(exclude_unset=True)
+        
+        # Convert daily_loss_reset_time from time to datetime if provided
+        if "daily_loss_reset_time" in update_dict and update_dict["daily_loss_reset_time"]:
+            from datetime import datetime, time
+            today = datetime.now().date()
+            update_dict["daily_loss_reset_time"] = datetime.combine(today, update_dict["daily_loss_reset_time"])
+        elif "daily_loss_reset_time" in update_dict and update_dict["daily_loss_reset_time"] is None:
+            update_dict["daily_loss_reset_time"] = None
+        
+        # Update config fields
+        for key, value in update_dict.items():
+            if hasattr(db_config, key):
+                setattr(db_config, key, value)
+        
+        db.commit()
+        db.refresh(db_config)
+        db.refresh(db_config.strategy)  # Load strategy relationship for from_orm
+        
+        # Convert to response model
+        return StrategyRiskConfigResponse.from_orm(db_config)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating strategy risk config for {strategy_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating strategy risk config: {str(e)}"
+        )
+
+
+@router.delete("/config/strategies/{strategy_id}", status_code=204, response_model=None)
+async def delete_strategy_risk_config(
+    strategy_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+) -> None:
+    """Delete strategy-level risk configuration.
+    
+    Args:
+        strategy_id: Strategy ID (string, e.g., "strategy-1")
+        current_user: Current authenticated user
+        db: Database session
+    """
+    try:
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        db_service = DatabaseService(db=db)
+        
+        # Verify strategy exists
+        db_strategy = db_service.get_strategy(user_id, strategy_id)
+        if not db_strategy:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Strategy '{strategy_id}' not found"
+            )
+        
+        # Get config
+        db_config = db_service.get_strategy_risk_config(user_id, strategy_id)
+        if not db_config:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Risk config not found for strategy '{strategy_id}'"
+            )
+        
+        # Delete config
+        db.delete(db_config)
+        db.commit()
+        
+        logger.info(f"Deleted risk config for strategy '{strategy_id}' (user: {user_id})")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting strategy risk config for {strategy_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting strategy risk config: {str(e)}"
+        )
 

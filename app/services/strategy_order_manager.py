@@ -75,6 +75,7 @@ class StrategyOrderManager:
         self.trade_service = trade_service
         self.user_id = user_id
         self.strategy_service = strategy_service
+        self.strategy_runner = strategy_runner  # StrategyRunner for stopping strategies
         self.redis = redis_storage
         self._strategies = strategies if strategies is not None else {}
         self._trades = trades if trades is not None else {}
@@ -150,6 +151,16 @@ class StrategyOrderManager:
             f"(strategy account_id: {summary.account_id})"
         )
         
+        # CRITICAL FIX: Check if strategy is paused by risk management before executing orders
+        # This prevents paused strategies from executing orders even if they're still in the loop
+        from app.models.strategy import StrategyState
+        if summary.status == StrategyState.stopped_by_risk:
+            logger.warning(
+                f"[{summary.id}] Strategy is paused by risk management. "
+                f"Skipping order execution."
+            )
+            return None
+        
         if signal.action == "HOLD":
             logger.debug(
                 f"[{summary.id}] HOLD signal - skipping order execution | "
@@ -164,13 +175,51 @@ class StrategyOrderManager:
         if self.portfolio_risk_manager_factory:
             portfolio_risk_manager = self.portfolio_risk_manager_factory(account_id)
         
+        # Load strategy risk config if available
+        strategy_config = None
+        strategy_uuid = None
+        if self.db_service and self.user_id:
+            try:
+                # Get strategy UUID from database (needed for strategy-specific PnL calculation)
+                db_strategy = None
+                if hasattr(self.db_service, '_is_async') and self.db_service._is_async:
+                    db_strategy = await self.db_service.async_get_strategy(self.user_id, summary.id)
+                else:
+                    db_strategy = self.db_service.get_strategy(self.user_id, summary.id)
+                
+                if db_strategy:
+                    strategy_uuid = db_strategy.id
+                    
+                    # Load strategy risk config
+                    if hasattr(self.db_service, '_is_async') and self.db_service._is_async:
+                        db_risk_config = await self.db_service.async_get_strategy_risk_config(
+                            self.user_id, summary.id
+                        )
+                    else:
+                        db_risk_config = self.db_service.get_strategy_risk_config(
+                            self.user_id, summary.id
+                        )
+                    
+                    if db_risk_config and db_risk_config.enabled:
+                        # Convert database model to Pydantic response model
+                        from app.models.risk_management import StrategyRiskConfigResponse
+                        strategy_config = StrategyRiskConfigResponse.from_orm(db_risk_config)
+            except Exception as e:
+                # Log but don't fail - strategy config is optional
+                logger.debug(
+                    f"[{summary.id}] Failed to load strategy risk config: {e}. "
+                    f"Using account-level config only."
+                )
+        
         if portfolio_risk_manager:
             # CRITICAL: check_order_allowed() uses async locking internally
             # It also RESERVES exposure before order execution
             allowed, reason = await portfolio_risk_manager.check_order_allowed(
                 signal=signal,
                 summary=summary,
-                account_id=account_id
+                account_id=account_id,
+                strategy_config=strategy_config,
+                strategy_uuid=strategy_uuid
             )
             if not allowed:
                 # Extract limit type from reason for notification
@@ -213,19 +262,69 @@ class StrategyOrderManager:
                     symbol=signal.symbol,
                 )
                 
-                # CRITICAL: If daily or weekly loss limit exceeded, pause ALL strategies for this account
+                # CRITICAL: If daily or weekly loss limit exceeded, stop strategies
+                # Strategy-level limits: stop only THIS strategy
+                # Account-level limits: stop ALL strategies for the account
                 if limit_type in ("DAILY_LOSS", "WEEKLY_LOSS") and self.strategy_runner:
-                    logger.warning(
-                        f"🛑 {limit_type} limit exceeded for account {account_id}. "
-                        f"Pausing all strategies for this account."
-                    )
-                    # Pause all strategies for this account (non-blocking)
-                    asyncio.create_task(
-                        self.strategy_runner.pause_all_strategies_for_account(
-                            account_id=account_id,
-                            reason=f"{limit_type.replace('_', ' ').title()} limit exceeded: {reason}"
+                    # Check if this is a strategy-level breach (reason contains "(strategy)")
+                    is_strategy_level_breach = "(strategy)" in reason.lower()
+                    
+                    if is_strategy_level_breach:
+                        # Strategy-level breach: stop only THIS strategy
+                        logger.warning(
+                            f"🛑 {limit_type} limit exceeded for strategy {summary.id} (strategy-level). "
+                            f"Stopping this strategy only."
                         )
-                    )
+                        try:
+                            # Stop only this specific strategy
+                            stopped_summary = await self.strategy_runner.stop(summary.id)
+                            
+                            # Update status to stopped_by_risk
+                            if self.db_service and self.user_id:
+                                try:
+                                    db_strategy = None
+                                    if hasattr(self.db_service, '_is_async') and self.db_service._is_async:
+                                        db_strategy = await self.db_service.async_get_strategy(self.user_id, summary.id)
+                                    else:
+                                        db_strategy = self.db_service.get_strategy(self.user_id, summary.id)
+                                    
+                                    if db_strategy:
+                                        db_strategy.status = "stopped_by_risk"
+                                        if hasattr(self.db_service, 'db'):
+                                            self.db_service.db.commit()
+                                            self.db_service.db.refresh(db_strategy)
+                                        
+                                        # Update in-memory summary
+                                        from app.models.strategy import StrategyState
+                                        summary.status = StrategyState.stopped_by_risk
+                                except Exception as status_error:
+                                    logger.warning(f"Failed to update strategy status to stopped_by_risk: {status_error}")
+                        except Exception as stop_error:
+                            # Log error but don't fail the order blocking
+                            logger.error(
+                                f"Failed to stop strategy {summary.id} due to {limit_type} limit: {stop_error}",
+                                exc_info=True
+                            )
+                    else:
+                        # Account-level breach: stop ALL strategies for this account
+                        logger.warning(
+                            f"🛑 {limit_type} limit exceeded for account {account_id} (account-level). "
+                            f"Pausing all strategies for this account."
+                        )
+                        # CRITICAL FIX: Await pause_all_strategies_for_account to ensure it completes
+                        # BEFORE raising the exception. This ensures all strategies are paused
+                        # synchronously and the database is committed before other strategies can execute.
+                        try:
+                            await self.strategy_runner.pause_all_strategies_for_account(
+                                account_id=account_id,
+                                reason=f"{limit_type.replace('_', ' ').title()} limit exceeded: {reason}"
+                            )
+                        except Exception as pause_error:
+                            # Log error but don't fail the order blocking
+                            logger.error(
+                                f"Failed to pause strategies for account {account_id}: {pause_error}",
+                                exc_info=True
+                            )
                 
                 # Option 1: Reject order
                 if not portfolio_risk_manager.config.auto_reduce_order_size:
@@ -233,7 +332,12 @@ class StrategyOrderManager:
                         f"Order would breach risk limit: {reason}",
                         account_id=account_id,
                         strategy_id=summary.id,
-                        details={"account_id": account_id, "strategy_id": summary.id, "reason": reason}
+                        details={
+                            "account_id": account_id, 
+                            "strategy_id": summary.id, 
+                            "reason": reason,
+                            "limit_type": limit_type  # Include limit_type so executor can exit immediately for daily/weekly loss
+                        }
                     )
                 # Option 2: Reduce order size (if enabled)
                 else:

@@ -342,6 +342,81 @@ class StrategyRiskStatusResponse(BaseModel):
     last_enforcement_event: Optional[dict] = None
 
 
+class StrategyRiskConfigBase(BaseModel):
+    """Base strategy risk config model."""
+    max_daily_loss_usdt: Optional[float] = Field(default=None, ge=0, description="Maximum daily loss in USDT")
+    max_daily_loss_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum daily loss as percentage of balance (0-1)")
+    max_weekly_loss_usdt: Optional[float] = Field(default=None, ge=0, description="Maximum weekly loss in USDT")
+    max_weekly_loss_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum weekly loss as percentage of balance (0-1)")
+    max_drawdown_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum drawdown percentage (0-1)")
+    max_exposure_usdt: Optional[float] = Field(default=None, ge=0, description="Maximum exposure in USDT")
+    max_exposure_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum exposure as percentage of balance (0-1)")
+    
+    enabled: bool = Field(default=True, description="Enable strategy-level risk config")
+    override_account_limits: bool = Field(default=False, description="If True, strategy limits replace account limits")
+    use_more_restrictive: bool = Field(default=True, description="If True, use most restrictive of both configs")
+    
+    # Loss Reset Configuration
+    timezone: str = Field(default="UTC", description="Timezone for loss reset calculations")
+    daily_loss_reset_time: Optional[time] = Field(default=None, description="UTC time when daily loss counter resets")
+    weekly_loss_reset_day: Optional[int] = Field(default=None, ge=1, le=7, description="Day of week when weekly loss counter resets (1=Monday, 7=Sunday)")
+
+
+class StrategyRiskConfigCreate(StrategyRiskConfigBase):
+    """Request model for creating strategy risk config.
+    
+    Note: strategy_id is NOT required here because it's provided in the URL path.
+    The API endpoint receives strategy_id from the path parameter.
+    """
+    # strategy_id is NOT in the body - it comes from the URL path parameter
+
+
+class StrategyRiskConfigUpdate(StrategyRiskConfigBase):
+    """Request model for updating strategy risk config."""
+    pass  # All fields optional for updates
+
+
+class StrategyRiskConfigResponse(StrategyRiskConfigBase):
+    """Response model for strategy risk config."""
+    id: str = Field(..., description="Configuration ID")
+    strategy_id: str = Field(..., description="User-facing strategy_id string (e.g., 'strategy-1'), NOT UUID")
+    user_id: str = Field(..., description="User ID")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    
+    model_config = ConfigDict(from_attributes=True)
+    
+    @classmethod
+    def from_orm(cls, db_config) -> "StrategyRiskConfigResponse":
+        """Convert database model to response model.
+        
+        CRITICAL FIX: Must get strategy_id STRING from strategy relationship, not UUID.
+        """
+        # Get strategy_id string from relationship
+        strategy_id_str = db_config.strategy.strategy_id  # String ID (e.g., "strategy-1")
+        
+        return cls(
+            id=str(db_config.id),
+            strategy_id=strategy_id_str,  # Use string ID, not UUID
+            user_id=str(db_config.user_id),
+            max_daily_loss_usdt=float(db_config.max_daily_loss_usdt) if db_config.max_daily_loss_usdt else None,
+            max_daily_loss_pct=float(db_config.max_daily_loss_pct) if db_config.max_daily_loss_pct else None,
+            max_weekly_loss_usdt=float(db_config.max_weekly_loss_usdt) if db_config.max_weekly_loss_usdt else None,
+            max_weekly_loss_pct=float(db_config.max_weekly_loss_pct) if db_config.max_weekly_loss_pct else None,
+            max_drawdown_pct=float(db_config.max_drawdown_pct) if db_config.max_drawdown_pct else None,
+            max_exposure_usdt=float(db_config.max_exposure_usdt) if db_config.max_exposure_usdt else None,
+            max_exposure_pct=float(db_config.max_exposure_pct) if db_config.max_exposure_pct else None,
+            enabled=db_config.enabled,
+            override_account_limits=db_config.override_account_limits,
+            use_more_restrictive=db_config.use_more_restrictive,
+            timezone=db_config.timezone,
+            daily_loss_reset_time=db_config.daily_loss_reset_time.time() if db_config.daily_loss_reset_time and isinstance(db_config.daily_loss_reset_time, datetime) else (db_config.daily_loss_reset_time if db_config.daily_loss_reset_time else None),
+            weekly_loss_reset_day=db_config.weekly_loss_reset_day,
+            created_at=db_config.created_at,
+            updated_at=db_config.updated_at
+        )
+
+
 
 
 

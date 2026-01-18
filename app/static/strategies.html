@@ -304,7 +304,7 @@
             color: white;
         }
 
-        .badge.risk-paused {
+        .badge.risk-paused, .badge.risk-stopped {
             background: #6c757d;
             color: white;
         }
@@ -828,9 +828,18 @@
                 html += `<td><span class="badge info">${strategy.symbol}</span></td>`;
                 
                 // Status with health indicator
-                const statusClass = strategy.status === 'running' ? 'running' : strategy.status === 'stopped' ? 'stopped' : 'error';
+                let statusClass = 'error';
+                let statusText = strategy.status.toUpperCase();
+                if (strategy.status === 'running') {
+                    statusClass = 'running';
+                } else if (strategy.status === 'stopped') {
+                    statusClass = 'stopped';
+                } else if (strategy.status === 'stopped_by_risk') {
+                    statusClass = 'warning'; // Use warning class for stopped_by_risk
+                    statusText = 'STOPPED BY RISK';
+                }
                 html += `<td>
-                    <span class="badge ${statusClass}">${strategy.status.toUpperCase()}</span>
+                    <span class="badge ${statusClass}">${statusText}</span>
                     ${strategy.status === 'running' ? `<span id="health-indicator-${strategy.strategy_id}" class="health-indicator" title="Checking health..."></span>` : ''}
                 </td>`;
                 
@@ -1014,6 +1023,12 @@
             html += '<div class="autotune-loading">Loading auto-tuning status...</div>';
             html += '</div></div>';
             
+            // Risk Configuration section
+            html += '<div class="detail-section"><h4>Risk Configuration</h4>';
+            html += `<div id="risk-config-section-${strategy.strategy_id}">`;
+            html += '<div class="risk-config-loading">Loading risk configuration...</div>';
+            html += '</div></div>';
+            
             // Activity History
             html += '<div class="detail-section"><h4>Activity History</h4>';
             html += `<div id="activity-${strategy.strategy_id}" class="activity-history">`;
@@ -1073,11 +1088,12 @@
                 expandedStrategies.add(strategyId);
             }
             loadData().then(() => {
-                // Load activity history and auto-tuning status after details are expanded
+                // Load activity history, auto-tuning status, and risk config after details are expanded
                 if (!wasExpanded) {
                     setTimeout(() => {
                         loadActivityHistory(strategyId);
                         loadAutoTuningStatus(strategyId);
+                        loadStrategyRiskConfig(strategyId);
                     }, 200);
                 }
             });
@@ -1458,12 +1474,18 @@
             const dailyLossValue = riskStatus.risk_checks?.daily_loss?.current_value;
             const hasZeroTrades = dailyLossValue === 0 || dailyLossValue === 0.0;
             
-            // Check circuit breaker first (this indicates paused_by_risk status)
-            if (riskStatus.circuit_breaker_active) {
-                badgeClass = 'risk-paused';
-                badgeText = '⏸️ Paused';
-                icon = '⏸️';
-                tooltip = 'Strategy paused by risk management (circuit breaker active)';
+                // Check circuit breaker first (this indicates stopped_by_risk status)
+            // Also check if blocked due to daily/weekly loss - these should show as Stopped, not Blocked
+            const isDailyOrWeeklyLoss = riskStatus.blocked_reasons && riskStatus.blocked_reasons.some(
+                reason => reason.toLowerCase().includes('daily loss') || reason.toLowerCase().includes('weekly loss')
+            );
+            
+            if (riskStatus.circuit_breaker_active || isDailyOrWeeklyLoss) {
+                // When stopped_by_risk (circuit breaker) or daily/weekly loss exceeded, show as Stopped
+                badgeClass = 'risk-stopped';
+                badgeText = '🛑 Stopped';
+                icon = '🛑';
+                tooltip = 'Strategy stopped by risk management (daily/weekly loss limit exceeded)';
             } else if (hasZeroTrades) {
                 // Zero trades = no risk = always allowed (unless circuit breaker is active, which we already checked)
                 badgeClass = 'risk-allowed';
@@ -1471,6 +1493,7 @@
                 icon = '✅';
                 tooltip = 'Strategy can trade normally (no trades yet)';
             } else if (riskStatus.blocked_reasons && riskStatus.blocked_reasons.length > 0) {
+                // Other blocked reasons (not daily/weekly loss) - show as Blocked
                 badgeClass = 'risk-blocked';
                 badgeText = '🚫 Blocked';
                 icon = '🚫';
@@ -1607,13 +1630,37 @@
                     html += `<tr><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Check</th><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Status</th><th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Current / Limit</th></tr>`;
                     
                     for (const [checkName, checkData] of Object.entries(riskStatus.risk_checks)) {
+                        // Skip circuit_breaker as it doesn't have current/limit values
+                        if (checkName === 'circuit_breaker' || checkName === 'account_risk') {
+                            continue;
+                        }
+                        
                         const status = checkData.allowed ? '✅ Passed' : '❌ Failed';
                         const current = checkData.current_value !== undefined ? checkData.current_value.toFixed(2) : 'N/A';
-                        const limit = checkData.limit_value !== undefined ? checkData.limit_value.toFixed(2) : 'N/A';
+                        
+                        // For daily_loss and weekly_loss, show both account and strategy limits if available
+                        let limitDisplay = '';
+                        if ((checkName === 'daily_loss' || checkName === 'weekly_loss') && 
+                            (checkData.account_limit_value !== undefined || checkData.strategy_limit_value !== undefined)) {
+                            const effectiveLimit = checkData.limit_value !== undefined ? checkData.limit_value.toFixed(2) : 'N/A';
+                            const accountLimit = checkData.account_limit_value !== undefined ? checkData.account_limit_value.toFixed(2) : 'N/A';
+                            const strategyLimit = checkData.strategy_limit_value !== undefined ? checkData.strategy_limit_value.toFixed(2) : null;
+                            
+                            limitDisplay = `${current} / ${effectiveLimit} (Effective)`;
+                            limitDisplay += `<br/><small style="color: #666;">Account: ${accountLimit}`;
+                            if (strategyLimit) {
+                                limitDisplay += ` | Strategy: ${strategyLimit}`;
+                            }
+                            limitDisplay += `</small>`;
+                        } else {
+                            const limit = checkData.limit_value !== undefined ? checkData.limit_value.toFixed(2) : 'N/A';
+                            limitDisplay = `${current} / ${limit}`;
+                        }
+                        
                         html += `<tr>
                             <td style="padding: 8px; border-bottom: 1px solid #eee;">${checkName.replace(/_/g, ' ').toUpperCase()}</td>
                             <td style="padding: 8px; border-bottom: 1px solid #eee;">${status}</td>
-                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${current} / ${limit}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${limitDisplay}</td>
                         </tr>`;
                     }
                     html += `</table>`;
@@ -1900,6 +1947,337 @@
                     console.warn('Failed to load current config, using defaults:', error);
                 }
             })();
+        }
+
+        async function loadStrategyRiskConfig(strategyId) {
+            const container = document.getElementById(`risk-config-section-${strategyId}`);
+            if (!container) return;
+            
+            try {
+                const response = await authFetch(`/api/risk/config/strategies/${strategyId}`);
+                
+                if (response.status === 404) {
+                    // No config exists
+                    container.innerHTML = `
+                        <div style="padding: 10px;">
+                            <p style="color: #666; margin-bottom: 10px;">No custom risk configuration set. Using account-level limits.</p>
+                            <button class="btn btn-primary" style="padding: 8px 16px; font-size: 0.9em;" 
+                                    onclick="showStrategyRiskConfig('${strategyId}')">
+                                Configure Risk Limits
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                if (!response.ok) throw new Error('Failed to load risk configuration');
+                
+                const config = await response.json();
+                
+                // Display current config summary
+                let limitsHtml = '<div style="margin-bottom: 10px;">';
+                if (config.max_daily_loss_usdt || config.max_daily_loss_pct) {
+                    limitsHtml += `<div class="detail-item"><label>Daily Loss Limit:</label><value>${config.max_daily_loss_usdt ? `$${config.max_daily_loss_usdt}` : `${(config.max_daily_loss_pct * 100).toFixed(2)}%`}</value></div>`;
+                }
+                if (config.max_weekly_loss_usdt || config.max_weekly_loss_pct) {
+                    limitsHtml += `<div class="detail-item"><label>Weekly Loss Limit:</label><value>${config.max_weekly_loss_usdt ? `$${config.max_weekly_loss_usdt}` : `${(config.max_weekly_loss_pct * 100).toFixed(2)}%`}</value></div>`;
+                }
+                if (config.max_drawdown_pct) {
+                    limitsHtml += `<div class="detail-item"><label>Max Drawdown:</label><value>${(config.max_drawdown_pct * 100).toFixed(2)}%</value></div>`;
+                }
+                if (config.max_exposure_usdt || config.max_exposure_pct) {
+                    limitsHtml += `<div class="detail-item"><label>Max Exposure:</label><value>${config.max_exposure_usdt ? `$${config.max_exposure_usdt}` : `${(config.max_exposure_pct * 100).toFixed(2)}%`}</value></div>`;
+                }
+                limitsHtml += '</div>';
+                
+                // Priority mode
+                let modeText = '';
+                if (config.override_account_limits) {
+                    modeText = '<span class="badge warning">Override Account Limits</span>';
+                } else if (config.use_more_restrictive) {
+                    modeText = '<span class="badge info">More Restrictive Mode</span>';
+                } else {
+                    modeText = '<span class="badge info">Strategy-Only Mode</span>';
+                }
+                
+                container.innerHTML = `
+                    <div style="padding: 10px;">
+                        <div class="detail-item" style="margin-bottom: 10px;">
+                            <label>Priority Mode:</label>
+                            <value>${modeText}</value>
+                        </div>
+                        ${limitsHtml}
+                        <div style="display: flex; gap: 10px; margin-top: 10px;">
+                            <button class="btn btn-primary" style="padding: 8px 16px; font-size: 0.9em;" 
+                                    onclick="showStrategyRiskConfig('${strategyId}')">
+                                Edit Configuration
+                            </button>
+                            <button class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.9em;" 
+                                    onclick="deleteStrategyRiskConfig('${strategyId}')">
+                                Delete Configuration
+                            </button>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading strategy risk config:', error);
+                container.innerHTML = `
+                    <div style="padding: 10px; color: #f44336;">
+                        Error loading risk configuration: ${error.message}
+                        <button class="btn btn-primary" style="padding: 8px 16px; font-size: 0.9em; margin-top: 10px;" 
+                                onclick="showStrategyRiskConfig('${strategyId}')">
+                            Configure Risk Limits
+                        </button>
+                    </div>
+                `;
+            }
+        }
+
+        async function showStrategyRiskConfig(strategyId) {
+            // Create modal
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+            
+            // Default config
+            const defaultConfig = {
+                enabled: true,
+                override_account_limits: false,
+                use_more_restrictive: true,
+                timezone: 'UTC'
+            };
+            
+            modal.innerHTML = `
+                <div class="modal-content" style="background: white; padding: 30px; border-radius: 8px; max-width: 700px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                    <h2 style="margin-top: 0;">Strategy Risk Configuration</h2>
+                    <form id="strategy-risk-config-form">
+                        <fieldset style="border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+                            <legend>Loss Limits</legend>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Daily Loss (USDT):</label>
+                                <input type="number" id="max_daily_loss_usdt" step="0.01" min="0" placeholder="e.g., 100">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum daily loss in USDT</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Daily Loss (%):</label>
+                                <input type="number" id="max_daily_loss_pct" step="0.01" min="0" max="1" placeholder="e.g., 0.05 (5%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum daily loss as percentage (0-1)</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Weekly Loss (USDT):</label>
+                                <input type="number" id="max_weekly_loss_usdt" step="0.01" min="0" placeholder="e.g., 500">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum weekly loss in USDT</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Weekly Loss (%):</label>
+                                <input type="number" id="max_weekly_loss_pct" step="0.01" min="0" max="1" placeholder="e.g., 0.1 (10%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum weekly loss as percentage (0-1)</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Drawdown (%):</label>
+                                <input type="number" id="max_drawdown_pct" step="0.01" min="0" max="1" placeholder="e.g., 0.2 (20%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum drawdown percentage (0-1)</small>
+                            </div>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+                            <legend>Exposure Limits</legend>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Exposure (USDT):</label>
+                                <input type="number" id="max_exposure_usdt" step="0.01" min="0" placeholder="e.g., 1000">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum exposure in USDT</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Max Exposure (%):</label>
+                                <input type="number" id="max_exposure_pct" step="0.01" min="0" max="1" placeholder="e.g., 0.5 (50%)">
+                                <small style="color: #666; display: block; margin-top: 4px;">Maximum exposure as percentage (0-1)</small>
+                            </div>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+                            <legend>Priority Mode</legend>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>
+                                    <input type="checkbox" id="override_account_limits">
+                                    Override Account Limits
+                                </label>
+                                <small style="color: #666; display: block; margin-top: 4px; margin-left: 25px;">Strategy limits replace account limits completely</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>
+                                    <input type="checkbox" id="use_more_restrictive" checked>
+                                    Use More Restrictive Mode
+                                </label>
+                                <small style="color: #666; display: block; margin-top: 4px; margin-left: 25px;">Use most restrictive limit from both account and strategy configs</small>
+                            </div>
+                            <small style="color: #666; display: block; margin-top: 10px;">
+                                <strong>Note:</strong> If both checkboxes are unchecked, strategy limits are used standalone (ignoring account limits).
+                            </small>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+                            <legend>Loss Reset Configuration (Optional)</legend>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Daily Loss Reset Time:</label>
+                                <input type="time" id="daily_loss_reset_time">
+                                <small style="color: #666; display: block; margin-top: 4px;">UTC time when daily loss counter resets (defaults to account config)</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Weekly Loss Reset Day:</label>
+                                <select id="weekly_loss_reset_day">
+                                    <option value="">Use Account Default</option>
+                                    <option value="1">Monday</option>
+                                    <option value="2">Tuesday</option>
+                                    <option value="3">Wednesday</option>
+                                    <option value="4">Thursday</option>
+                                    <option value="5">Friday</option>
+                                    <option value="6">Saturday</option>
+                                    <option value="7">Sunday</option>
+                                </select>
+                                <small style="color: #666; display: block; margin-top: 4px;">Day of week when weekly loss counter resets</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Timezone:</label>
+                                <input type="text" id="timezone" value="${defaultConfig.timezone}" placeholder="e.g., UTC, America/New_York">
+                                <small style="color: #666; display: block; margin-top: 4px;">Timezone for loss reset calculations</small>
+                            </div>
+                        </fieldset>
+
+                        <div style="display: flex; gap: 10px; margin-top: 20px;">
+                            <button type="submit" class="btn btn-primary">Save Configuration</button>
+                            <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Load existing config if available
+            (async () => {
+                try {
+                    const response = await authFetch(`/api/risk/config/strategies/${strategyId}`);
+                    if (response.ok) {
+                        const config = await response.json();
+                        
+                        // Populate form fields
+                        if (config.max_daily_loss_usdt) document.getElementById('max_daily_loss_usdt').value = config.max_daily_loss_usdt;
+                        if (config.max_daily_loss_pct) document.getElementById('max_daily_loss_pct').value = config.max_daily_loss_pct;
+                        if (config.max_weekly_loss_usdt) document.getElementById('max_weekly_loss_usdt').value = config.max_weekly_loss_usdt;
+                        if (config.max_weekly_loss_pct) document.getElementById('max_weekly_loss_pct').value = config.max_weekly_loss_pct;
+                        if (config.max_drawdown_pct) document.getElementById('max_drawdown_pct').value = config.max_drawdown_pct;
+                        if (config.max_exposure_usdt) document.getElementById('max_exposure_usdt').value = config.max_exposure_usdt;
+                        if (config.max_exposure_pct) document.getElementById('max_exposure_pct').value = config.max_exposure_pct;
+                        if (config.daily_loss_reset_time) {
+                            const timeStr = typeof config.daily_loss_reset_time === 'string' ? config.daily_loss_reset_time : config.daily_loss_reset_time.split('T')[1]?.split('.')[0];
+                            if (timeStr) document.getElementById('daily_loss_reset_time').value = timeStr.substring(0, 5); // HH:MM
+                        }
+                        if (config.weekly_loss_reset_day) document.getElementById('weekly_loss_reset_day').value = config.weekly_loss_reset_day;
+                        if (config.timezone) document.getElementById('timezone').value = config.timezone;
+                        document.getElementById('override_account_limits').checked = config.override_account_limits || false;
+                        document.getElementById('use_more_restrictive').checked = config.use_more_restrictive !== false;
+                    }
+                } catch (error) {
+                    console.warn('Failed to load existing config, using defaults:', error);
+                }
+            })();
+            
+            // Handle form submission
+            document.getElementById('strategy-risk-config-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const configData = {
+                    enabled: true,
+                    max_daily_loss_usdt: document.getElementById('max_daily_loss_usdt').value ? parseFloat(document.getElementById('max_daily_loss_usdt').value) : null,
+                    max_daily_loss_pct: document.getElementById('max_daily_loss_pct').value ? parseFloat(document.getElementById('max_daily_loss_pct').value) : null,
+                    max_weekly_loss_usdt: document.getElementById('max_weekly_loss_usdt').value ? parseFloat(document.getElementById('max_weekly_loss_usdt').value) : null,
+                    max_weekly_loss_pct: document.getElementById('max_weekly_loss_pct').value ? parseFloat(document.getElementById('max_weekly_loss_pct').value) : null,
+                    max_drawdown_pct: document.getElementById('max_drawdown_pct').value ? parseFloat(document.getElementById('max_drawdown_pct').value) : null,
+                    max_exposure_usdt: document.getElementById('max_exposure_usdt').value ? parseFloat(document.getElementById('max_exposure_usdt').value) : null,
+                    max_exposure_pct: document.getElementById('max_exposure_pct').value ? parseFloat(document.getElementById('max_exposure_pct').value) : null,
+                    override_account_limits: document.getElementById('override_account_limits').checked,
+                    use_more_restrictive: document.getElementById('use_more_restrictive').checked,
+                    timezone: document.getElementById('timezone').value || 'UTC',
+                    daily_loss_reset_time: document.getElementById('daily_loss_reset_time').value || null,
+                    weekly_loss_reset_day: document.getElementById('weekly_loss_reset_day').value ? parseInt(document.getElementById('weekly_loss_reset_day').value) : null
+                };
+                
+                try {
+                    // Check if config exists
+                    const checkResponse = await authFetch(`/api/risk/config/strategies/${strategyId}`);
+                    const isEdit = checkResponse.ok;
+                    
+                    const url = `/api/risk/config/strategies/${strategyId}`;
+                    const method = isEdit ? 'PUT' : 'POST';
+                    
+                    const response = await authFetch(url, {
+                        method: method,
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(configData)
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                        throw new Error(errorData.detail || 'Failed to save configuration');
+                    }
+                    
+                    modal.remove();
+                    showNotification('Strategy risk configuration saved successfully', 'success');
+                    
+                    // Reload config display
+                    if (expandedStrategies.has(strategyId)) {
+                        loadStrategyRiskConfig(strategyId);
+                    }
+                } catch (error) {
+                    showNotification(`Failed to save configuration: ${error.message}`, 'error');
+                }
+            });
+            
+            // Close on overlay click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+        }
+
+        async function deleteStrategyRiskConfig(strategyId) {
+            if (!confirm('Are you sure you want to delete the risk configuration for this strategy? This will revert to using account-level limits only.')) {
+                return;
+            }
+            
+            try {
+                const response = await authFetch(`/api/risk/config/strategies/${strategyId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                    throw new Error(errorData.detail || 'Failed to delete configuration');
+                }
+                
+                showNotification('Strategy risk configuration deleted successfully', 'success');
+                
+                // Reload config display
+                if (expandedStrategies.has(strategyId)) {
+                    loadStrategyRiskConfig(strategyId);
+                }
+            } catch (error) {
+                showNotification(`Failed to delete configuration: ${error.message}`, 'error');
+            }
         }
 
         async function triggerManualTuning(strategyId) {

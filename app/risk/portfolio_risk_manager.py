@@ -20,7 +20,10 @@ from loguru import logger
 from app.core.exceptions import RiskLimitExceededError
 from app.models.order import OrderResponse
 from app.models.strategy import StrategySummary
-from app.models.risk_management import RiskManagementConfigResponse
+from app.models.risk_management import (
+    RiskManagementConfigResponse,
+    StrategyRiskConfigResponse
+)
 from app.strategies.base import StrategySignal
 
 
@@ -95,7 +98,9 @@ class PortfolioRiskManager:
         self,
         signal: StrategySignal,
         summary: StrategySummary,
-        account_id: Optional[str] = None
+        account_id: Optional[str] = None,
+        strategy_config: Optional[StrategyRiskConfigResponse] = None,
+        strategy_uuid: Optional[UUID] = None
     ) -> Tuple[bool, str]:
         """Check if order is allowed (WITH ASYNC LOCKING).
         
@@ -106,6 +111,8 @@ class PortfolioRiskManager:
             signal: Strategy signal
             summary: Strategy summary
             account_id: Account ID (defaults to self.account_id)
+            strategy_config: Strategy-level risk config (optional)
+            strategy_uuid: Strategy UUID for strategy-specific PnL calculation (optional)
             
         Returns:
             Tuple of (allowed: bool, reason: str)
@@ -116,33 +123,42 @@ class PortfolioRiskManager:
         account_lock = self._get_account_lock(account_id)
         
         async with account_lock:
+            # Get effective risk config (merged account + strategy configs)
+            effective_config = self.get_effective_risk_config(strategy_config)
+            
             # Check if risk management is enabled
-            if not self.config:
+            if not effective_config:
                 return True, "Risk management not configured"
             
             # Check portfolio exposure limit
-            if self.config.max_portfolio_exposure_usdt or self.config.max_portfolio_exposure_pct:
+            if effective_config.max_portfolio_exposure_usdt or effective_config.max_portfolio_exposure_pct:
                 allowed, reason = await self._check_exposure_limit(
-                    signal, summary, account_id
+                    signal, summary, account_id, effective_config
                 )
                 if not allowed:
                     return False, reason
             
             # Check daily loss limit (REALIZED PnL ONLY)
-            if self.config.max_daily_loss_usdt or self.config.max_daily_loss_pct:
-                allowed, reason = await self._check_daily_loss_limit(account_id)
+            if effective_config.max_daily_loss_usdt or effective_config.max_daily_loss_pct:
+                allowed, reason = await self._check_daily_loss_limit(
+                    account_id, effective_config, strategy_config, strategy_uuid
+                )
                 if not allowed:
                     return False, reason
             
             # Check weekly loss limit (REALIZED PnL ONLY)
-            if self.config.max_weekly_loss_usdt or self.config.max_weekly_loss_pct:
-                allowed, reason = await self._check_weekly_loss_limit(account_id)
+            if effective_config.max_weekly_loss_usdt or effective_config.max_weekly_loss_pct:
+                allowed, reason = await self._check_weekly_loss_limit(
+                    account_id, effective_config, strategy_config, strategy_uuid
+                )
                 if not allowed:
                     return False, reason
             
             # Check drawdown limit (TOTAL EQUITY)
-            if self.config.max_drawdown_pct:
-                allowed, reason = await self._check_drawdown_limit(account_id)
+            if effective_config.max_drawdown_pct:
+                allowed, reason = await self._check_drawdown_limit(
+                    account_id, effective_config
+                )
                 if not allowed:
                     return False, reason
             
@@ -157,9 +173,21 @@ class PortfolioRiskManager:
         self,
         signal: StrategySignal,
         summary: StrategySummary,
-        account_id: str
+        account_id: str,
+        config: Optional[RiskManagementConfigResponse] = None
     ) -> Tuple[bool, str]:
-        """Check if order would exceed portfolio exposure limit."""
+        """Check if order would exceed portfolio exposure limit.
+        
+        Args:
+            signal: Strategy signal
+            summary: Strategy summary
+            account_id: Account ID
+            config: Risk config to use (defaults to self.config)
+        """
+        config = config or self.config
+        if not config:
+            return True, "No exposure limit configured"
+        
         # Calculate current exposure (including reservations)
         current_exposure = await self._calculate_current_exposure(account_id)
         
@@ -167,7 +195,7 @@ class PortfolioRiskManager:
         order_exposure = self._calculate_order_exposure(signal, summary)
         
         # Get max exposure limit
-        max_exposure = await self._get_max_exposure(account_id)
+        max_exposure = await self._get_max_exposure(account_id, config)
         if max_exposure is None:
             return True, "No exposure limit set"
         
@@ -268,20 +296,30 @@ class PortfolioRiskManager:
         notional = quantity * price * summary.leverage
         return notional
     
-    async def _get_max_exposure(self, account_id: str) -> Optional[float]:
-        """Get maximum exposure limit for account."""
-        if not self.config:
+    async def _get_max_exposure(
+        self,
+        account_id: str,
+        config: Optional[RiskManagementConfigResponse] = None
+    ) -> Optional[float]:
+        """Get maximum exposure limit for account.
+        
+        Args:
+            account_id: Account ID
+            config: Risk config to use (defaults to self.config)
+        """
+        config = config or self.config
+        if not config:
             return None
         
         # Check USDT limit
-        if self.config.max_portfolio_exposure_usdt:
-            return float(self.config.max_portfolio_exposure_usdt)
+        if config.max_portfolio_exposure_usdt:
+            return float(config.max_portfolio_exposure_usdt)
         
         # Check percentage limit (need account balance)
-        if self.config.max_portfolio_exposure_pct:
+        if config.max_portfolio_exposure_pct:
             balance = await self._get_account_balance(account_id)
             if balance:
-                return balance * float(self.config.max_portfolio_exposure_pct)
+                return balance * float(config.max_portfolio_exposure_pct)
         
         return None
     
@@ -313,76 +351,230 @@ class PortfolioRiskManager:
             logger.warning(f"Failed to get account balance for {account_id}: {e}")
             return None
     
-    async def _check_daily_loss_limit(self, account_id: str) -> Tuple[bool, str]:
+    async def _check_daily_loss_limit(
+        self,
+        account_id: str,
+        config: Optional[RiskManagementConfigResponse] = None,
+        strategy_config: Optional[StrategyRiskConfigResponse] = None,
+        strategy_uuid: Optional[UUID] = None
+    ) -> Tuple[bool, str]:
         """Check daily loss limit (REALIZED PnL ONLY).
         
         CRITICAL: Uses realized PnL only, not unrealized.
+        
+        Args:
+            account_id: Account ID
+            config: Risk config to use (defaults to self.config)
+            strategy_config: Strategy risk config (for strategy-specific limits)
+            strategy_uuid: Strategy UUID (for strategy-specific PnL calculation)
         """
-        if not self.config:
+        config = config or self.config
+        if not config:
             return True, "No limit configured"
         
-        # Get realized PnL for today (closed trades only)
-        today_start = self._get_today_start()
-        realized_pnl = await self._get_realized_pnl(account_id, today_start)
+        # Determine if checking strategy-specific or account-level limit
+        use_strategy_specific = strategy_config and strategy_uuid and (
+            strategy_config.max_daily_loss_usdt or strategy_config.max_daily_loss_pct
+        )
         
-        # Get limit
-        max_daily_loss = None
-        if self.config.max_daily_loss_usdt:
-            max_daily_loss = float(self.config.max_daily_loss_usdt)
-        elif self.config.max_daily_loss_pct:
-            balance = await self._get_account_balance(account_id)
-            if balance:
-                max_daily_loss = balance * float(self.config.max_daily_loss_pct)
-        
-        if max_daily_loss is None:
-            return True, "No limit set"
-        
-        if realized_pnl < -abs(max_daily_loss):
-            return False, (
-                f"Daily loss limit exceeded: "
-                f"{realized_pnl:.2f} < {max_daily_loss:.2f} USDT"
-            )
-        
-        return True, "OK"
+        if use_strategy_specific and strategy_config.use_more_restrictive:
+            # More restrictive mode: check BOTH account and strategy limits
+            # Get account PnL
+            today_start = self._get_today_start_for_strategy(strategy_config)
+            account_pnl = await self._get_realized_pnl(account_id, today_start)
+            
+            # Get strategy PnL
+            strategy_pnl = await self._get_strategy_realized_pnl(strategy_uuid, today_start)
+            
+            # Check account limit
+            account_limit = None
+            if config.max_daily_loss_usdt:
+                account_limit = float(config.max_daily_loss_usdt)
+            elif config.max_daily_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    account_limit = balance * float(config.max_daily_loss_pct)
+            
+            if account_limit and account_pnl < -abs(account_limit):
+                return False, (
+                    f"Daily loss limit exceeded (account): "
+                    f"{account_pnl:.2f} < {account_limit:.2f} USDT"
+                )
+            
+            # Check strategy limit
+            strategy_limit = None
+            if strategy_config.max_daily_loss_usdt:
+                strategy_limit = float(strategy_config.max_daily_loss_usdt)
+            elif strategy_config.max_daily_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    strategy_limit = balance * float(strategy_config.max_daily_loss_pct)
+            
+            if strategy_limit and strategy_pnl < -abs(strategy_limit):
+                return False, (
+                    f"Daily loss limit exceeded (strategy): "
+                    f"{strategy_pnl:.2f} < {strategy_limit:.2f} USDT"
+                )
+            
+            return True, "OK"
+        else:
+            # Use effective config limits (already merged)
+            today_start = self._get_today_start_for_strategy(strategy_config) if strategy_config else self._get_today_start()
+            
+            # Get PnL: strategy-specific if strategy_uuid provided, otherwise account-level
+            if use_strategy_specific and strategy_uuid:
+                realized_pnl = await self._get_strategy_realized_pnl(strategy_uuid, today_start)
+                # CRITICAL: Mark as strategy-level breach so only this strategy is stopped
+                breach_type = "(strategy)"
+            else:
+                realized_pnl = await self._get_realized_pnl(account_id, today_start)
+                # Mark as account-level breach so all strategies are stopped
+                breach_type = "(account)"
+            
+            # Get limit from effective config
+            max_daily_loss = None
+            if config.max_daily_loss_usdt:
+                max_daily_loss = float(config.max_daily_loss_usdt)
+            elif config.max_daily_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    max_daily_loss = balance * float(config.max_daily_loss_pct)
+            
+            if max_daily_loss is None:
+                return True, "No limit set"
+            
+            if realized_pnl < -abs(max_daily_loss):
+                return False, (
+                    f"Daily loss limit exceeded {breach_type}: "
+                    f"{realized_pnl:.2f} < {max_daily_loss:.2f} USDT"
+                )
+            
+            return True, "OK"
     
-    async def _check_weekly_loss_limit(self, account_id: str) -> Tuple[bool, str]:
+    async def _check_weekly_loss_limit(
+        self,
+        account_id: str,
+        config: Optional[RiskManagementConfigResponse] = None,
+        strategy_config: Optional[StrategyRiskConfigResponse] = None,
+        strategy_uuid: Optional[UUID] = None
+    ) -> Tuple[bool, str]:
         """Check weekly loss limit (REALIZED PnL ONLY).
         
         CRITICAL: Uses realized PnL only, not unrealized.
+        
+        Args:
+            account_id: Account ID
+            config: Risk config to use (defaults to self.config)
+            strategy_config: Strategy risk config (for strategy-specific limits)
+            strategy_uuid: Strategy UUID (for strategy-specific PnL calculation)
         """
-        if not self.config:
+        config = config or self.config
+        if not config:
             return True, "No limit configured"
         
-        # Get realized PnL for this week (closed trades only)
-        week_start = self._get_week_start()
-        realized_pnl = await self._get_realized_pnl(account_id, week_start)
+        # Determine if checking strategy-specific or account-level limit
+        use_strategy_specific = strategy_config and strategy_uuid and (
+            strategy_config.max_weekly_loss_usdt or strategy_config.max_weekly_loss_pct
+        )
         
-        # Get limit
-        max_weekly_loss = None
-        if self.config.max_weekly_loss_usdt:
-            max_weekly_loss = float(self.config.max_weekly_loss_usdt)
-        elif self.config.max_weekly_loss_pct:
-            balance = await self._get_account_balance(account_id)
-            if balance:
-                max_weekly_loss = balance * float(self.config.max_weekly_loss_pct)
+        # Get week start with strategy config timezone/reset day if available
+        if strategy_config:
+            tz_str = strategy_config.timezone or "UTC"
+            reset_day = strategy_config.weekly_loss_reset_day or 1
+            week_start = self._get_week_start(tz_str, reset_day)
+        elif config:
+            tz_str = config.timezone or "UTC"
+            reset_day = config.weekly_loss_reset_day or 1
+            week_start = self._get_week_start(tz_str, reset_day)
+        else:
+            week_start = self._get_week_start()
         
-        if max_weekly_loss is None:
-            return True, "No limit set"
-        
-        if realized_pnl < -abs(max_weekly_loss):
-            return False, (
-                f"Weekly loss limit exceeded: "
-                f"{realized_pnl:.2f} < {max_weekly_loss:.2f} USDT"
-            )
-        
-        return True, "OK"
+        if use_strategy_specific and strategy_config.use_more_restrictive:
+            # More restrictive mode: check BOTH account and strategy limits
+            # Get account PnL
+            account_pnl = await self._get_realized_pnl(account_id, week_start)
+            
+            # Get strategy PnL
+            strategy_pnl = await self._get_strategy_realized_pnl(strategy_uuid, week_start)
+            
+            # Check account limit
+            account_limit = None
+            if config.max_weekly_loss_usdt:
+                account_limit = float(config.max_weekly_loss_usdt)
+            elif config.max_weekly_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    account_limit = balance * float(config.max_weekly_loss_pct)
+            
+            if account_limit and account_pnl < -abs(account_limit):
+                return False, (
+                    f"Weekly loss limit exceeded (account): "
+                    f"{account_pnl:.2f} < {account_limit:.2f} USDT"
+                )
+            
+            # Check strategy limit
+            strategy_limit = None
+            if strategy_config.max_weekly_loss_usdt:
+                strategy_limit = float(strategy_config.max_weekly_loss_usdt)
+            elif strategy_config.max_weekly_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    strategy_limit = balance * float(strategy_config.max_weekly_loss_pct)
+            
+            if strategy_limit and strategy_pnl < -abs(strategy_limit):
+                return False, (
+                    f"Weekly loss limit exceeded (strategy): "
+                    f"{strategy_pnl:.2f} < {strategy_limit:.2f} USDT"
+                )
+            
+            return True, "OK"
+        else:
+            # Use effective config limits (already merged)
+            # Get PnL: strategy-specific if strategy_uuid provided, otherwise account-level
+            if use_strategy_specific and strategy_uuid:
+                realized_pnl = await self._get_strategy_realized_pnl(strategy_uuid, week_start)
+                # CRITICAL: Mark as strategy-level breach so only this strategy is stopped
+                breach_type = "(strategy)"
+            else:
+                realized_pnl = await self._get_realized_pnl(account_id, week_start)
+                # Mark as account-level breach so all strategies are stopped
+                breach_type = "(account)"
+            
+            # Get limit from effective config
+            max_weekly_loss = None
+            if config.max_weekly_loss_usdt:
+                max_weekly_loss = float(config.max_weekly_loss_usdt)
+            elif config.max_weekly_loss_pct:
+                balance = await self._get_account_balance(account_id)
+                if balance:
+                    max_weekly_loss = balance * float(config.max_weekly_loss_pct)
+            
+            if max_weekly_loss is None:
+                return True, "No limit set"
+            
+            if realized_pnl < -abs(max_weekly_loss):
+                return False, (
+                    f"Weekly loss limit exceeded {breach_type}: "
+                    f"{realized_pnl:.2f} < {max_weekly_loss:.2f} USDT"
+                )
+            
+            return True, "OK"
     
-    async def _check_drawdown_limit(self, account_id: str) -> Tuple[bool, str]:
+    async def _check_drawdown_limit(
+        self,
+        account_id: str,
+        config: Optional[RiskManagementConfigResponse] = None
+    ) -> Tuple[bool, str]:
         """Check drawdown limit (TOTAL EQUITY: realized + unrealized).
         
         CRITICAL: Drawdown uses total equity, not just realized PnL.
+        
+        Args:
+            account_id: Account ID
+            config: Risk config to use (defaults to self.config)
         """
-        if not self.config or not self.config.max_drawdown_pct:
+        config = config or self.config
+        if not config or not config.max_drawdown_pct:
             return True, "No limit configured"
         
         # Get current balance (total equity)
@@ -398,7 +590,7 @@ class PortfolioRiskManager:
         # Calculate drawdown
         drawdown_pct = (peak_balance - current_balance) / peak_balance
         
-        max_drawdown = float(self.config.max_drawdown_pct)
+        max_drawdown = float(config.max_drawdown_pct)
         if drawdown_pct > max_drawdown:
             return False, (
                 f"Drawdown limit exceeded: "
@@ -482,17 +674,57 @@ class PortfolioRiskManager:
         
         return peak
     
-    def _get_today_start(self) -> datetime:
-        """Get start of today in UTC."""
-        now = datetime.now(timezone.utc)
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    def _get_today_start(self, timezone_str: str = "UTC", reset_time: Optional[time] = None) -> datetime:
+        """Get start of today in specified timezone.
+        
+        Args:
+            timezone_str: Timezone string (default: "UTC")
+            reset_time: Optional reset time (default: 00:00:00)
+        """
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(timezone_str)
+        now = datetime.now(tz)
+        
+        if reset_time:
+            today_start = now.replace(hour=reset_time.hour, minute=reset_time.minute, second=reset_time.second, microsecond=0)
+            # If reset_time is in the future today, use yesterday's reset
+            if today_start > now:
+                today_start = today_start - timedelta(days=1)
+        else:
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        return today_start.astimezone(timezone.utc)  # Convert to UTC for internal use
     
-    def _get_week_start(self) -> datetime:
-        """Get start of current week (Monday) in UTC."""
-        now = datetime.now(timezone.utc)
-        days_since_monday = now.weekday()  # 0 = Monday
-        week_start = now - timedelta(days=days_since_monday)
-        return week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    def _get_today_start_for_strategy(self, strategy_config: Optional[StrategyRiskConfigResponse] = None) -> datetime:
+        """Get today start for a strategy using its config, or default to account config."""
+        if strategy_config and strategy_config.daily_loss_reset_time:
+            tz_str = strategy_config.timezone or "UTC"
+            return self._get_today_start(tz_str, strategy_config.daily_loss_reset_time)
+        elif self.config and self.config.daily_loss_reset_time:
+            tz_str = self.config.timezone or "UTC"
+            return self._get_today_start(tz_str, self.config.daily_loss_reset_time)
+        else:
+            return self._get_today_start()
+    
+    def _get_week_start(self, timezone_str: str = "UTC", reset_day: int = 1) -> datetime:
+        """Get start of current week in specified timezone.
+        
+        Args:
+            timezone_str: Timezone string (default: "UTC")
+            reset_day: Day of week when week resets (1=Monday, 7=Sunday, default: 1)
+        """
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(timezone_str)
+        now = datetime.now(tz)
+        
+        # Calculate days to subtract to get to reset day
+        # reset_day: 1=Monday, 7=Sunday
+        current_weekday = now.weekday() + 1  # Convert to 1=Monday, 7=Sunday
+        days_to_subtract = (current_weekday - reset_day) % 7
+        
+        week_start = now - timedelta(days=days_to_subtract)
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        return week_start.astimezone(timezone.utc)  # Convert to UTC for internal use
     
     # CRITICAL FIX #2: Exposure Reservation Methods
     
@@ -630,4 +862,255 @@ class PortfolioRiskManager:
                     return max_quantity
         
         return None
+    
+    # ============================================
+    # STRATEGY-LEVEL RISK CONFIG HELPERS
+    # ============================================
+    
+    def _convert_strategy_to_risk_config(
+        self,
+        strategy_config: StrategyRiskConfigResponse
+    ) -> RiskManagementConfigResponse:
+        """Convert StrategyRiskConfigResponse to RiskManagementConfigResponse.
+        
+        This is needed because PortfolioRiskManager uses RiskManagementConfigResponse
+        internally, but we need to work with StrategyRiskConfigResponse.
+        
+        Args:
+            strategy_config: Strategy risk config to convert
+        
+        Returns:
+            RiskManagementConfigResponse with strategy limits
+        """
+        # Use account config as base for required fields, then override with strategy limits
+        base_config = self.config  # Use current account config as base
+        
+        return RiskManagementConfigResponse(
+            id=strategy_config.id,  # Use strategy config ID
+            user_id=strategy_config.user_id,  # Use strategy config user_id
+            account_id=base_config.account_id,  # Use account_id from base config
+            max_portfolio_exposure_usdt=strategy_config.max_exposure_usdt,
+            max_portfolio_exposure_pct=strategy_config.max_exposure_pct,
+            max_daily_loss_usdt=strategy_config.max_daily_loss_usdt,
+            max_daily_loss_pct=strategy_config.max_daily_loss_pct,
+            max_weekly_loss_usdt=strategy_config.max_weekly_loss_usdt,
+            max_weekly_loss_pct=strategy_config.max_weekly_loss_pct,
+            max_drawdown_pct=strategy_config.max_drawdown_pct,
+            daily_loss_reset_time=strategy_config.daily_loss_reset_time,
+            weekly_loss_reset_day=strategy_config.weekly_loss_reset_day,
+            timezone=strategy_config.timezone or "UTC",
+            circuit_breaker_enabled=False,  # Strategy config doesn't have circuit breaker
+            max_consecutive_losses=base_config.max_consecutive_losses if base_config.max_consecutive_losses else 5,  # Use account default or 5
+            rapid_loss_threshold_pct=base_config.rapid_loss_threshold_pct if base_config.rapid_loss_threshold_pct else 0.05,
+            rapid_loss_timeframe_minutes=base_config.rapid_loss_timeframe_minutes if base_config.rapid_loss_timeframe_minutes else 60,  # Must be >= 1
+            circuit_breaker_cooldown_minutes=base_config.circuit_breaker_cooldown_minutes if base_config.circuit_breaker_cooldown_minutes else 60,  # Must be >= 1
+            volatility_based_sizing_enabled=False,
+            performance_based_adjustment_enabled=False,
+            kelly_criterion_enabled=False,
+            kelly_fraction=0.0,
+            correlation_limits_enabled=False,
+            max_correlation_exposure_pct=0.0,
+            margin_call_protection_enabled=False,
+            min_margin_ratio=0.0,
+            max_trades_per_day_per_strategy=None,
+            max_trades_per_day_total=None,
+            auto_reduce_order_size=False,
+            created_at=strategy_config.created_at,  # Use strategy config timestamps
+            updated_at=strategy_config.updated_at,
+        )
+    
+    def _merge_configs_most_restrictive(
+        self,
+        account_config: Optional[RiskManagementConfigResponse],
+        strategy_config: Optional[RiskManagementConfigResponse]
+    ) -> Optional[RiskManagementConfigResponse]:
+        """Merge account and strategy configs using most restrictive limits.
+        
+        For each limit field, takes the more restrictive (lower) value.
+        If one config has a limit and the other doesn't, uses the one with the limit.
+        
+        Args:
+            account_config: Account-level risk config
+            strategy_config: Strategy-level risk config (already converted to RiskManagementConfigResponse)
+        
+        Returns:
+            Merged config with most restrictive limits, or None if both are None
+        """
+        if not account_config and not strategy_config:
+            return None
+        
+        if not account_config:
+            return strategy_config
+        
+        if not strategy_config:
+            return account_config
+        
+        # Helper to get more restrictive value (lower is more restrictive for limits)
+        def more_restrictive(val1: Optional[float], val2: Optional[float]) -> Optional[float]:
+            if val1 is None:
+                return val2
+            if val2 is None:
+                return val1
+            return min(val1, val2)
+        
+        # Merge limits - take most restrictive (lower values)
+        return RiskManagementConfigResponse(
+            max_portfolio_exposure_usdt=more_restrictive(
+                float(account_config.max_portfolio_exposure_usdt) if account_config.max_portfolio_exposure_usdt else None,
+                float(strategy_config.max_portfolio_exposure_usdt) if strategy_config.max_portfolio_exposure_usdt else None
+            ),
+            max_portfolio_exposure_pct=more_restrictive(
+                float(account_config.max_portfolio_exposure_pct) if account_config.max_portfolio_exposure_pct else None,
+                float(strategy_config.max_portfolio_exposure_pct) if strategy_config.max_portfolio_exposure_pct else None
+            ),
+            max_daily_loss_usdt=more_restrictive(
+                float(account_config.max_daily_loss_usdt) if account_config.max_daily_loss_usdt else None,
+                float(strategy_config.max_daily_loss_usdt) if strategy_config.max_daily_loss_usdt else None
+            ),
+            max_daily_loss_pct=more_restrictive(
+                float(account_config.max_daily_loss_pct) if account_config.max_daily_loss_pct else None,
+                float(strategy_config.max_daily_loss_pct) if strategy_config.max_daily_loss_pct else None
+            ),
+            max_weekly_loss_usdt=more_restrictive(
+                float(account_config.max_weekly_loss_usdt) if account_config.max_weekly_loss_usdt else None,
+                float(strategy_config.max_weekly_loss_usdt) if strategy_config.max_weekly_loss_usdt else None
+            ),
+            max_weekly_loss_pct=more_restrictive(
+                float(account_config.max_weekly_loss_pct) if account_config.max_weekly_loss_pct else None,
+                float(strategy_config.max_weekly_loss_pct) if strategy_config.max_weekly_loss_pct else None
+            ),
+            max_drawdown_pct=more_restrictive(
+                float(account_config.max_drawdown_pct) if account_config.max_drawdown_pct else None,
+                float(strategy_config.max_drawdown_pct) if strategy_config.max_drawdown_pct else None
+            ),
+            # Use strategy timezone/reset times if available, otherwise account
+            daily_loss_reset_time=strategy_config.daily_loss_reset_time or account_config.daily_loss_reset_time,
+            weekly_loss_reset_day=strategy_config.weekly_loss_reset_day or account_config.weekly_loss_reset_day,
+            timezone=strategy_config.timezone or account_config.timezone or "UTC",
+            # Circuit breaker and other settings come from account config only
+            circuit_breaker_enabled=account_config.circuit_breaker_enabled,
+            max_consecutive_losses=account_config.max_consecutive_losses,
+            rapid_loss_threshold_pct=account_config.rapid_loss_threshold_pct,
+            rapid_loss_timeframe_minutes=account_config.rapid_loss_timeframe_minutes,
+            circuit_breaker_cooldown_minutes=account_config.circuit_breaker_cooldown_minutes,
+            volatility_based_sizing_enabled=account_config.volatility_based_sizing_enabled,
+            performance_based_adjustment_enabled=account_config.performance_based_adjustment_enabled,
+            kelly_criterion_enabled=account_config.kelly_criterion_enabled,
+            kelly_fraction=account_config.kelly_fraction,
+            correlation_limits_enabled=account_config.correlation_limits_enabled,
+            max_correlation_exposure_pct=account_config.max_correlation_exposure_pct,
+            margin_call_protection_enabled=account_config.margin_call_protection_enabled,
+            min_margin_ratio=account_config.min_margin_ratio,
+            max_trades_per_day_per_strategy=account_config.max_trades_per_day_per_strategy,
+            max_trades_per_day_total=account_config.max_trades_per_day_total,
+            auto_reduce_order_size=account_config.auto_reduce_order_size,
+            # Required fields - use account config values
+            id=account_config.id,
+            user_id=account_config.user_id,
+            account_id=account_config.account_id,
+            created_at=account_config.created_at,
+            updated_at=account_config.updated_at,
+        )
+    
+    async def _get_strategy_realized_pnl(
+        self,
+        strategy_uuid: UUID,
+        start_time: datetime
+    ) -> float:
+        """Get realized PnL for a specific strategy from closed trades since start_time.
+        
+        CRITICAL: Only includes closed trades (realized PnL), not open positions.
+        
+        Args:
+            strategy_uuid: Strategy UUID (from Strategy.id, not strategy_id string)
+            start_time: Start time for PnL calculation
+        
+        Returns:
+            Realized PnL in USDT
+        """
+        if not self.trade_service or not self.user_id:
+            return 0.0
+        
+        # Get trades for this strategy from database
+        # Note: trade_service expects strategy_id (UUID), not strategy_id string
+        try:
+            if self._is_async:
+                # Note: async_get_trades may not exist yet, so using sync for now
+                # This will be updated when TradeService is fully async
+                trades = await self.trade_service.async_get_trades(
+                    user_id=self.user_id,
+                    strategy_id=strategy_uuid,
+                    start_time=start_time
+                ) if hasattr(self.trade_service, 'async_get_trades') else []
+            else:
+                trades = self.trade_service.get_trades(
+                    user_id=self.user_id,
+                    strategy_id=strategy_uuid,
+                    start_time=start_time
+                ) if hasattr(self.trade_service, 'get_trades') else []
+        except Exception as e:
+            logger.warning(f"Failed to get trades for strategy {strategy_uuid}: {e}")
+            trades = []
+        
+        if not trades:
+            return 0.0
+        
+        # Filter trades by timestamp
+        filtered_trades = [
+            t for t in trades
+            if t.timestamp and t.timestamp >= start_time
+        ]
+        
+        if not filtered_trades:
+            return 0.0
+        
+        # Use trade matcher to get completed trades
+        from app.services.trade_matcher import match_trades_to_completed_positions
+        completed_trades = match_trades_to_completed_positions(
+            filtered_trades,
+            include_fees=True
+        )
+        
+        # Sum net PnL from completed trades
+        from app.risk.utils import get_pnl_from_completed_trade
+        total_pnl = 0.0
+        for completed in completed_trades:
+            total_pnl += get_pnl_from_completed_trade(completed)
+        
+        return total_pnl
+    
+    def get_effective_risk_config(
+        self,
+        strategy_config: Optional[StrategyRiskConfigResponse] = None
+    ) -> Optional[RiskManagementConfigResponse]:
+        """Get effective risk config by merging account and strategy configs.
+        
+        Priority rules:
+        1. If strategy_config.override_account_limits = True: use strategy limits only
+        2. If strategy_config.use_more_restrictive = True: use most restrictive of both
+        3. Otherwise (both flags False): use strategy limits only (strategy-only mode)
+        
+        Args:
+            strategy_config: Strategy-level risk config (optional)
+        
+        Returns:
+            Effective risk config to use for checks
+        """
+        # If no strategy config, use account config
+        if not strategy_config:
+            return self.config
+        
+        # Convert strategy config to RiskManagementConfigResponse format
+        strategy_config_conv = self._convert_strategy_to_risk_config(strategy_config)
+        
+        # Priority Rule 1: Override mode - strategy limits replace account limits
+        if strategy_config.override_account_limits:
+            return strategy_config_conv
+        
+        # Priority Rule 2: More restrictive mode - use most restrictive of both
+        if strategy_config.use_more_restrictive:
+            return self._merge_configs_most_restrictive(self.config, strategy_config_conv)
+        
+        # Priority Rule 3: Strategy-only mode - use strategy limits, ignore account limits
+        return strategy_config_conv
 
