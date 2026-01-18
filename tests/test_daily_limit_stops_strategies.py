@@ -3,7 +3,7 @@
 Tests verify that:
 1. When daily limit exceeded, stop() is called for each strategy
 2. All strategies for the account are stopped (not just paused)
-3. Status is correctly set to "paused_by_risk" after stopping
+3. Status is correctly set to "stopped_by_risk" after stopping
 4. Tasks are cancelled and removed from _tasks dict
 5. Positions are closed and TP/SL orders are cancelled
 """
@@ -290,21 +290,21 @@ class TestDailyLimitStopsStrategies:
         assert len(paused_strategies) == 3, "Should return 3 paused strategies"
         assert all(sid in paused_strategies for sid in ["strategy-1", "strategy-2", "strategy-3"])
         
-        # Verify database status is "paused_by_risk"
+        # Verify database status is "stopped_by_risk"
         test_db.expire_all()  # Refresh from database
         db_strategies_after = test_db.query(Strategy).filter(
             Strategy.account_id == test_account.id
         ).all()
         for strategy in db_strategies_after:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk, got {strategy.status}"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk, got {strategy.status}"
         
         # Verify in-memory summaries are updated
         for strategy_id in ["strategy-1", "strategy-2", "strategy-3"]:
             summary = strategy_runner._strategies.get(strategy_id)
             assert summary is not None, f"Strategy {strategy_id} should exist in memory"
-            assert summary.status == StrategyState.paused_by_risk, \
-                f"Strategy {strategy_id} should be paused_by_risk in memory, got {summary.status}"
+            assert summary.status == StrategyState.stopped_by_risk, \
+                f"Strategy {strategy_id} should be stopped_by_risk in memory, got {summary.status}"
         
         # Verify tasks were cancelled and removed
         assert len(strategy_runner._tasks) == 0, \
@@ -424,13 +424,13 @@ class TestDailyLimitStopsStrategies:
         assert all(sid in stop_calls for sid in ["strategy-1", "strategy-2", "strategy-3"])
         assert "strategy-account2-1" not in stop_calls, "Should not stop account2 strategy"
         
-        # Verify "default" account strategies are paused_by_risk
+        # Verify "default" account strategies are stopped_by_risk
         default_strategies = test_db.query(Strategy).filter(
             Strategy.account_id == test_account.id
         ).all()
         for strategy in default_strategies:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk"
         
         # Verify account2 strategy is still running
         account2_strategy_after = test_db.query(Strategy).filter(
@@ -445,7 +445,7 @@ class TestDailyLimitStopsStrategies:
             "Account2 strategy task should still exist"
     
     @pytest.mark.asyncio
-    async def test_daily_limit_status_is_paused_by_risk_not_stopped(
+    async def test_daily_limit_status_is_stopped_by_risk_not_stopped(
         self,
         test_db,
         test_user,
@@ -453,7 +453,7 @@ class TestDailyLimitStopsStrategies:
         test_strategies,
         strategy_runner
     ):
-        """Test that status is set to paused_by_risk, not stopped, after daily limit exceeded."""
+        """Test that status is set to stopped_by_risk, not stopped, after daily limit exceeded."""
         
         # Add strategies to in-memory cache
         for db_strategy in test_strategies:
@@ -484,23 +484,23 @@ class TestDailyLimitStopsStrategies:
         
         assert len(paused_strategies) == 3, "Should pause 3 strategies"
         
-        # Verify status is "paused_by_risk", NOT "stopped"
+        # Verify status is "stopped_by_risk", NOT "stopped"
         test_db.expire_all()
         db_strategies_after = test_db.query(Strategy).filter(
             Strategy.account_id == test_account.id
         ).all()
         
         for strategy in db_strategies_after:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk, got {strategy.status}"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk, got {strategy.status}"
             assert strategy.status != "stopped", \
-                f"Strategy {strategy.strategy_id} should NOT be stopped, should be paused_by_risk"
+                f"Strategy {strategy.strategy_id} should NOT be stopped, should be stopped_by_risk"
         
         # Verify in-memory status
         for strategy_id in paused_strategies:
             summary = strategy_runner._strategies.get(strategy_id)
-            assert summary.status == StrategyState.paused_by_risk, \
-                f"In-memory status should be paused_by_risk, got {summary.status}"
+            assert summary.status == StrategyState.stopped_by_risk, \
+                f"In-memory status should be stopped_by_risk, got {summary.status}"
             assert summary.status != StrategyState.stopped, \
                 f"In-memory status should NOT be stopped"
     
@@ -565,11 +565,11 @@ class TestDailyLimitStopsStrategies:
         assert len(strategy_runner._tasks) == 0, \
             "All tasks should be removed after stopping"
         
-        # Verify status is paused_by_risk
+        # Verify status is stopped_by_risk
         test_db.expire_all()
         db_strategies = test_db.query(Strategy).filter(
             Strategy.account_id == test_account.id
         ).all()
-        assert all(s.status == "paused_by_risk" for s in db_strategies), \
-            "All strategies should be paused_by_risk"
+        assert all(s.status == "stopped_by_risk" for s in db_strategies), \
+            "All strategies should be stopped_by_risk"
 

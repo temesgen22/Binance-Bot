@@ -3,7 +3,7 @@
 Tests verify that:
 1. When daily/weekly limit is exceeded, all strategies for that account are paused
 2. Strategies from other accounts are NOT affected (remain running)
-3. Status is correctly set to "paused_by_risk"
+3. Status is correctly set to "stopped_by_risk"
 4. Account-level enforcement events are logged
 5. Only the affected account's strategies are paused
 """
@@ -260,13 +260,13 @@ class TestAccountLimitPauseStrategies:
         assert "strategy-account1-2" in paused_strategies
         assert "strategy-account1-3" in paused_strategies
         
-        # Verify account 1 strategies status is "paused_by_risk"
+        # Verify account 1 strategies status is "stopped_by_risk"
         account1_strategies_after = test_db.query(Strategy).filter(
             Strategy.account_id == test_account_1.id
         ).all()
         for strategy in account1_strategies_after:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk, got {strategy.status}"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk, got {strategy.status}"
         
         # Verify account 2 strategies are NOT affected (still running)
         account2_strategies_after = test_db.query(Strategy).filter(
@@ -319,13 +319,13 @@ class TestAccountLimitPauseStrategies:
         assert "strategy-account2-1" in paused_strategies
         assert "strategy-account2-2" in paused_strategies
         
-        # Verify account 2 strategies status is "paused_by_risk"
+        # Verify account 2 strategies status is "stopped_by_risk"
         account2_strategies_after = test_db.query(Strategy).filter(
             Strategy.account_id == test_account_2.id
         ).all()
         for strategy in account2_strategies_after:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk"
         
         # Verify account 1 strategies are NOT affected (still running)
         account1_strategies_after = test_db.query(Strategy).filter(
@@ -376,7 +376,7 @@ class TestAccountLimitPauseStrategies:
         
         account1_paused = test_db.query(Strategy).filter(
             Strategy.account_id == test_account_1.id,
-            Strategy.status == "paused_by_risk"
+            Strategy.status == "stopped_by_risk"
         ).count()
         assert account1_paused == 3, "Account 1 should have 3 paused strategies"
         
@@ -389,7 +389,7 @@ class TestAccountLimitPauseStrategies:
         
         account2_paused = test_db.query(Strategy).filter(
             Strategy.account_id == test_account_2.id,
-            Strategy.status == "paused_by_risk"
+            Strategy.status == "stopped_by_risk"
         ).count()
         assert account2_paused == 0, "Account 2 should have no paused strategies"
     
@@ -513,7 +513,7 @@ class TestAccountLimitPauseStrategies:
         test_strategies_account_1,
         strategy_runner
     ):
-        """Test that pause correctly updates strategy status to paused_by_risk."""
+        """Test that pause correctly updates strategy status to stopped_by_risk."""
         
         # Get strategies before pause
         strategies_before = test_db.query(Strategy).filter(
@@ -537,10 +537,10 @@ class TestAccountLimitPauseStrategies:
             Strategy.account_id == test_account_1.id
         ).all()
         
-        # Verify all are paused_by_risk
+        # Verify all are stopped_by_risk
         for strategy in strategies_after:
-            assert strategy.status == "paused_by_risk", \
-                f"Strategy {strategy.strategy_id} should be paused_by_risk after pause, got {strategy.status}"
+            assert strategy.status == "stopped_by_risk", \
+                f"Strategy {strategy.strategy_id} should be stopped_by_risk after pause, got {strategy.status}"
     
     @pytest.mark.asyncio
     async def test_pause_closes_positions_and_cancels_tp_sl(
@@ -600,6 +600,8 @@ class TestAccountLimitPauseStrategies:
                 fixed_amount=float(db_strategy.fixed_amount) if db_strategy.fixed_amount else None,
                 params=db_strategy.params or {},
                 account_id="account1",
+                created_at=datetime.now(timezone.utc),
+                last_signal="HOLD",
                 position_size=0.001,  # Has position
                 position_side="LONG",
                 entry_price=40000.0
@@ -668,6 +670,8 @@ class TestAccountLimitPauseStrategies:
                 fixed_amount=float(db_strategy.fixed_amount) if db_strategy.fixed_amount else None,
                 params=db_strategy.params or {},
                 account_id="account1",
+                created_at=datetime.now(timezone.utc),
+                last_signal="HOLD",
                 position_size=None,  # No position
                 position_side=None,
                 entry_price=None
@@ -727,7 +731,7 @@ class TestAccountLimitPauseStrategies:
         # Verify strategies are paused in database
         paused_count = test_db.query(Strategy).filter(
             Strategy.account_id == test_account_1.id,
-            Strategy.status == "paused_by_risk"
+            Strategy.status == "stopped_by_risk"
         ).count()
         assert paused_count == 3, "All strategies should be paused synchronously"
 

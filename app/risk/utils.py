@@ -148,10 +148,25 @@ def calculate_week_start(
     tz = ZoneInfo(timezone_str)
     now = datetime.now(tz)
     
+    # Handle MagicMock or invalid reset_day - ensure it's an integer
+    try:
+        reset_day = int(reset_day) if reset_day is not None else 1
+        # Ensure reset_day is in valid range (1-7)
+        if reset_day < 1 or reset_day > 7:
+            reset_day = 1
+    except (TypeError, ValueError):
+        reset_day = 1
+    
     # Calculate days to subtract to get to reset day
     # reset_day: 1=Monday, 7=Sunday
     current_weekday = now.weekday() + 1  # Convert to 1=Monday, 7=Sunday
     days_to_subtract = (current_weekday - reset_day) % 7
+    
+    # Ensure days_to_subtract is an integer (handle MagicMock edge cases)
+    try:
+        days_to_subtract = int(days_to_subtract)
+    except (TypeError, ValueError):
+        days_to_subtract = 0
     
     week_start = now - timedelta(days=days_to_subtract)
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)

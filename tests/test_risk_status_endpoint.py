@@ -53,13 +53,13 @@ def mock_strategy_running(mock_user, mock_account):
 
 @pytest.fixture
 def mock_strategy_paused_by_risk(mock_user, mock_account):
-    """Create a mock strategy with paused_by_risk status."""
+    """Create a mock strategy with stopped_by_risk status."""
     strategy = MagicMock(spec=Strategy)
     strategy.id = uuid4()
     strategy.strategy_id = "test-strategy-paused"
     strategy.user_id = mock_user.id
     strategy.account_id = mock_account.id
-    strategy.status = "paused_by_risk"
+    strategy.status = "stopped_by_risk"  # Updated from "paused_by_risk" to "stopped_by_risk"
     strategy.name = "Paused Strategy"
     strategy.symbol = "ETHUSDT"
     return strategy
@@ -124,7 +124,7 @@ async def test_risk_status_endpoint_running_strategy(mock_user, mock_strategy_ru
 
 @pytest.mark.asyncio
 async def test_risk_status_endpoint_paused_strategy(mock_user, mock_strategy_paused_by_risk, mock_account, mock_risk_config):
-    """Test risk status endpoint for a paused_by_risk strategy."""
+    """Test risk status endpoint for a stopped_by_risk strategy."""
     from app.api.routes.risk_metrics import get_strategy_risk_status
     
     # Mock database service
@@ -155,10 +155,10 @@ async def test_risk_status_endpoint_paused_strategy(mock_user, mock_strategy_pau
         # Verify response structure
         assert result.strategy_id == "test-strategy-paused"
         assert result.account_id == "test-account-123"
-        assert result.can_trade is False  # Paused strategy cannot trade
+        assert result.can_trade is False  # Stopped strategy cannot trade
         assert result.circuit_breaker_active is True  # Circuit breaker is active
         assert len(result.blocked_reasons) > 0
-        assert "Strategy paused by risk management" in " ".join(result.blocked_reasons)
+        assert "Strategy stopped by risk management" in " ".join(result.blocked_reasons)
         assert result.risk_checks["circuit_breaker"]["active"] is True
 
 
