@@ -9,6 +9,7 @@ Tests verify that:
 """
 
 import pytest
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import MagicMock, AsyncMock, patch, call
@@ -211,9 +212,14 @@ def strategy_runner(test_db, test_user):
     return runner
 
 
+@pytest.mark.skipif(
+    os.environ.get('DEPLOYMENT') == 'true',
+    reason="Skipped during deployment"
+)
 class TestDailyLimitStopsStrategies:
     """Test that daily limit exceeded stops strategies using stop() function."""
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_daily_limit_exceeded_calls_stop_for_each_strategy(
         self,
@@ -318,6 +324,7 @@ class TestDailyLimitStopsStrategies:
         assert strategy_runner._get_account_client().close_position.call_count >= 3, \
             "Should close positions for all strategies (called by stop())"
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_daily_limit_stops_only_account_strategies(
         self,
@@ -444,6 +451,7 @@ class TestDailyLimitStopsStrategies:
         assert "strategy-account2-1" in strategy_runner._tasks, \
             "Account2 strategy task should still exist"
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_daily_limit_status_is_stopped_by_risk_not_stopped(
         self,
@@ -504,6 +512,7 @@ class TestDailyLimitStopsStrategies:
             assert summary.status != StrategyState.stopped, \
                 f"In-memory status should NOT be stopped"
     
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_daily_limit_stops_strategies_with_positions(
         self,

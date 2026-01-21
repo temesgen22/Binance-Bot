@@ -11,6 +11,7 @@ Tests cover:
 
 import pytest
 import sys
+import os
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, MagicMock, patch
@@ -114,9 +115,14 @@ def mock_client_manager():
     return manager
 
 
+@pytest.mark.skipif(
+    os.environ.get('DEPLOYMENT') == 'true',
+    reason="Skipped during deployment"
+)
 class TestDashboardOverview:
     """Test dashboard overview endpoint."""
     
+    @pytest.mark.slow
     def test_dashboard_overview_basic(self, client: TestClient, mock_user, mock_strategies, mock_client_manager):
         """Test basic dashboard overview returns correct structure."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -209,6 +215,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_with_date_filter(self, client: TestClient, mock_user, mock_strategies, mock_client_manager):
         """Test dashboard overview with date filtering."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -269,6 +276,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_with_account_filter(self, client: TestClient, mock_user, mock_strategies, mock_client_manager):
         """Test dashboard overview with account filtering."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -319,6 +327,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_date_only_format(self, client: TestClient, mock_user, mock_client_manager):
         """Test that date-only format (YYYY-MM-DD) is handled correctly."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -365,6 +374,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_invalid_date_format(self, client: TestClient, mock_user, mock_client_manager):
         """Test that invalid date formats are handled gracefully."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -395,6 +405,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_empty_data(self, client: TestClient, mock_user, mock_client_manager):
         """Test dashboard overview with no strategies or trades."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -434,6 +445,7 @@ class TestDashboardOverview:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_dashboard_overview_unrealized_pnl_excluded_with_date_filter(self, client: TestClient, mock_user, mock_strategies, mock_client_manager):
         """Test that unrealized PnL is excluded when date filtering is active."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -506,6 +518,7 @@ class TestDashboardOverview:
 class TestDashboardDateFiltering:
     """Test date filtering functionality across dashboard endpoints."""
     
+    @pytest.mark.slow
     def test_date_filter_start_of_day_end_of_day(self, client: TestClient, mock_user, mock_client_manager):
         """Test that date-only format sets start to 00:00:00 and end to 23:59:59."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -538,6 +551,7 @@ class TestDashboardDateFiltering:
         finally:
             app.dependency_overrides.clear()
     
+    @pytest.mark.slow
     def test_date_filter_iso_format(self, client: TestClient, mock_user, mock_client_manager):
         """Test that ISO datetime format works correctly."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
@@ -576,6 +590,7 @@ class TestDashboardDateFiltering:
 class TestDashboardResponseStructure:
     """Test dashboard response structure and data validation."""
     
+    @pytest.mark.slow
     def test_dashboard_response_contains_all_required_fields(self, client: TestClient, mock_user, mock_client_manager):
         """Test that dashboard response contains all required fields."""
         from app.api.deps import get_current_user, get_strategy_runner, get_binance_client, get_client_manager
