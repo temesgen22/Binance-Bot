@@ -440,15 +440,50 @@ class StrategyOrderManager:
             # Re-raise Binance API errors as-is
             raise
         except Exception as exc:
+            # Extract underlying error from RetryError if present (tenacity retry decorator)
+            underlying_error = exc
+            try:
+                from tenacity import RetryError
+                if isinstance(exc, RetryError):
+                    if hasattr(exc, 'last_attempt') and exc.last_attempt:
+                        underlying_error = exc.last_attempt.exception()
+                        logger.warning(
+                            f"[{summary.id}] Leverage setting failed after retries. "
+                            f"Underlying error: {underlying_error}"
+                        )
+            except ImportError:
+                pass  # tenacity not available, use original exception
+            
+            # Extract more details about the error
+            error_details = {
+                "strategy_id": summary.id,
+                "symbol": summary.symbol,
+                "leverage": summary.leverage,
+                "error_type": type(underlying_error).__name__,
+            }
+            
+            # Add Binance error code if available
+            if hasattr(underlying_error, 'error_code'):
+                error_details["binance_error_code"] = underlying_error.error_code
+            if hasattr(underlying_error, 'status_code'):
+                error_details["status_code"] = underlying_error.status_code
+            
             error_msg = (
-                f"[{summary.id}] CRITICAL: Failed to verify/set leverage {summary.leverage}x for {summary.symbol}: {exc}. "
+                f"[{summary.id}] CRITICAL: Failed to verify/set leverage {summary.leverage}x for {summary.symbol}. "
+                f"Error: {underlying_error}. "
                 "Order execution aborted to prevent accidental 20x leverage."
             )
             logger.error(error_msg)
+            logger.error(f"[{summary.id}] Error details: {error_details}")
+            
+            # If underlying error is a BinanceAPIError, preserve it
+            if isinstance(underlying_error, BinanceAPIError):
+                raise underlying_error
+            
             raise BinanceAPIError(
                 error_msg,
-                details={"strategy_id": summary.id, "symbol": summary.symbol, "leverage": summary.leverage}
-            ) from exc
+                details=error_details
+            ) from underlying_error
         
         # Get current position from Binance to ensure accurate size for closing
         current_position = await asyncio.to_thread(account_client.get_open_position, summary.symbol)
