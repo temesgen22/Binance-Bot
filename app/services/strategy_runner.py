@@ -1461,13 +1461,23 @@ class StrategyRunner:
         
         return result
 
-    def calculate_strategy_stats(self, strategy_id: str) -> StrategyStats:
+    def calculate_strategy_stats(
+        self, 
+        strategy_id: str,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> StrategyStats:
         """Calculate statistics for a specific strategy (delegates to statistics module).
+        
+        Args:
+            strategy_id: Strategy ID to calculate stats for
+            start_date: Optional start date to filter trades (inclusive)
+            end_date: Optional end date to filter trades (inclusive)
         
         Raises:
             StrategyNotFoundError: If strategy does not exist
         """
-        return self.statistics.calculate_strategy_stats(strategy_id)
+        return self.statistics.calculate_strategy_stats(strategy_id, start_date=start_date, end_date=end_date)
     
     def calculate_overall_stats(self, use_cache: bool = True) -> OverallStats:
         """Calculate overall statistics across all strategies (delegates to statistics module).

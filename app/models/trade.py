@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Any, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from app.models.strategy_performance import StrategyPerformance
 
 
 class TradeWithTimestamp(BaseModel):
@@ -77,6 +80,24 @@ class SymbolPnL(BaseModel):
     win_rate: float = Field(default=0.0, description="Win rate percentage")
     winning_trades: int = Field(default=0)
     losing_trades: int = Field(default=0)
+    
+    # Dashboard enhancements
+    avg_profit_per_trade: Optional[float] = Field(
+        default=None,
+        description="Average profit per completed trade (realized PnL / completed trades)"
+    )
+    active_strategies: Optional[int] = Field(
+        default=None,
+        description="Number of active strategies trading this symbol"
+    )
+    strategies: Optional[List["StrategyPerformance"]] = Field(
+        default=None,
+        description="List of strategies trading this symbol with their performance (StrategyPerformance objects)"
+    )
+    
+    # Fee tracking
+    total_trade_fees: Optional[float] = Field(default=None, description="Total trading fees paid across all completed trades for this symbol")
+    total_funding_fees: Optional[float] = Field(default=None, description="Total funding fees paid across all completed trades for this symbol")
 
 
 class TradeFilterParams(BaseModel):
@@ -90,4 +111,20 @@ class TradeFilterParams(BaseModel):
     strategy_id: Optional[str] = Field(default=None, description="Filter by strategy ID")
     min_pnl: Optional[float] = Field(default=None, description="Minimum PnL value")
     max_pnl: Optional[float] = Field(default=None, description="Maximum PnL value")
+
+
+# Resolve forward references after all models are defined
+# This is needed because StrategyPerformance is defined in another module
+def _resolve_forward_refs():
+    """Resolve forward references for SymbolPnL model."""
+    try:
+        from app.models.strategy_performance import StrategyPerformance
+        SymbolPnL.model_rebuild()
+    except (ImportError, Exception):
+        # If StrategyPerformance is not available or rebuild fails, 
+        # Pydantic will resolve it at runtime when needed
+        pass
+
+# Try to resolve forward references at module import time
+_resolve_forward_refs()
 

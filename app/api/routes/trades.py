@@ -95,8 +95,14 @@ async def list_all_trades(
         
         if start_date:
             try:
-                # Try parsing ISO format first, then fallback to other formats
-                start_datetime = date_parser.parse(start_date)
+                # Check if it's date-only format (YYYY-MM-DD) or includes time
+                if 'T' in start_date or '+' in start_date or start_date.count(':') >= 2:
+                    # ISO format with time: parse as-is
+                    start_datetime = date_parser.parse(start_date)
+                else:
+                    # Date-only format: set to start of day (00:00:00)
+                    start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
+                
                 if start_datetime.tzinfo is None:
                     start_datetime = start_datetime.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError) as exc:
@@ -105,8 +111,15 @@ async def list_all_trades(
         
         if end_date:
             try:
-                # Try parsing ISO format first, then fallback to other formats
-                end_datetime = date_parser.parse(end_date)
+                # Check if it's date-only format (YYYY-MM-DD) or includes time
+                if 'T' in end_date or '+' in end_date or end_date.count(':') >= 2:
+                    # ISO format with time: parse as-is
+                    end_datetime = date_parser.parse(end_date)
+                else:
+                    # Date-only format: set to end of day (23:59:59.999999)
+                    end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+                    end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
+                
                 if end_datetime.tzinfo is None:
                     end_datetime = end_datetime.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError) as exc:
@@ -315,13 +328,53 @@ def list_symbols(
 def get_symbol_pnl(
     symbol: str,
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date (ISO format or YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(default=None, description="Filter until date (ISO format or YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
     client_manager: BinanceClientManager = Depends(get_client_manager),
+    db_service: DatabaseService = Depends(get_database_service),
 ) -> SymbolPnL:
     """Get profit and loss summary for a specific symbol."""
     symbol = symbol.upper()
+    
+    # Parse date filters
+    start_datetime: Optional[datetime] = None
+    end_datetime: Optional[datetime] = None
+    
+    if start_date:
+        try:
+            # Check if it's date-only format (YYYY-MM-DD) or includes time
+            if 'T' in start_date or '+' in start_date or start_date.count(':') >= 2:
+                # ISO format with time: parse as-is
+                start_datetime = date_parser.parse(start_date)
+            else:
+                # Date-only format: set to start of day (00:00:00)
+                start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
+            
+            if start_datetime.tzinfo is None:
+                start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.warning(f"Invalid start_date format: {start_date}, error: {exc}")
+            start_datetime = None
+    
+    if end_date:
+        try:
+            # Check if it's date-only format (YYYY-MM-DD) or includes time
+            if 'T' in end_date or '+' in end_date or end_date.count(':') >= 2:
+                # ISO format with time: parse as-is
+                end_datetime = date_parser.parse(end_date)
+            else:
+                # Date-only format: set to end of day (23:59:59.999999)
+                end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+                end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            if end_datetime.tzinfo is None:
+                end_datetime = end_datetime.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError) as exc:
+            logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
+            end_datetime = None
     
     # Get all strategies for this symbol
     strategies = runner.list_strategies()
@@ -343,6 +396,31 @@ def get_symbol_pnl(
         for strategy in symbol_strategies:
             trades = runner.get_trades(strategy.id)
             all_trades.extend(trades)
+        
+        # Filter trades by date range if provided
+        if start_datetime or end_datetime:
+            filtered_trades = []
+            for trade in all_trades:
+                # Get trade timestamp
+                trade_timestamp = trade.timestamp or trade.update_time
+                if trade_timestamp:
+                    # Ensure timezone-aware comparison
+                    if isinstance(trade_timestamp, datetime):
+                        if trade_timestamp.tzinfo is None:
+                            trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                    else:
+                        # Skip trades without valid timestamp if date filtering is enabled
+                        continue
+                    
+                    # Apply date filters
+                    if start_datetime and trade_timestamp < start_datetime:
+                        continue
+                    if end_datetime and trade_timestamp > end_datetime:
+                        continue
+                
+                filtered_trades.append(trade)
+            all_trades = filtered_trades
+            logger.debug(f"Filtered {len(all_trades)} trades for {symbol} (start_date={start_date}, end_date={end_date})")
     
         # CRITICAL: Sort trades by timestamp (oldest first) for correct FIFO position matching
         # The position queue logic requires trades to be processed in chronological order
@@ -447,6 +525,48 @@ def get_symbol_pnl(
     winning_trades = len([t for t in completed_trades if t.realized_pnl > 0])
     losing_trades = len([t for t in completed_trades if t.realized_pnl < 0])
     win_rate = (winning_trades / len(completed_trades) * 100) if completed_trades else 0
+    
+    # Calculate total fees from completed trades in database (preferred method)
+    total_trade_fees = 0.0
+    total_funding_fees = 0.0
+    
+    try:
+        from app.api.routes.reports import _get_completed_trades_from_database
+        from app.models.db_models import Strategy as DBStrategy
+        
+        # Get all strategies for this symbol
+        symbol_strategies_for_fees = [s for s in symbol_strategies]
+        
+        # Apply account_id filter
+        if account_id:
+            symbol_strategies_for_fees = [s for s in symbol_strategies_for_fees if s.account_id == account_id]
+        
+        # Collect all completed trades with fees from database
+        all_completed_trades_with_fees = []
+        for strategy in symbol_strategies_for_fees:
+            try:
+                # Get strategy UUID from database
+                db_strategy = db_service.get_strategy(current_user.id, strategy.id)
+                if db_strategy:
+                    completed_trades_for_fees = _get_completed_trades_from_database(
+                        db_service=db_service,
+                        user_id=current_user.id,
+                        strategy_uuid=db_strategy.id,
+                        strategy_id=strategy.id,
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime
+                    )
+                    all_completed_trades_with_fees.extend(completed_trades_for_fees)
+            except Exception as e:
+                logger.debug(f"Could not get completed trades for fees for strategy {strategy.id}: {e}")
+        
+        # Calculate fees from completed trades (which have fee_paid and funding_fee)
+        if all_completed_trades_with_fees:
+            total_trade_fees = sum(trade.fee_paid for trade in all_completed_trades_with_fees)
+            total_funding_fees = sum(trade.funding_fee for trade in all_completed_trades_with_fees)
+    except Exception as e:
+        logger.debug(f"Could not calculate fees from completed trades: {e}")
+        # Fees will remain 0.0 if calculation fails
     
     # Get open positions from Binance - use account-specific client if filtering by account_id
     open_positions = []
@@ -584,12 +704,16 @@ def get_symbol_pnl(
         win_rate=round(win_rate, 2),
         winning_trades=winning_trades,
         losing_trades=losing_trades,
+        total_trade_fees=round(total_trade_fees, 4) if total_trade_fees > 0 else None,
+        total_funding_fees=round(total_funding_fees, 4) if total_funding_fees > 0 else None,
     )
 
 
 @router.get("/pnl/overview", response_model=List[SymbolPnL])
 def get_pnl_overview(
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date (ISO format or YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(default=None, description="Filter until date (ISO format or YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
@@ -646,7 +770,9 @@ def get_pnl_overview(
         try:
             pnl = get_symbol_pnl(
                 symbol, 
-                account_id=account_id, 
+                account_id=account_id,
+                start_date=start_date,
+                end_date=end_date,
                 runner=runner, 
                 client=client,
                 client_manager=client_manager

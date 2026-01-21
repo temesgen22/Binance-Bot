@@ -2,30 +2,37 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
+from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from app.api.deps import get_strategy_runner
+from app.api.deps import get_strategy_runner, get_current_user, get_database_service
 from app.models.strategy_performance import StrategyPerformance, StrategyPerformanceList
 from app.services.strategy_runner import StrategyRunner
+from app.services.database_service import DatabaseService
+from app.models.db_models import User
 from app.core.exceptions import StrategyNotFoundError
 
 
-router = APIRouter(prefix="/strategies/performance", tags=["strategy-performance"])
+router = APIRouter(prefix="/api/strategies/performance", tags=["strategy-performance"])
 
 
+@router.get("", response_model=StrategyPerformanceList)
 @router.get("/", response_model=StrategyPerformanceList)
 def get_strategy_performance(
     strategy_name: Optional[str] = Query(default=None, description="Filter by strategy name"),
     symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
     status: Optional[str] = Query(default=None, description="Filter by status (running/stopped/error)"),
     rank_by: Optional[str] = Query(default="total_pnl", description="Rank by field (total_pnl, win_rate, completed_trades)"),
-    start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO datetime) - not yet implemented"),
-    end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO datetime) - not yet implemented"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date/time (ISO datetime)"),
+    end_date: Optional[str] = Query(default=None, description="Filter to date/time (ISO datetime)"),
     account_id: Optional[str] = Query(default=None, description="Filter by Binance account ID"),
+    current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
+    db_service: DatabaseService = Depends(get_database_service),
 ) -> StrategyPerformanceList:
     """Get performance metrics for all strategies, ranked by profitability.
     
@@ -49,8 +56,128 @@ def get_strategy_performance(
             continue
         
         try:
-            # Get strategy stats (includes realized PnL)
-            stats = runner.calculate_strategy_stats(strategy.id)
+            # Parse date filters if provided
+            start_datetime: Optional[datetime] = None
+            end_datetime: Optional[datetime] = None
+            
+            if start_date:
+                try:
+                    # Check if it's date-only format (YYYY-MM-DD) or includes time
+                    if 'T' in start_date or '+' in start_date or start_date.count(':') >= 2:
+                        # ISO format with time: parse as-is
+                        start_datetime = date_parser.parse(start_date)
+                    else:
+                        # Date-only format: set to start of day (00:00:00)
+                        start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
+                    
+                    if start_datetime.tzinfo is None:
+                        start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError) as exc:
+                    logger.warning(f"Invalid start_date format: {start_date}, error: {exc}")
+                    start_datetime = None
+            
+            if end_date:
+                try:
+                    # Check if it's date-only format (YYYY-MM-DD) or includes time
+                    if 'T' in end_date or '+' in end_date or end_date.count(':') >= 2:
+                        # ISO format with time: parse as-is
+                        end_datetime = date_parser.parse(end_date)
+                    else:
+                        # Date-only format: set to end of day (23:59:59.999999)
+                        end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+                        end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    
+                    if end_datetime.tzinfo is None:
+                        end_datetime = end_datetime.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError) as exc:
+                    logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
+                    end_datetime = None
+            
+            # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+            # This is much faster than on-demand matching
+            from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
+            from app.services.trade_service import TradeService
+            from app.core.redis_storage import RedisStorage
+            from app.core.config import get_settings
+            from uuid import UUID
+            
+            completed_trades_list = []
+            
+            # Get strategy UUID from database
+            db_strategy = None
+            if runner.strategy_service and runner.user_id:
+                try:
+                    db_strategy = runner.strategy_service.db_service.get_strategy(current_user.id, strategy.id)
+                except Exception as e:
+                    logger.debug(f"Could not get strategy from database: {e}")
+            
+            if db_strategy:
+                try:
+                    # Query from CompletedTrade table
+                    completed_trades_list = _get_completed_trades_from_database(
+                        db_service=db_service,
+                        user_id=current_user.id,
+                        strategy_uuid=db_strategy.id,
+                        strategy_id=strategy.id,
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not get completed trades from database for strategy {strategy.id}: {e}")
+            
+            # ✅ FALLBACK: If no completed trades from database, use on-demand matching
+            if not completed_trades_list:
+                logger.debug(f"No completed trades from database for strategy {strategy.id}, falling back to trades table")
+                # Use existing calculate_strategy_stats which uses trades table
+                stats = runner.calculate_strategy_stats(
+                    strategy.id,
+                    start_date=start_datetime,
+                    end_date=end_datetime
+                )
+            else:
+                # Calculate stats from completed trades (TradeReport objects)
+                from app.models.strategy import StrategyStats
+                
+                total_pnl = sum(trade.pnl_usd for trade in completed_trades_list)
+                winning_trades = len([t for t in completed_trades_list if t.pnl_usd > 0])
+                losing_trades = len([t for t in completed_trades_list if t.pnl_usd < 0])
+                completed_count = len(completed_trades_list)
+                win_rate = (winning_trades / completed_count * 100) if completed_count > 0 else 0.0
+                avg_profit_per_trade = total_pnl / completed_count if completed_count > 0 else 0.0
+                largest_win = max((t.pnl_usd for t in completed_trades_list), default=0.0)
+                largest_loss = min((t.pnl_usd for t in completed_trades_list), default=0.0)
+                
+                # Calculate total fees from completed trades
+                total_trade_fees = sum(trade.fee_paid for trade in completed_trades_list)
+                total_funding_fees = sum(trade.funding_fee for trade in completed_trades_list)
+                
+                # Get last trade timestamp from completed trades
+                last_trade_at = None
+                if completed_trades_list:
+                    exit_times = [t.exit_time for t in completed_trades_list if t.exit_time]
+                    if exit_times:
+                        last_trade_at = max(exit_times)
+                
+                # Get total trades count from runner (includes open positions)
+                all_trades = runner.get_trades(strategy.id)
+                total_trades_count = len(all_trades) if all_trades else completed_count
+                
+                stats = StrategyStats(
+                    strategy_id=strategy.id,
+                    strategy_name=strategy.name,
+                    symbol=strategy.symbol,
+                    total_trades=total_trades_count,
+                    completed_trades=completed_count,
+                    total_pnl=round(total_pnl, 4),
+                    win_rate=round(win_rate, 2),
+                    winning_trades=winning_trades,
+                    losing_trades=losing_trades,
+                    avg_profit_per_trade=round(avg_profit_per_trade, 4),
+                    largest_win=round(largest_win, 4),
+                    largest_loss=round(largest_loss, 4),
+                    created_at=strategy.created_at,
+                    last_trade_at=last_trade_at
+                )
             
             # Get current unrealized PnL from strategy summary
             unrealized_pnl = strategy.unrealized_pnl or 0.0
@@ -77,6 +204,13 @@ def get_strategy_performance(
                         "account_name": strategy.account_id,
                         "testnet": None
                     }
+            
+            # Calculate fees for this strategy from completed trades
+            strategy_total_trade_fees = None
+            strategy_total_funding_fees = None
+            if completed_trades_list:
+                strategy_total_trade_fees = sum(trade.fee_paid for trade in completed_trades_list)
+                strategy_total_funding_fees = sum(trade.funding_fee for trade in completed_trades_list)
             
             performance = StrategyPerformance(
                 strategy_id=strategy.id,
@@ -111,6 +245,8 @@ def get_strategy_performance(
                 account_id=strategy.account_id,
                 account_info=account_info,
                 auto_tuning_enabled=getattr(strategy, 'auto_tuning_enabled', False),
+                total_trade_fees=round(strategy_total_trade_fees, 4) if strategy_total_trade_fees is not None else None,
+                total_funding_fees=round(strategy_total_funding_fees, 4) if strategy_total_funding_fees is not None else None,
             )
             performance_list.append(performance)
         except StrategyNotFoundError:

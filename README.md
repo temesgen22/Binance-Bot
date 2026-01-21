@@ -73,6 +73,16 @@ A customizable trading bot built with Python and FastAPI, designed to support mu
    uvicorn app.main:app --reload
    ```
    
+   **Note**: If you're using Cursor editor and experiencing server restarts due to Cursor history files, exclude them:
+   ```bash
+   uvicorn app.main:app --reload --reload-exclude "**/AppData/**" --reload-exclude "**/.cursor/**"
+   ```
+   
+   Or on Windows PowerShell:
+   ```powershell
+   uvicorn app.main:app --reload --reload-exclude "**\AppData\**" --reload-exclude "**\.cursor\**"
+   ```
+   
    The API will be available at `http://127.0.0.1:8000`
    
    View interactive API documentation at:

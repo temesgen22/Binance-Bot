@@ -576,6 +576,7 @@
             <p>Compare strategy performance and rank by profitability</p>
             <div class="nav-links">
                 <a href="/">📋 Log Viewer</a>
+                <a href="/dashboard">📊 Dashboard</a>
                 <a href="/trades">📊 Trade & PnL Viewer</a>
                 <a href="/market-analyzer">📈 Market Analyzer</a>
                 <a href="/backtesting">🔬 Strategy Backtesting</a>
@@ -736,7 +737,7 @@
             const startDate = document.getElementById('startDateFilter').value;
             const endDate = document.getElementById('endDateFilter').value;
             
-            let url = '/strategies/performance/?';
+            let url = '/api/strategies/performance/?';
             const params = new URLSearchParams();
             if (strategyName) params.append('strategy_name', strategyName);
             if (accountId) params.append('account_id', accountId);

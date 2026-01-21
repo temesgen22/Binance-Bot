@@ -441,8 +441,9 @@ class TestTradeFeesAndFieldsStorage:
         ).first()
         
         assert completed_trade is not None
-        # Verify funding fee is stored (sum of absolute values: 0.001 + 0.0005 = 0.0015)
-        expected_funding_fee = 0.001 + 0.0005
+        # Verify funding fee is stored (signed values: -0.001 + (-0.0005) = -0.0015)
+        # Note: We now keep signed funding fees (negative = paid, positive = received)
+        expected_funding_fee = -0.001 + (-0.0005)  # Sum of signed values
         assert float(completed_trade.funding_fee) == pytest.approx(expected_funding_fee, rel=1e-6), \
             f"Funding fee should be {expected_funding_fee}, got {completed_trade.funding_fee}"
         

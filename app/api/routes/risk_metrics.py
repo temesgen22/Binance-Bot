@@ -303,78 +303,118 @@ async def get_portfolio_risk_metrics(
                 trades_db = []
         else:
             logger.info(f"Getting portfolio metrics for ALL accounts, user: {user_id}")
-            # Query all DBTrade objects for user
+            # Query all DBTrade objects for user (needed for fallback)
             trades_db = db.query(DBTrade).filter(DBTrade.user_id == user_id).all()
             logger.info(f"Found {len(trades_db)} DBTrade objects across all accounts")
         
-        # Convert database trades to OrderResponse format and group by strategy
-        # This is necessary to match trades to completed positions (same logic as reports page)
-        from app.api.routes.reports import _match_trades_to_completed_positions
+        # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+        # This is much faster than on-demand matching
+        from app.models.db_models import CompletedTrade
+        from app.api.routes.reports import _get_completed_trades_from_database, _match_trades_to_completed_positions
         from app.models.order import OrderResponse
         
-        # Group trades by strategy UUID first (db_trade.strategy_id is a UUID, not a string)
-        trades_by_strategy_uuid = {}
-        for db_trade in trades_db:
-            strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
-            if not strategy_uuid:
-                continue
-            
-            strategy_uuid_str = str(strategy_uuid)
-            if strategy_uuid_str not in trades_by_strategy_uuid:
-                trades_by_strategy_uuid[strategy_uuid_str] = []
-            trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
+        all_completed_trades = []
         
-        # Match trades to completed positions for each strategy
-        completed_trades = []
-        for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
-            if not db_trades:
-                continue
-            
-            # Convert database trades to OrderResponse using helper (eliminates repetitive code)
-            order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
-            
-            # Get strategy info for matching
-            strategy_name = "Unknown"
-            symbol = order_responses[0].symbol if order_responses else ""
-            leverage = order_responses[0].leverage if order_responses and order_responses[0].leverage else 1
-            strategy_id_str = "unknown"  # Default strategy_id string
-            
-            # Try to get strategy info from database using UUID
+        # Get strategy UUIDs for the account
+        strategy_uuids = []
+        if account_id_normalized:
+            if account:
+                from app.models.db_models import Strategy
+                strategies = db.query(Strategy).filter(
+                    Strategy.user_id == user_id,
+                    Strategy.account_id == account.id
+                ).all()
+                strategy_uuids = [s.id for s in strategies]
+        else:
+            # All strategies for user
+            from app.models.db_models import Strategy
+            strategies = db.query(Strategy).filter(Strategy.user_id == user_id).all()
+            strategy_uuids = [s.id for s in strategies]
+        
+        # Try to get completed trades from database (pre-computed)
+        for strategy_uuid in strategy_uuids:
             try:
-                from uuid import UUID
-                strategy_uuid_obj = UUID(strategy_uuid_str)
-                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
-                if db_strategy:
-                    strategy_name = db_strategy.name or "Unknown"
-                    symbol = db_strategy.symbol or symbol
-                    leverage = db_strategy.leverage or leverage
-                    strategy_id_str = db_strategy.strategy_id or "unknown"
-            except (ValueError, TypeError) as uuid_error:
-                logger.debug(f"Invalid UUID format {strategy_uuid_str}: {uuid_error}")
-            except Exception as e:
-                logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
-            
-            # Match trades to completed positions (same logic as reports page)
-            # This ensures we count completed trade cycles, not individual entry/exit trades
-            try:
-                matched_trades = _match_trades_to_completed_positions(
-                    order_responses,
-                    strategy_id_str,  # Use strategy_id string, not UUID
-                    strategy_name,
-                    symbol,
-                    leverage
+                # Get strategy_id string for the helper function
+                db_strategy = db_service.get_strategy_by_uuid(strategy_uuid)
+                if not db_strategy:
+                    continue
+                
+                strategy_id_str = db_strategy.strategy_id or str(strategy_uuid)
+                
+                # Query from CompletedTrade table
+                completed_trades = _get_completed_trades_from_database(
+                    db_service=db_service,
+                    user_id=user_id,
+                    strategy_uuid=strategy_uuid,
+                    strategy_id=strategy_id_str,
+                    start_datetime=None,  # Get all completed trades
+                    end_datetime=None
                 )
-                completed_trades.extend(matched_trades)
+                all_completed_trades.extend(completed_trades)
             except Exception as e:
-                logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}, using raw trades")
-                # Fallback: use realized_pnl from database if matching fails
-                for db_trade in db_trades:
-                    if db_trade.realized_pnl:
-                        completed_trades.append(type('obj', (object,), {
-                            'realized_pnl': float(db_trade.realized_pnl),
-                            'exit_time': db_trade.timestamp,
-                            'entry_time': db_trade.timestamp,
-                        })())
+                logger.debug(f"Could not get completed trades from database for strategy {strategy_uuid}: {e}")
+        
+        # ✅ FALLBACK: If no completed trades from database, use on-demand matching
+        if not all_completed_trades:
+            logger.debug("No completed trades from database, falling back to on-demand matching")
+            
+            # Group trades by strategy UUID BEFORE converting (db_trade.strategy_id is a UUID)
+            trades_by_strategy_uuid = {}
+            for db_trade in trades_db:
+                strategy_uuid = db_trade.strategy_id if db_trade.strategy_id else None
+                if not strategy_uuid:
+                    continue
+                
+                strategy_uuid_str = str(strategy_uuid)
+                if strategy_uuid_str not in trades_by_strategy_uuid:
+                    trades_by_strategy_uuid[strategy_uuid_str] = []
+                trades_by_strategy_uuid[strategy_uuid_str].append(db_trade)
+            
+            # Convert and group OrderResponse objects by strategy
+            trades_by_strategy = {}
+            for strategy_uuid_str, db_trades in trades_by_strategy_uuid.items():
+                # Convert database trades to OrderResponse format using helper
+                order_responses = _convert_db_trades_to_order_responses(db_trades, trade_service)
+                trades_by_strategy[strategy_uuid_str] = order_responses
+            
+            # Match trades for each strategy and calculate PnL
+            for strategy_uuid_str, strategy_trades in trades_by_strategy.items():
+                if not strategy_trades:
+                    continue
+                
+                # Get strategy info for matching
+                strategy_name = "Unknown"
+                symbol = strategy_trades[0].symbol if strategy_trades else ""
+                leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
+                strategy_id_str = "unknown"  # Default strategy_id string
+                
+                # Try to get strategy info from database using UUID
+                try:
+                    from uuid import UUID
+                    strategy_uuid_obj = UUID(strategy_uuid_str)
+                    db_strategy = db_service.get_strategy_by_uuid(strategy_uuid_obj)
+                    if db_strategy:
+                        strategy_name = db_strategy.name or "Unknown"
+                        symbol = db_strategy.symbol or symbol
+                        leverage = db_strategy.leverage or leverage
+                        strategy_id_str = db_strategy.strategy_id or "unknown"
+                except Exception as e:
+                    logger.debug(f"Could not get strategy info for UUID {strategy_uuid_str}: {e}")
+                
+                # Match trades to completed positions
+                try:
+                    matched_trades = _match_trades_to_completed_positions(
+                        strategy_trades,
+                        strategy_id_str,  # Use strategy_id string, not UUID
+                        strategy_name,
+                        symbol,
+                        leverage
+                    )
+                    all_completed_trades.extend(matched_trades)
+                except Exception as e:
+                    logger.warning(f"Error matching trades for strategy {strategy_id_str}: {e}")
+        
+        completed_trades = all_completed_trades
         
         # Convert completed trades to format expected by calculator
         trade_data = []
@@ -1618,6 +1658,35 @@ async def get_realtime_risk_status(
                         account_balance = float(account_balance)
             except Exception as e:
                 logger.warning(f"Error getting account balance: {e}")
+        else:
+            # For "all accounts", sum balances from all active accounts
+            try:
+                from app.models.db_models import Account
+                accounts = db.query(Account).filter(
+                    Account.user_id == user_id,
+                    Account.is_active == True
+                ).all()
+                
+                total_balance = 0.0
+                for account in accounts:
+                    try:
+                        account_config = account_service.get_account(user_id, account.account_id)
+                        if account_config:
+                            client = client_manager.get_client(account.account_id)
+                            if not client:
+                                client_manager.add_client(account.account_id, account_config)
+                                client = client_manager.get_client(account.account_id)
+                            if client:
+                                balance = await asyncio.to_thread(client.futures_account_balance)
+                                total_balance += float(balance)
+                    except Exception as e:
+                        logger.warning(f"Failed to get balance for account '{account.account_id}': {e}")
+                
+                account_balance = total_balance
+                if account_balance > 0:
+                    logger.debug(f"Total balance for all accounts: {account_balance:.2f} USDT")
+            except Exception as e:
+                logger.warning(f"Error getting balances for all accounts: {e}")
         
         # Calculate percentages
         daily_pnl_pct = (daily_pnl_usdt / account_balance * 100) if account_balance > 0 else 0.0

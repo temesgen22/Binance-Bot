@@ -46,11 +46,18 @@ class StrategyStatistics:
         self.user_id = user_id
         self._overall_stats_cache: Optional[tuple] = None
     
-    def calculate_strategy_stats(self, strategy_id: str) -> StrategyStats:
+    def calculate_strategy_stats(
+        self, 
+        strategy_id: str,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> StrategyStats:
         """Calculate statistics for a specific strategy.
         
         Args:
             strategy_id: Strategy ID to calculate stats for
+            start_date: Optional start date to filter trades (inclusive)
+            end_date: Optional end date to filter trades (inclusive)
             
         Returns:
             StrategyStats with calculated statistics
@@ -67,6 +74,48 @@ class StrategyStatistics:
         self._ensure_trades_loaded(strategy_id)
         
         trades = self._trades.get(strategy_id, [])
+        
+        # Filter trades by date range if provided
+        if start_date or end_date:
+            filtered_trades = []
+            for trade in trades:
+                # Get trade timestamp - try multiple possible attributes
+                trade_timestamp = None
+                if hasattr(trade, 'timestamp') and trade.timestamp:
+                    trade_timestamp = trade.timestamp
+                elif hasattr(trade, 'update_time') and trade.update_time:
+                    trade_timestamp = trade.update_time
+                elif hasattr(trade, 'time') and trade.time:
+                    trade_timestamp = trade.time
+                
+                if trade_timestamp:
+                    # Ensure timezone-aware comparison
+                    if isinstance(trade_timestamp, datetime):
+                        if trade_timestamp.tzinfo is None:
+                            trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
+                    else:
+                        # Skip trades without valid timestamp if date filtering is enabled
+                        logger.debug(f"Skipping trade {trade.order_id if hasattr(trade, 'order_id') else 'unknown'}: invalid timestamp type {type(trade_timestamp)}")
+                        continue
+                    
+                    # Apply date filters (inclusive on both ends)
+                    if start_date and trade_timestamp < start_date:
+                        continue
+                    if end_date and trade_timestamp > end_date:
+                        continue
+                    
+                    # Include this trade
+                    filtered_trades.append(trade)
+                else:
+                    # No timestamp available - skip when date filtering is active
+                    logger.debug(f"Skipping trade {trade.order_id if hasattr(trade, 'order_id') else 'unknown'}: no timestamp available")
+                    continue
+            
+            trades = filtered_trades
+            logger.debug(
+                f"Filtered trades for {strategy_id}: {len(self._trades.get(strategy_id, []))} -> {len(trades)} "
+                f"(start_date={start_date}, end_date={end_date})"
+            )
         
         # Log data source for transparency
         redis_status = "Redis" if (self.redis and self.redis.enabled) else "in-memory only"

@@ -101,6 +101,14 @@ class CompletedTradeService:
         if exit_trade.status not in ("FILLED", "PARTIALLY_FILLED"):
             raise ValueError(f"Exit trade {exit_trade_id} is not filled (status: {exit_trade.status})")
         
+        # ✅ VALIDATION: Ensure entry and exit trades have the same symbol
+        # This is a safety check even though the helper should have filtered by symbol
+        if entry_trade.symbol != exit_trade.symbol:
+            raise ValueError(
+                f"Symbol mismatch: entry trade {entry_trade_id} symbol={entry_trade.symbol} "
+                f"does not match exit trade {exit_trade_id} symbol={exit_trade.symbol}"
+            )
+        
         # 3. Check partial fill consistency (trades table manages this)
         if entry_trade.orig_qty and entry_trade.remaining_qty and entry_trade.remaining_qty > 0:
             logger.debug(f"Entry trade {entry_trade_id} has remaining_qty={entry_trade.remaining_qty} (partial fill)")
@@ -110,8 +118,11 @@ class CompletedTradeService:
         
         # 4. ✅ CRITICAL: Generate idempotency key using UUIDv5 (deterministic, proper UUID format)
         # UUIDv5 is deterministic and produces valid UUIDs from a namespace and name
+        # ✅ FIX: Include both entry and exit timestamps to prevent collisions
         event_namespace = UUID('6ba7b811-9dad-11d1-80b4-00c04fd430c8')  # Standard UUID namespace
-        event_name = f"{entry_trade_id}:{exit_trade_id}:{quantity}:{entry_trade.timestamp.isoformat() if entry_trade.timestamp else ''}"
+        entry_ts = entry_trade.timestamp.isoformat() if entry_trade.timestamp else ''
+        exit_ts = exit_trade.timestamp.isoformat() if exit_trade.timestamp else ''
+        event_name = f"{entry_trade_id}:{exit_trade_id}:{quantity}:{entry_ts}:{exit_ts}"
         close_event_id = uuid5(event_namespace, event_name)
         
         # Check if completed trade already exists (idempotency check)
@@ -158,11 +169,27 @@ class CompletedTradeService:
         
         # 6. ✅ CRITICAL: Determine side using position_side, not just BUY/SELL
         # In futures hedge mode, BUY can close a SHORT, and SELL can close a LONG
+        # ✅ VALIDATION: Also validate that exit_trade.position_side matches if both are set
         if entry_trade.position_side:
             side = entry_trade.position_side  # LONG or SHORT from position_side
+            
+            # Safety check: If exit trade also has position_side, they should match
+            if exit_trade.position_side and exit_trade.position_side != entry_trade.position_side:
+                logger.warning(
+                    f"Position side mismatch between entry and exit trades: "
+                    f"entry.position_side={entry_trade.position_side}, exit.position_side={exit_trade.position_side}. "
+                    f"Using entry position_side as source of truth."
+                )
         else:
             # Fallback to BUY/SELL if position_side not set (one-way mode)
             side = "LONG" if entry_trade.side == "BUY" else "SHORT"
+            
+            # If exit has position_side but entry doesn't, use exit's position_side
+            if exit_trade.position_side:
+                logger.debug(
+                    f"Entry trade missing position_side, using exit trade position_side: {exit_trade.position_side}"
+                )
+                side = exit_trade.position_side
         
         # 7. ✅ CRITICAL: Calculate fees for partial fills
         # Trade fees (commission): Allocated proportionally

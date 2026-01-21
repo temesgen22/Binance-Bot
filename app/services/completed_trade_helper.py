@@ -1,6 +1,7 @@
 """Helper functions for creating completed trades when positions close."""
 from __future__ import annotations
 
+import time as time_module
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import UUID
@@ -9,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from loguru import logger
 
-from app.models.db_models import Trade, CompletedTradeOrder, Strategy, Account
+from app.models.db_models import Trade, CompletedTradeOrder, CompletedTrade, Strategy, Account
 from app.services.completed_trade_service import CompletedTradeService
 from app.core.database import get_session_factory
 from app.core.my_binance_client import BinanceClient
@@ -141,31 +142,62 @@ def create_completed_trades_on_position_close(
         )
         
         # ✅ CRITICAL: Validate position_side matches exit trade side
+        # ✅ FIX: Use exit_trade.position_side as source of truth if available (more accurate than inferring)
         # LONG position closes with SELL, SHORT position closes with BUY
-        # NOTE: This validation helps catch state sync issues, but we log as warning instead of error
-        # to allow the system to continue and use the exit trade side as the source of truth
-        if position_side == "LONG" and exit_trade.side != "SELL":
-            logger.warning(
-                f"[{strategy_id}] ⚠️ Position side mismatch: LONG position but exit trade is {exit_trade.side} "
-                f"(expected SELL). Order ID: {exit_trade.order_id}. "
-                f"Using exit trade side as source of truth. This may indicate a state sync issue."
-            )
-            # Don't return - continue with exit trade side as source of truth
-            # Update position_side to match exit trade
+        # In futures hedge mode, position_side is the authoritative field
+        position_side_corrected = False
+        original_position_side = position_side
+        
+        # Use exit_trade.position_side as primary source of truth if available
+        if exit_trade.position_side:
+            if position_side != exit_trade.position_side:
+                logger.warning(
+                    f"[{strategy_id}] ⚠️ Position side mismatch: function param={position_side}, "
+                    f"exit_trade.position_side={exit_trade.position_side}. "
+                    f"Using exit_trade.position_side as source of truth. Order ID: {exit_trade.order_id}"
+                )
+                position_side = exit_trade.position_side
+                position_side_corrected = True
+        elif position_side == "LONG" and exit_trade.side != "SELL":
             if exit_trade.side == "BUY":
-                position_side = "SHORT"  # BUY closes SHORT
-                logger.info(f"[{strategy_id}] Corrected position_side to SHORT based on exit trade")
+                # BUY can only close SHORT, so position_side must be wrong
+                logger.warning(
+                    f"[{strategy_id}] ⚠️ Position side mismatch: LONG position but exit trade is BUY. "
+                    f"BUY closes SHORT positions. Order ID: {exit_trade.order_id}. "
+                    f"Correcting position_side to SHORT based on exit trade side."
+                )
+                position_side = "SHORT"
+                position_side_corrected = True
+            else:
+                # Unknown side - log error with full details
+                logger.error(
+                    f"[{strategy_id}] ❌ Invalid position side/exit side combination: "
+                    f"position_side={position_side}, exit_side={exit_trade.side}, "
+                    f"exit.position_side={exit_trade.position_side}, Order ID: {exit_trade.order_id}"
+                )
         elif position_side == "SHORT" and exit_trade.side != "BUY":
-            logger.warning(
-                f"[{strategy_id}] ⚠️ Position side mismatch: SHORT position but exit trade is {exit_trade.side} "
-                f"(expected BUY). Order ID: {exit_trade.order_id}. "
-                f"Using exit trade side as source of truth. This may indicate a state sync issue."
-            )
-            # Don't return - continue with exit trade side as source of truth
-            # Update position_side to match exit trade
             if exit_trade.side == "SELL":
-                position_side = "LONG"  # SELL closes LONG
-                logger.info(f"[{strategy_id}] Corrected position_side to LONG based on exit trade")
+                # SELL can only close LONG, so position_side must be wrong
+                logger.warning(
+                    f"[{strategy_id}] ⚠️ Position side mismatch: SHORT position but exit trade is SELL. "
+                    f"SELL closes LONG positions. Order ID: {exit_trade.order_id}. "
+                    f"Correcting position_side to LONG based on exit trade side."
+                )
+                position_side = "LONG"
+                position_side_corrected = True
+            else:
+                # Unknown side - log error with full details
+                logger.error(
+                    f"[{strategy_id}] ❌ Invalid position side/exit side combination: "
+                    f"position_side={position_side}, exit_side={exit_trade.side}, "
+                    f"exit.position_side={exit_trade.position_side}, Order ID: {exit_trade.order_id}"
+                )
+        
+        if position_side_corrected:
+            logger.info(
+                f"[{strategy_id}] Position side corrected from {original_position_side} to {position_side} for matching. "
+                f"Exit trade: side={exit_trade.side}, position_side={exit_trade.position_side}"
+            )
         
         # Determine entry side based on position_side
         # LONG position: entry was BUY, exit is SELL
@@ -181,35 +213,76 @@ def create_completed_trades_on_position_close(
             return []
         
         # Find entry trades that haven't been fully allocated
-        # Query for entry trades with same strategy, opposite side, and remaining allocation
-        entry_trades = db.query(Trade).filter(
+        # Query for entry trades with same strategy, symbol, position_side, opposite side, and remaining allocation
+        # ✅ CRITICAL: Must filter by symbol to prevent cross-symbol matching
+        # ✅ CRITICAL: Must filter by position_side for hedge mode (prevent LONG/SHORT cross-matching)
+        entry_trades_query = db.query(Trade).filter(
             Trade.strategy_id == strategy_uuid,
+            Trade.symbol == exit_trade.symbol,  # ✅ FIX: Match same symbol
             Trade.side == entry_side,
             Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
-        ).order_by(Trade.timestamp.asc()).all()
+        )
         
-        if not entry_trades:
+        # Filter by position_side (hedge mode support)
+        # Note: position_side should always be "LONG" or "SHORT" at this point,
+        # but the check ensures we don't filter if somehow it's None/empty
+        if position_side:
+            entry_trades_query = entry_trades_query.filter(
+                Trade.position_side == position_side
+            )
+        else:
+            # Safety check: log warning if position_side is missing
+            logger.warning(
+                f"[{strategy_id}] position_side is None/empty - not filtering by position_side. "
+                f"This may cause incorrect matching in hedge mode."
+            )
+        
+        # ✅ OPTIMIZATION: Filter out fully allocated trades at database level using subquery
+        # This avoids loading fully allocated trades into memory and makes queries more efficient
+        # Only include trades where: executed_qty - allocated_qty > 0.0001
+        allocated_subquery = db.query(
+            CompletedTradeOrder.trade_id,
+            func.sum(CompletedTradeOrder.quantity).label('allocated_qty')
+        ).filter(
+            CompletedTradeOrder.order_role == "ENTRY"
+        ).group_by(CompletedTradeOrder.trade_id).subquery()
+        
+        # Use LEFT JOIN to find trades with remaining allocation
+        # ✅ FIX: Include allocated_qty in main query to avoid N+1 queries
+        # ✅ FIX: Add row locking to prevent race conditions (FOR UPDATE SKIP LOCKED)
+        entry_trades_query = entry_trades_query.outerjoin(
+            allocated_subquery,
+            Trade.id == allocated_subquery.c.trade_id
+        ).filter(
+            # Only include trades with remaining allocation (executed_qty - allocated_qty > 0.0001)
+            Trade.executed_qty > func.coalesce(allocated_subquery.c.allocated_qty, 0) + 0.0001
+        )
+        
+        # ✅ FIX: Select allocated_qty directly in main query (no N+1 queries)
+        # ✅ FIX: Lock rows to prevent double allocation (FOR UPDATE SKIP LOCKED)
+        entry_trades_rows = entry_trades_query.add_columns(
+            func.coalesce(allocated_subquery.c.allocated_qty, 0).label('allocated_qty')
+        ).with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
+        
+        if not entry_trades_rows:
             logger.debug(
-                f"No entry trades found for strategy {strategy_id} to match with exit trade {exit_order_id}"
+                f"No entry trades with remaining allocation found for strategy {strategy_id} "
+                f"to match with exit trade {exit_order_id}"
             )
             return []
         
-        # Calculate remaining allocation for each entry trade
+        # ✅ FIX: Build list with allocated_qty from query (no N+1 queries)
         entry_trades_with_allocation = []
-        for entry_trade in entry_trades:
-            # Get already allocated quantity for this entry trade
-            allocated = db.query(
-                func.sum(CompletedTradeOrder.quantity)
-            ).filter(
-                CompletedTradeOrder.trade_id == entry_trade.id,
-                CompletedTradeOrder.order_role == "ENTRY"
-            ).scalar() or 0.0
+        for row in entry_trades_rows:
+            entry_trade = row[0]  # First element is the Trade object
+            allocated_qty = row.allocated_qty  # Second element is allocated_qty from query
             
-            allocated_float = float(allocated) if allocated else 0.0
+            allocated_float = float(allocated_qty) if allocated_qty else 0.0
             executed_float = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
             remaining = executed_float - allocated_float
             
-            if remaining > 0.0001:  # Has remaining allocation
+            # Double-check remaining > threshold (should always be true due to database filter, but safety check)
+            if remaining > 0.0001:
                 entry_trades_with_allocation.append({
                     "trade": entry_trade,
                     "remaining": remaining,
@@ -222,10 +295,88 @@ def create_completed_trades_on_position_close(
             )
             return []
         
+        # ✅ FIX: Fetch funding fees ONCE per exit (not per entry/exit pair)
+        # Funding fees are per position lifecycle, not per individual lot
+        # Create BinanceClient once (outside retry loop and outside entry loop)
+        funding_fee_total = 0.0
+        funding_fee_fetch_failed = False
+        binance_client = None
+        
+        try:
+            account_id = db_strategy.account_id if db_strategy else None
+            if account_id:
+                account = db.query(Account).filter(Account.id == account_id).first()
+                if account:
+                    from app.services.account_service import AccountService
+                    account_service = AccountService(db)
+                    account_config = account_service._db_account_to_config(account)
+                    binance_client = BinanceClient(
+                        api_key=account_config.api_key,
+                        api_secret=account_config.api_secret,
+                        testnet=account_config.testnet
+                    )
+                    
+                    # ✅ FIX: Use earliest entry time from ALL potential matches (before skipping)
+                    # This ensures we capture the full position lifecycle period
+                    earliest_entry_time = min(et["trade"].timestamp for et in entry_trades_with_allocation)
+                    exit_time = exit_trade.timestamp
+                    
+                    entry_time_ms = int(earliest_entry_time.timestamp() * 1000)
+                    exit_time_ms = int(exit_time.timestamp() * 1000)
+                    
+                    # Retry logic for funding fee fetch
+                    max_retries = 3
+                    retry_delay = 0.5
+                    for attempt in range(max_retries):
+                        try:
+                            funding_fees = binance_client.get_funding_fees(
+                                symbol=exit_trade.symbol,
+                                start_time=entry_time_ms,
+                                end_time=exit_time_ms,
+                                limit=1000
+                            )
+                            
+                            # ✅ FIX: Keep signed funding (not abs) - sum actual income
+                            # Negative = we paid (LONG), Positive = we received (SHORT)
+                            for fee_record in funding_fees:
+                                income = float(fee_record.get("income", 0))
+                                funding_fee_total += income  # Signed, not abs!
+                            
+                            if funding_fee_total != 0:
+                                logger.debug(
+                                    f"[{strategy_id}] Fetched total funding fees: {funding_fee_total:.8f} USDT "
+                                    f"(signed) for period {earliest_entry_time} to {exit_time}"
+                                )
+                            break  # Success
+                        except Exception as exc:
+                            if attempt < max_retries - 1:
+                                logger.warning(
+                                    f"[{strategy_id}] Funding fee fetch failed (attempt {attempt + 1}/{max_retries}): {exc}. "
+                                    f"Retrying in {retry_delay}s..."
+                                )
+                                time_module.sleep(retry_delay)
+                                retry_delay *= 2
+                            else:
+                                logger.warning(
+                                    f"[{strategy_id}] Could not fetch funding fees after {max_retries} attempts: {exc}. "
+                                    f"Using default 0.0.",
+                                    exc_info=True
+                                )
+                                funding_fee_fetch_failed = True
+                                funding_fee_total = 0.0
+        except Exception as exc:
+            logger.warning(
+                f"[{strategy_id}] Could not create BinanceClient or fetch funding fees: {exc}. "
+                f"Using default 0.0.",
+                exc_info=True
+            )
+            funding_fee_total = 0.0
+        
         # Match exit quantity to entry trades (FIFO - first in, first out)
         completed_trade_service = CompletedTradeService(db)
         completed_trade_ids = []
         remaining_exit_qty = exit_quantity
+        total_matched_qty = 0.0  # ✅ FIX: Track actual matched quantity for funding fee allocation
         
         for entry_info in entry_trades_with_allocation:
             if remaining_exit_qty <= 0:
@@ -233,6 +384,15 @@ def create_completed_trades_on_position_close(
             
             entry_trade = entry_info["trade"]
             entry_remaining = entry_info["remaining"]
+            
+            # ✅ FIX: Validate entry trade position_side matches expected (hedge mode safety check)
+            # This prevents matching trades from wrong position side if position_side column has bad data
+            if entry_trade.position_side and entry_trade.position_side != position_side:
+                logger.warning(
+                    f"[{strategy_id}] Skipping entry trade {entry_trade.order_id}: "
+                    f"position_side mismatch (expected {position_side}, got {entry_trade.position_side})"
+                )
+                continue  # Skip this entry trade
             
             # Quantity to close: min of remaining exit qty and entry remaining
             close_qty = min(remaining_exit_qty, entry_remaining)
@@ -263,63 +423,6 @@ def create_completed_trades_on_position_close(
             entry_notional = entry_price * close_qty
             pnl_pct = (net_pnl / entry_notional) * 100 if entry_notional > 0 else 0.0
             
-            # Fetch funding fees from Binance API
-            funding_fee = 0.0
-            try:
-                # Get account_id from strategy
-                account_id = db_strategy.account_id if db_strategy else None
-                if account_id:
-                    # Get account from database
-                    account = db.query(Account).filter(Account.id == account_id).first()
-                    if account:
-                        # Create BinanceClient from account config
-                        from app.services.account_service import AccountService
-                        account_service = AccountService(db)
-                        
-                        # Get account config (decrypted)
-                        account_config = account_service._db_account_to_config(account)
-                        
-                        # Create BinanceClient
-                        binance_client = BinanceClient(
-                            api_key=account_config.api_key,
-                            api_secret=account_config.api_secret,
-                            testnet=account_config.testnet
-                        )
-                        
-                        # Fetch funding fees for the period between entry and exit
-                        entry_time_ms = int(entry_trade.timestamp.timestamp() * 1000)
-                        exit_time_ms = int(exit_trade.timestamp.timestamp() * 1000)
-                        
-                        funding_fees = binance_client.get_funding_fees(
-                            symbol=entry_trade.symbol,
-                            start_time=entry_time_ms,
-                            end_time=exit_time_ms,
-                            limit=1000
-                        )
-                        
-                        # Sum funding fees (negative = paid, positive = received)
-                        # For completed trades, we sum all funding fees (absolute value)
-                        # Negative income = we paid funding fees (LONG position)
-                        # Positive income = we received funding fees (SHORT position)
-                        # For reporting, we track the absolute value of all funding fees
-                        for fee_record in funding_fees:
-                            income = float(fee_record.get("income", 0))
-                            # Sum absolute value of all funding fees (both paid and received)
-                            funding_fee += abs(income)
-                        
-                        if funding_fee > 0:
-                            logger.debug(
-                                f"[{strategy_id}] Fetched funding fees: {funding_fee:.8f} USDT "
-                                f"for period {entry_trade.timestamp} to {exit_trade.timestamp}"
-                            )
-            except Exception as exc:
-                logger.warning(
-                    f"[{strategy_id}] Could not fetch funding fees: {exc}. "
-                    f"Using default 0.0. This is non-critical.",
-                    exc_info=True
-                )
-                funding_fee = 0.0
-            
             # Create completed trade
             try:
                 # Log entry/exit trade details for debugging
@@ -339,9 +442,10 @@ def create_completed_trades_on_position_close(
                     quantity=close_qty,
                     pnl_usd=net_pnl,
                     pnl_pct=pnl_pct,
-                    funding_fee=funding_fee,  # Fetched from Binance API
+                    funding_fee=0.0,  # Will allocate funding fees after all matches are complete
                 )
                 completed_trade_ids.append(completed_trade.id)
+                total_matched_qty += close_qty  # Track matched quantity
                 logger.info(
                     f"[{strategy_id}] ✅ Created completed trade {completed_trade.id}: "
                     f"entry={entry_trade.order_id} (ts={entry_trade.timestamp}), "
@@ -377,12 +481,47 @@ def create_completed_trades_on_position_close(
             
             remaining_exit_qty -= close_qty
         
-        if remaining_exit_qty > 0.0001:
-            logger.warning(
-                f"[{strategy_id}] Unmatched exit quantity remaining after processing all entry trades: "
-                f"{remaining_exit_qty} for exit order {exit_order_id}. "
-                f"This may indicate a data inconsistency or an unmatched entry trade."
+        # ✅ FIX: Allocate funding fees proportionally AFTER all matches are complete
+        # This ensures accurate allocation even if some entry trades were skipped
+        # Use actual matched quantity (not exit_quantity) to prevent over-allocation
+        if total_matched_qty > 0.0001 and funding_fee_total != 0:
+            # Update all completed trades with proportionally allocated funding fees
+            for i, completed_trade_id in enumerate(completed_trade_ids):
+                # Find the corresponding entry trade to get close_qty
+                # Note: We need to track close_qty for each completed trade
+                # For now, we'll query the completed trade to get its quantity
+                completed_trade = db.query(CompletedTrade).filter(
+                    CompletedTrade.id == completed_trade_id
+                ).first()
+                if completed_trade:
+                    close_qty = float(completed_trade.quantity)
+                    # Allocate funding fees proportionally: funding_for_lot = funding_total * (close_qty / total_matched_qty)
+                    funding_fee_for_lot = funding_fee_total * (close_qty / total_matched_qty)
+                    completed_trade.funding_fee = funding_fee_for_lot
+                    logger.debug(
+                        f"[{strategy_id}] Allocated funding fee {funding_fee_for_lot:.8f} to completed trade {completed_trade_id} "
+                        f"(qty={close_qty}/{total_matched_qty})"
+                    )
+            db.commit()  # Commit funding fee allocations
+            logger.debug(
+                f"[{strategy_id}] Allocated total funding fees {funding_fee_total:.8f} across {len(completed_trade_ids)} completed trades "
+                f"(total matched qty: {total_matched_qty})"
             )
+        
+        # ✅ FIX: Fail if unmatched exit quantity remains (data inconsistency)
+        # This indicates a serious issue: exit trade quantity exceeds all matched entry trades
+        if remaining_exit_qty > 0.0001:
+            error_msg = (
+                f"[{strategy_id}] ❌ CRITICAL: Unmatched exit quantity remaining after processing all entry trades: "
+                f"{remaining_exit_qty} for exit order {exit_order_id}. "
+                f"Exit quantity: {exit_quantity}, Matched quantity: {total_matched_qty}. "
+                f"This indicates a data inconsistency - exit trade quantity exceeds available entry trades. "
+                f"Possible causes: missing entry trades, incorrect quantity reporting, or allocation mismatch."
+            )
+            logger.error(error_msg)
+            # Don't fail the entire process, but log as error and return what was successfully matched
+            # This allows partial completion while alerting to the issue
+            # The remaining unmatched quantity will need manual investigation
         
         # Log completion metrics
         duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
