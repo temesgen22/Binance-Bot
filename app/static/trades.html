@@ -608,19 +608,12 @@
                 if (accountId) {
                     url += `?account_id=${encodeURIComponent(accountId)}`;
                 }
-                console.log('Loading PnL data from:', url);
                 const response = await authFetch(url);
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error('API error response:', response.status, errorText);
-                    throw new Error(`Failed to load PnL data: ${response.status} ${response.statusText}`);
-                }
+                if (!response.ok) throw new Error('Failed to load PnL data');
                 const pnlData = await response.json();
-                console.log('Received PnL data:', pnlData);
                 
                 // Ensure pnlData is an array before processing
                 if (!pnlData || !Array.isArray(pnlData)) {
-                    console.error('Invalid data format:', typeof pnlData, pnlData);
                     throw new Error('Invalid data format received from server');
                 }
                 
@@ -629,16 +622,8 @@
                 updateOverallStats(pnlData);
             } catch (error) {
                 console.error('Error loading data:', error);
-                const overviewContent = document.getElementById('overviewContent');
-                const positionsContent = document.getElementById('positionsContent');
-                if (overviewContent) {
-                    overviewContent.innerHTML = 
-                        `<div class="error">Error loading data: ${error.message}</div>`;
-                }
-                if (positionsContent) {
-                    positionsContent.innerHTML = 
-                        `<div class="error">Error loading positions: ${error.message}</div>`;
-                }
+                document.getElementById('overviewContent').innerHTML = 
+                    `<div class="error">Error loading data: ${error.message}</div>`;
             }
         }
 
@@ -711,111 +696,77 @@
         }
 
         function displayPositions(pnlData) {
-            try {
-                const content = document.getElementById('positionsContent');
-                if (!content) {
-                    console.error('positionsContent element not found!');
-                    return;
-                }
-                
-                console.log('displayPositions called with data:', pnlData);
-                
-                if (!pnlData || !Array.isArray(pnlData)) {
-                    console.warn('displayPositions: Invalid pnlData (not an array):', pnlData);
-                    content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
-                    return;
-                }
-                
-                const allPositions = [];
-                pnlData.forEach(symbol => {
-                    if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
-                        console.log(`Found ${symbol.open_positions.length} positions for ${symbol.symbol}`);
-                        symbol.open_positions.forEach(pos => {
-                            // BUG FIX: Ensure symbol is set (use parent symbol if missing)
-                            const positionWithSymbol = {
-                                ...pos,
-                                symbol: pos.symbol || symbol.symbol || 'N/A',
-                                symbolPnL: symbol
-                            };
-                            allPositions.push(positionWithSymbol);
-                        });
-                    } else {
-                        console.debug(`No open_positions for ${symbol.symbol} or not an array:`, symbol.open_positions);
-                    }
-                });
-
-                console.log(`Total positions collected: ${allPositions.length}`);
-
-                if (allPositions.length === 0) {
-                    content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
-                    return;
-                }
-
-                let html = '<div class="positions-grid">';
-                let skippedCount = 0;
-                allPositions.forEach((pos, index) => {
-                    // BUG FIX: Validate position data before displaying
-                    if (!pos.position_side || (pos.position_side !== 'LONG' && pos.position_side !== 'SHORT')) {
-                        console.warn(`Position ${index}: Invalid position side:`, pos.position_side, pos);
-                        skippedCount++;
-                        return; // Skip invalid positions
-                    }
-                    
-                    const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
-                    // Safe null checks for position data
-                    const pnl = pos.unrealized_pnl || 0;
-                    const positionSize = pos.position_size || 0;
-                    const entryPrice = pos.entry_price || 0;
-                    const currentPrice = pos.current_price || 0;
-                    const leverage = pos.leverage || 1;
-                    
-                    // BUG FIX: Skip positions with invalid data
-                    if (entryPrice <= 0 || currentPrice <= 0 || positionSize <= 0) {
-                        console.warn(`Position ${index}: Invalid position data (zero or negative values):`, {
-                            symbol: pos.symbol,
-                            entryPrice,
-                            currentPrice,
-                            positionSize
-                        });
-                        skippedCount++;
-                        return; // Skip invalid positions
-                    }
-                    
-                    html += `<div class="position-card ${sideClass}">`;
-                    html += `<div class="position-header">`;
-                    html += `<div class="position-symbol">${pos.symbol || 'N/A'}</div>`;
-                    html += `<div class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</div>`;
-                    html += `</div>`;
-                    html += `<div class="position-details">`;
-                    html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side || 'N/A'}</span></span></div>`;
-                    html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
-                    html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${entryPrice.toFixed(4)}</span></div>`;
-                    html += `<div class="position-detail-item"><span>Current Price:</span><span>$${currentPrice.toFixed(4)}</span></div>`;
-                    html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
-                    if (pos.strategy_name) {
-                        html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
-                    } else {
-                        // BUG FIX: Show indicator if position not matched to strategy
-                        html += `<div class="position-detail-item"><span>Strategy:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
-                    }
-                    html += `</div>`;
-                    html += `</div>`;
-                });
-                html += '</div>';
-                
-                if (skippedCount > 0) {
-                    console.warn(`Skipped ${skippedCount} invalid positions out of ${allPositions.length} total`);
-                }
-                
-                console.log(`Displaying ${allPositions.length - skippedCount} valid positions`);
-                content.innerHTML = html;
-            } catch (error) {
-                console.error('Error in displayPositions:', error);
-                const content = document.getElementById('positionsContent');
-                if (content) {
-                    content.innerHTML = `<div class="error">Error displaying positions: ${error.message}<br><small>Check browser console for details</small></div>`;
-                }
+            const content = document.getElementById('positionsContent');
+            
+            if (!pnlData || !Array.isArray(pnlData)) {
+                content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
+                return;
             }
+            
+            const allPositions = [];
+            pnlData.forEach(symbol => {
+                if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
+                    symbol.open_positions.forEach(pos => {
+                        // BUG FIX: Ensure symbol is set (use parent symbol if missing)
+                        const positionWithSymbol = {
+                            ...pos,
+                            symbol: pos.symbol || symbol.symbol || 'N/A',
+                            symbolPnL: symbol
+                        };
+                        allPositions.push(positionWithSymbol);
+                    });
+                }
+            });
+
+            if (allPositions.length === 0) {
+                content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
+                return;
+            }
+
+            let html = '<div class="positions-grid">';
+            allPositions.forEach(pos => {
+                // BUG FIX: Validate position data before displaying
+                if (!pos.position_side || (pos.position_side !== 'LONG' && pos.position_side !== 'SHORT')) {
+                    console.warn('Invalid position side:', pos);
+                    return; // Skip invalid positions
+                }
+                
+                const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
+                // Safe null checks for position data
+                const pnl = pos.unrealized_pnl || 0;
+                const positionSize = pos.position_size || 0;
+                const entryPrice = pos.entry_price || 0;
+                const currentPrice = pos.current_price || 0;
+                const leverage = pos.leverage || 1;
+                
+                // BUG FIX: Skip positions with invalid data
+                if (entryPrice <= 0 || currentPrice <= 0 || positionSize <= 0) {
+                    console.warn('Invalid position data (zero or negative values):', pos);
+                    return; // Skip invalid positions
+                }
+                
+                html += `<div class="position-card ${sideClass}">`;
+                html += `<div class="position-header">`;
+                html += `<div class="position-symbol">${pos.symbol || 'N/A'}</div>`;
+                html += `<div class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</div>`;
+                html += `</div>`;
+                html += `<div class="position-details">`;
+                html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side || 'N/A'}</span></span></div>`;
+                html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${entryPrice.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${currentPrice.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
+                if (pos.strategy_name) {
+                    html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
+                } else {
+                    // BUG FIX: Show indicator if position not matched to strategy
+                    html += `<div class="position-detail-item"><span>Strategy:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
+                }
+                html += `</div>`;
+                html += `</div>`;
+            });
+            html += '</div>';
+            content.innerHTML = html;
         }
 
         async function loadTrades() {
