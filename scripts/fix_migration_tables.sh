@@ -17,7 +17,7 @@ else
     DB_CHECK_CMD="docker exec binance-bot-postgres psql -U postgres -d binance_bot -tAc"
 fi
 
-EXPECTED_HEAD="b08a3fc21d8f"
+EXPECTED_HEAD="f1a2b3c4d5e6"
 
 # Check current Alembic version
 echo "📋 Checking current Alembic version..."

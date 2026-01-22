@@ -275,7 +275,7 @@ def create_completed_trades_on_position_close(
         entry_trades_with_allocation = []
         for row in entry_trades_rows:
             entry_trade = row[0]  # First element is the Trade object
-            allocated_qty = row.allocated_qty  # Second element is allocated_qty from query
+            allocated_qty = row[1]  # Second element is allocated_qty from query (access by index, not attribute)
             
             allocated_float = float(allocated_qty) if allocated_qty else 0.0
             executed_float = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0

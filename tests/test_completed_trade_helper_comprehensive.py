@@ -981,3 +981,202 @@ class TestIdempotency:
         
         assert len(all_completed_trades) == 1, f"Expected 1 completed trade, found {len(all_completed_trades)}. Idempotency should prevent duplicates."
 
+    def test_add_columns_allocated_qty_access_fix(
+        self, db_session, test_user, test_account, test_strategy
+    ):
+        """
+        Test that validates the fix for accessing allocated_qty from add_columns() query result.
+        
+        This test specifically validates that row[1] is used instead of row.allocated_qty
+        to access the allocated_qty column from the query result. The previous implementation
+        would throw "'coalesce_1'" error when trying to access by attribute name.
+        
+        Scenario:
+        1. Create entry trade with 0.002 executed_qty
+        2. Partially allocate 0.001 via CompletedTradeOrder (simulating previous match)
+        3. Create exit trade for remaining 0.001
+        4. Verify function correctly reads allocated_qty from query and matches remaining quantity
+        """
+        # Create entry trade with 0.002 quantity
+        entry_trade = Trade(
+            id=uuid4(),
+            strategy_id=test_strategy.id,
+            user_id=test_user.id,
+            order_id=12001,
+            symbol="BTCUSDT",
+            side="BUY",
+            position_side="LONG",
+            price=50000.0,
+            avg_price=50000.0,
+            executed_qty=0.002,  # Total quantity
+            status="FILLED",
+            commission=0.04,
+            timestamp=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        db_session.add(entry_trade)
+        db_session.commit()
+        
+        # Create a previous exit trade (for the previous completed trade)
+        previous_exit_trade = Trade(
+            id=uuid4(),
+            strategy_id=test_strategy.id,
+            user_id=test_user.id,
+            order_id=12000,  # Previous exit order
+            symbol="BTCUSDT",
+            side="SELL",
+            position_side="LONG",
+            price=51000.0,
+            avg_price=51000.0,
+            executed_qty=0.001,
+            status="FILLED",
+            commission=0.0204,
+            timestamp=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        db_session.add(previous_exit_trade)
+        db_session.commit()
+        
+        # Create a previous completed trade that allocated 0.001 from this entry trade
+        # This simulates a partial fill scenario where some quantity was already matched
+        # Generate idempotency key (close_event_id) using UUIDv5
+        from uuid import uuid5, NAMESPACE_OID
+        previous_close_event_id = uuid5(
+            NAMESPACE_OID,
+            f"{entry_trade.id}_{previous_exit_trade.id}_{0.001}_{entry_trade.timestamp}_{previous_exit_trade.timestamp}"
+        )
+        
+        previous_completed_trade = CompletedTrade(
+            id=uuid4(),
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            account_id=test_account.id,
+            close_event_id=previous_close_event_id,  # Required: idempotency key
+            entry_order_id=entry_trade.order_id,  # Required
+            exit_order_id=previous_exit_trade.order_id,  # Required
+            symbol="BTCUSDT",  # Required
+            side="LONG",  # Required
+            entry_time=entry_trade.timestamp,  # Required
+            exit_time=previous_exit_trade.timestamp,  # Required
+            entry_price=Decimal('50000.0'),  # Required
+            exit_price=Decimal('51000.0'),  # Required
+            quantity=Decimal('0.001'),  # Required
+            pnl_usd=Decimal('9.96'),  # Required
+            pnl_pct=Decimal('1.992'),  # Required
+            fee_paid=Decimal('0.0404'),  # Required: entry fee + exit fee
+            funding_fee=Decimal('0.0'),
+        )
+        db_session.add(previous_completed_trade)
+        db_session.commit()
+        
+        # Create CompletedTradeOrder records linking the previous completed trade to the entry trade
+        # This marks 0.001 as already allocated
+        previous_entry_order = CompletedTradeOrder(
+            completed_trade_id=previous_completed_trade.id,
+            trade_id=entry_trade.id,
+            order_id=entry_trade.order_id,
+            account_id=test_account.id,
+            order_role="ENTRY",
+            quantity=Decimal('0.001'),
+            price=Decimal('50000.0'),
+            timestamp=entry_trade.timestamp,
+        )
+        previous_exit_order = CompletedTradeOrder(
+            completed_trade_id=previous_completed_trade.id,
+            trade_id=previous_exit_trade.id,
+            order_id=previous_exit_trade.order_id,
+            account_id=test_account.id,
+            order_role="EXIT",
+            quantity=Decimal('0.001'),
+            price=Decimal('51000.0'),
+            timestamp=previous_exit_trade.timestamp,
+        )
+        db_session.add_all([previous_entry_order, previous_exit_order])
+        db_session.commit()
+        
+        # Verify that 0.001 is allocated (for debugging)
+        allocated_qty_result = db_session.query(
+            func.coalesce(func.sum(CompletedTradeOrder.quantity), 0)
+        ).filter(
+            CompletedTradeOrder.trade_id == entry_trade.id,
+            CompletedTradeOrder.order_role == "ENTRY"
+        ).scalar()
+        assert float(allocated_qty_result) == 0.001, f"Expected 0.001 allocated, got {allocated_qty_result}"
+        
+        # Create new exit trade for the remaining 0.001
+        exit_trade = Trade(
+            id=uuid4(),
+            strategy_id=test_strategy.id,
+            user_id=test_user.id,
+            order_id=12002,
+            symbol="BTCUSDT",
+            side="SELL",
+            position_side="LONG",
+            price=52000.0,
+            avg_price=52000.0,
+            executed_qty=0.001,  # Matches remaining unallocated quantity
+            status="FILLED",
+            commission=0.0208,
+            timestamp=datetime.now(timezone.utc),
+        )
+        db_session.add(exit_trade)
+        db_session.commit()
+        
+        # This should NOT throw "'coalesce_1'" error
+        # The function should correctly read allocated_qty from row[1] (index access)
+        with patch('app.services.completed_trade_helper.BinanceClient') as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_funding_fees.return_value = []
+            mock_client_class.return_value = mock_client
+            
+            completed_trade_ids = create_completed_trades_on_position_close(
+                user_id=test_user.id,
+                strategy_id=test_strategy.strategy_id,
+                exit_trade_id=exit_trade.id,
+                exit_order_id=exit_trade.order_id,
+                exit_quantity=0.001,
+                exit_price=52000.0,
+                position_side="LONG",
+                db=db_session,
+            )
+        
+        # Verify completed trade was created successfully
+        assert len(completed_trade_ids) == 1, "Should create one completed trade for remaining quantity"
+        
+        completed_trade = db_session.query(CompletedTrade).filter(
+            CompletedTrade.id == completed_trade_ids[0]
+        ).first()
+        
+        assert completed_trade is not None
+        assert completed_trade.quantity == Decimal('0.001'), "Should match remaining unallocated quantity"
+        assert completed_trade.entry_price == Decimal('50000.0')
+        assert completed_trade.exit_price == Decimal('52000.0')
+        
+        # Verify PnL: (52000 - 50000) * 0.001 - (0.02 + 0.0208) = 19.9592
+        expected_pnl = (52000.0 - 50000.0) * 0.001 - (0.02 + 0.0208)
+        assert abs(float(completed_trade.pnl_usd) - expected_pnl) < 0.01
+        
+        # Verify that the entry trade is now fully allocated (0.001 + 0.001 = 0.002)
+        total_allocated = db_session.query(
+            func.coalesce(func.sum(CompletedTradeOrder.quantity), 0)
+        ).filter(
+            CompletedTradeOrder.trade_id == entry_trade.id,
+            CompletedTradeOrder.order_role == "ENTRY"
+        ).scalar()
+        assert float(total_allocated) == 0.002, f"Entry trade should be fully allocated (0.002), got {total_allocated}"
+        
+        # Verify junction table records
+        entry_orders = db_session.query(CompletedTradeOrder).filter(
+            CompletedTradeOrder.completed_trade_id == completed_trade.id,
+            CompletedTradeOrder.order_role == "ENTRY"
+        ).all()
+        assert len(entry_orders) == 1
+        assert entry_orders[0].trade_id == entry_trade.id
+        assert float(entry_orders[0].quantity) == 0.001
+        
+        exit_orders = db_session.query(CompletedTradeOrder).filter(
+            CompletedTradeOrder.completed_trade_id == completed_trade.id,
+            CompletedTradeOrder.order_role == "EXIT"
+        ).all()
+        assert len(exit_orders) == 1
+        assert exit_orders[0].trade_id == exit_trade.id
+        assert float(exit_orders[0].quantity) == 0.001
+

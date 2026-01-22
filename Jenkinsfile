@@ -239,7 +239,7 @@ pipeline {
         " 2>/dev/null || echo "0")
         echo "   Found $RISK_TABLES_BEFORE/3 risk management tables"
         
-        EXPECTED_HEAD="b08a3fc21d8f"
+        EXPECTED_HEAD="f1a2b3c4d5e6"
         
         # If Alembic version is at head but tables don't exist, we need to fix this
         if [ "$CURRENT_VERSION_BEFORE" = "$EXPECTED_HEAD" ] && [ "$RISK_TABLES_BEFORE" != "3" ]; then

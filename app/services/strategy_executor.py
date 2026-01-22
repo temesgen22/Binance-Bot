@@ -825,8 +825,19 @@ class StrategyExecutor:
                     f"Strategy will still monitor TP/SL, but Binance native orders not active."
                 )
             except Exception as exc:
+                # Safely extract error message to avoid KeyError when accessing details
+                error_msg = str(exc)
+                # If it's a RetryError, try to get the underlying exception message
+                try:
+                    from tenacity import RetryError
+                    if isinstance(exc, RetryError) and hasattr(exc, 'last_attempt') and exc.last_attempt:
+                        underlying = exc.last_attempt.exception()
+                        error_msg = str(underlying)
+                except Exception:
+                    pass  # Fall back to original error message
+                
                 logger.warning(
-                    f"[{summary.id}] Failed to place TP/SL orders on Binance: {exc}. "
+                    f"[{summary.id}] Failed to place TP/SL orders on Binance: {error_msg}. "
                     f"Strategy will still monitor TP/SL, but Binance native orders not active."
                 )
         
