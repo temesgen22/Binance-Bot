@@ -169,17 +169,20 @@ class CompletedTradeService:
         
         # 6. ✅ CRITICAL: Determine side using position_side, not just BUY/SELL
         # In futures hedge mode, BUY can close a SHORT, and SELL can close a LONG
-        # ✅ VALIDATION: Also validate that exit_trade.position_side matches if both are set
+        # ✅ VALIDATION: Ensure entry and exit trades have the same position_side when both are set
         if entry_trade.position_side:
             side = entry_trade.position_side  # LONG or SHORT from position_side
             
-            # Safety check: If exit trade also has position_side, they should match
+            # ✅ CRITICAL: If exit trade also has position_side, they MUST match
             if exit_trade.position_side and exit_trade.position_side != entry_trade.position_side:
-                logger.warning(
+                error_msg = (
                     f"Position side mismatch between entry and exit trades: "
                     f"entry.position_side={entry_trade.position_side}, exit.position_side={exit_trade.position_side}. "
-                    f"Using entry position_side as source of truth."
+                    f"Entry trade: order_id={entry_trade.order_id}, Exit trade: order_id={exit_trade.order_id}. "
+                    f"In hedge mode, entry and exit trades must have the same position_side."
                 )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
         else:
             # Fallback to BUY/SELL if position_side not set (one-way mode)
             side = "LONG" if entry_trade.side == "BUY" else "SHORT"
@@ -203,13 +206,29 @@ class CompletedTradeService:
         
         fee_paid = entry_fee_portion + exit_fee_portion
         
-        # Get account_id from strategy
-        account_id = entry_trade.strategy.account_id if entry_trade.strategy else None
+        # Get account_id from strategy (with defensive check for lazy loading)
+        account_id = None
+        try:
+            # Access strategy relationship - may trigger lazy load
+            if hasattr(entry_trade, 'strategy') and entry_trade.strategy is not None:
+                account_id = entry_trade.strategy.account_id
+        except Exception as strategy_exc:
+            logger.warning(
+                f"Could not access strategy relationship for entry trade {entry_trade_id}: {strategy_exc}. "
+                f"account_id will be None."
+            )
         
         # Get leverage from trades, fallback to strategy
         leverage = entry_trade.leverage or exit_trade.leverage
-        if leverage is None and entry_trade.strategy:
-            leverage = entry_trade.strategy.leverage
+        if leverage is None:
+            try:
+                if hasattr(entry_trade, 'strategy') and entry_trade.strategy is not None:
+                    leverage = entry_trade.strategy.leverage
+            except Exception as strategy_exc:
+                logger.debug(
+                    f"Could not access strategy.leverage for entry trade {entry_trade_id}: {strategy_exc}. "
+                    f"Using None for leverage."
+                )
         
         # Get margin_type from trades, fallback to default
         margin_type = entry_trade.margin_type or exit_trade.margin_type
@@ -240,7 +259,13 @@ class CompletedTradeService:
             exit_reason=exit_trade.exit_reason,
             initial_margin=entry_trade.initial_margin or exit_trade.initial_margin,  # Use entry, fallback to exit
             margin_type=margin_type,
-            notional_value=entry_trade.notional_value,
+            # Calculate notional_value from quantity * entry_price (more accurate than using trade's notional_value)
+            # Fallback to entry_trade.notional_value if calculation not possible
+            notional_value=(
+                entry_trade.notional_value 
+                if entry_trade.notional_value is not None 
+                else (float(entry_trade.avg_price or entry_trade.price) * quantity)
+            ),
         )
         self.db.add(completed_trade)
         self.db.flush()  # Get the ID
@@ -357,8 +382,11 @@ class CompletedTradeService:
                 completed_trades.append(completed_trade)
             except ValueError as e:
                 # Handle idempotency (already exists) - this is expected
-                if "already exists" in str(e).lower() or "allocation in progress" in str(e).lower():
-                    logger.debug(f"Skipping duplicate completed trade: {e}")
+                error_msg_lower = str(e).lower()
+                if any(keyword in error_msg_lower for keyword in [
+                    "already exists", "allocation in progress", "duplicate", "idempotency"
+                ]):
+                    logger.debug(f"Skipping duplicate/idempotent completed trade: {e}")
                     continue
                 # Re-raise other errors
                 logger.error(f"Failed to create completed trade: {e}")

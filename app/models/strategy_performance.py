@@ -64,7 +64,7 @@ class StrategyPerformance(BaseModel):
     
     # Auto-tuning
     auto_tuning_enabled: bool = Field(default=False, description="Whether auto-tuning is enabled for this strategy")
-    
+
     # Fee tracking
     total_trade_fees: Optional[float] = Field(default=None, description="Total trading fees paid across all completed trades")
     total_funding_fees: Optional[float] = Field(default=None, description="Total funding fees paid across all completed trades")

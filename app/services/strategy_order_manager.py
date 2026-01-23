@@ -169,6 +169,97 @@ class StrategyOrderManager:
             )
             return None
         
+        # ✅ CRITICAL: Check if another strategy already has an open position for this symbol
+        # Binance Futures positions are account-level, not strategy-level
+        # If Strategy A has a position and Strategy B tries to OPEN one, they would mix/conflict
+        # Note: We only block OPENING positions, not closing (reduce_only orders are allowed)
+        try:
+            # Determine if this is an opening order (not closing)
+            # Opening: current strategy has no position OR signal is opposite to current position
+            current_strategy_has_position = summary.position_size and float(summary.position_size) > 0
+            is_opening_order = False
+            
+            if not current_strategy_has_position:
+                # No current position = definitely opening
+                is_opening_order = True
+            else:
+                # Check if signal would open opposite position
+                if signal.action == "BUY" and summary.position_side == "SHORT":
+                    # Buying while short = closing short, not opening
+                    is_opening_order = False
+                elif signal.action == "SELL" and summary.position_side == "LONG":
+                    # Selling while long = closing long, not opening
+                    is_opening_order = False
+                else:
+                    # Same direction = could be adding to position (opening)
+                    is_opening_order = True
+            
+            # Only check for conflicts if we're opening a position
+            if is_opening_order:
+                binance_position = await asyncio.to_thread(account_client.get_open_position, signal.symbol)
+                has_binance_position = binance_position and abs(float(binance_position.get("positionAmt", 0))) > 0
+                
+                if has_binance_position:
+                    # Check if any OTHER strategy (not current) has this position
+                    conflicting_strategy = None
+                    for strategy_id, other_summary in self._strategies.items():
+                        # Skip current strategy
+                        if strategy_id == summary.id:
+                            continue
+                        
+                        # Check if other strategy has open position for same symbol
+                        if (other_summary.symbol == signal.symbol and
+                            other_summary.position_size and
+                            float(other_summary.position_size) > 0):
+                            conflicting_strategy = other_summary
+                            break
+                    
+                    if conflicting_strategy:
+                        error_msg = (
+                            f"Cannot open position for {signal.symbol}: "
+                            f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "
+                            f"already has an open {conflicting_strategy.position_side} position "
+                            f"({conflicting_strategy.position_size} {signal.symbol}). "
+                            f"Binance Futures positions are account-level and cannot be shared between strategies. "
+                            f"Stopping this strategy to prevent position conflicts."
+                        )
+                        
+                        logger.error(f"[{summary.id}] ❌ {error_msg}")
+                        
+                        # Stop the current strategy automatically
+                        if self.strategy_runner:
+                            try:
+                                await self.strategy_runner.stop(summary.id)
+                                logger.info(
+                                    f"[{summary.id}] ✅ Strategy automatically stopped due to position conflict"
+                                )
+                            except Exception as stop_exc:
+                                logger.error(
+                                    f"[{summary.id}] Failed to stop strategy after position conflict: {stop_exc}"
+                                )
+                        
+                        # Raise exception to prevent order execution
+                        raise OrderExecutionError(
+                            error_msg,
+                            symbol=signal.symbol,
+                            details={
+                                "conflicting_strategy_id": conflicting_strategy.id,
+                                "conflicting_strategy_name": conflicting_strategy.name,
+                                "conflicting_position_side": conflicting_strategy.position_side,
+                                "conflicting_position_size": conflicting_strategy.position_size,
+                            }
+                        )
+        except OrderExecutionError:
+            # Re-raise OrderExecutionError (position conflict)
+            raise
+        except Exception as exc:
+            # Log but don't fail - if position check fails, continue with order execution
+            # This prevents blocking orders due to temporary API issues
+            logger.warning(
+                f"[{summary.id}] Failed to check for position conflicts for {signal.symbol}: {exc}. "
+                f"Proceeding with order execution."
+            )
+        
         # CRITICAL FIX: Portfolio risk checks BEFORE order execution
         # This includes async locking and exposure reservation
         portfolio_risk_manager = None
@@ -864,14 +955,63 @@ class StrategyOrderManager:
             )
             return
         
+        # Get account-specific client
+        account_id = summary.account_id or "default"
+        account_client = self.account_manager.get_account_client(account_id)
+        
+        # ✅ CRITICAL FIX: Cancel ALL existing TP/SL orders for this symbol before placing new ones
+        # This prevents orphaned TP/SL orders from previous positions from closing new positions
+        # Only cancels orders for the same symbol, not other symbols
+        try:
+            open_orders = await asyncio.to_thread(account_client.get_open_orders, summary.symbol)
+            tp_sl_order_types = {"TAKE_PROFIT_MARKET", "STOP_MARKET"}
+            
+            # Filter for TP/SL orders only (same symbol, TP/SL order types)
+            existing_tp_sl_orders = [
+                order for order in open_orders
+                if order.get("type") in tp_sl_order_types
+            ]
+            
+            if existing_tp_sl_orders:
+                logger.info(
+                    f"[{summary.id}] Found {len(existing_tp_sl_orders)} existing TP/SL order(s) for {summary.symbol}. "
+                    f"Cancelling them before placing new TP/SL orders."
+                )
+                
+                cancelled_count = 0
+                for order in existing_tp_sl_orders:
+                    order_id = order.get("orderId")
+                    order_type = order.get("type", "UNKNOWN")
+                    if order_id:
+                        try:
+                            await asyncio.to_thread(account_client.cancel_order, summary.symbol, order_id)
+                            cancelled_count += 1
+                            logger.debug(
+                                f"[{summary.id}] Cancelled existing {order_type} order {order_id} for {summary.symbol}"
+                            )
+                        except Exception as cancel_exc:
+                            # Order may already be filled or cancelled - log but continue
+                            logger.debug(
+                                f"[{summary.id}] Could not cancel {order_type} order {order_id} "
+                                f"(may already be filled/cancelled): {cancel_exc}"
+                            )
+                
+                if cancelled_count > 0:
+                    logger.info(
+                        f"[{summary.id}] ✅ Cancelled {cancelled_count} existing TP/SL order(s) for {summary.symbol}. "
+                        f"Proceeding to place new TP/SL orders."
+                    )
+        except Exception as exc:
+            # Log warning but continue - don't fail TP/SL placement if cancellation check fails
+            logger.warning(
+                f"[{summary.id}] Failed to check/cancel existing TP/SL orders for {summary.symbol}: {exc}. "
+                f"Proceeding to place new TP/SL orders anyway."
+            )
+        
         logger.info(
             f"[{summary.id}] Placing Binance native TP/SL orders: "
             f"TP={tp_price:.8f} ({tp_side}), SL={sl_price:.8f} ({sl_side})"
         )
-        
-        # Get account-specific client
-        account_id = summary.account_id or "default"
-        account_client = self.account_manager.get_account_client(account_id)
         
         tp_order_id = None
         sl_order_id = None

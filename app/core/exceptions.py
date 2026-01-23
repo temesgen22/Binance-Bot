@@ -10,7 +10,7 @@ class BinanceBotException(Exception):
         super().__init__(message)
         self.message = message
         self.details = details or {}
-    
+
     def __str__(self) -> str:
         """Return string representation, safely handling details dict."""
         return self.message

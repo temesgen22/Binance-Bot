@@ -387,7 +387,7 @@ async def get_portfolio_risk_metrics(
                 symbol = strategy_trades[0].symbol if strategy_trades else ""
                 leverage = strategy_trades[0].leverage if strategy_trades and strategy_trades[0].leverage else 1
                 strategy_id_str = "unknown"  # Default strategy_id string
-                
+            
                 # Try to get strategy info from database using UUID
                 try:
                     from uuid import UUID

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import sys
 from contextlib import asynccontextmanager
 
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 
 from fastapi.exceptions import RequestValidationError
@@ -85,7 +85,6 @@ def create_app() -> FastAPI:
     # Load .env file for other settings (database, redis, etc.)
     # Note: API accounts are now stored in database only, not in .env file
     from dotenv import load_dotenv
-    from pathlib import Path
     
     # Try multiple possible locations for .env file
     project_root = Path(__file__).parent.parent
@@ -129,7 +128,8 @@ def create_app() -> FastAPI:
                 api_secret=settings.binance_api_secret,
                 testnet=settings.binance_testnet,
             )
-            # Add to manager
+            # Add to manager directly (bypasses add_client validation for backward compatibility with demo keys)
+            # Note: This is intentional - we allow demo/placeholder keys for backward compatibility
             client_manager._clients["default"] = default_client
         except Exception as e:
             logger.error(
@@ -226,7 +226,6 @@ def create_app() -> FastAPI:
             logger.info("🚀 Starting FastAPI application lifespan...")
         except Exception as log_exc:
             # Even if logging fails, try to print to stderr as last resort
-            import sys
             print("ERROR: Failed to log lifespan start", file=sys.stderr)
             print(f"Exception: {log_exc}", file=sys.stderr)
         
@@ -254,19 +253,22 @@ def create_app() -> FastAPI:
                 
                 # Initialize async database (native async)
                 if db_init_success:
-                    async_db_init_success, async_db_connection_error = await asyncio.wait_for(
+                    async_db_init_success, async_db_error = await asyncio.wait_for(
                         init_database_async(max_retries=10),
                         timeout=120.0
                 )
                     logger.info(f"✅ Async database initialization completed: success={async_db_init_success}")
                     if not async_db_init_success:
-                        logger.warning("Async database initialization failed, but sync database is available. Some features may be slower.")
+                        logger.warning(
+                            f"Async database initialization failed, but sync database is available. "
+                            f"Some features may be slower. Error: {async_db_error}"
+                        )
                 else:
                     logger.warning("Skipping async database initialization due to sync database failure")
             except asyncio.TimeoutError:
-                logger.error("❌ Database initialization timed out after 30 seconds")
+                logger.error("❌ Database initialization timed out after 120 seconds")
                 db_init_success = False
-                db_connection_error = TimeoutError("Database initialization timed out after 30 seconds")
+                db_connection_error = TimeoutError("Database initialization timed out after 120 seconds")
             except Exception as db_exc:
                 logger.error(f"❌ Database initialization failed with exception: {db_exc}", exc_info=True)
                 db_init_success = False
@@ -294,8 +296,8 @@ def create_app() -> FastAPI:
                 # Check if tables exist, if not, try to create them
                 logger.info("🔍 Verifying database tables...")
                 try:
-                    from app.core.database import get_engine, create_tables
                     from sqlalchemy import inspect
+                    from app.core.database import get_engine, create_tables
                     engine = get_engine()
                     inspector = inspect(engine)
                     existing_tables = inspector.get_table_names()
@@ -361,15 +363,8 @@ def create_app() -> FastAPI:
             # Start Auto-Tuning Evaluator (background job to update performance_after)
             if db_init_success:
                 try:
-                    from app.services.auto_tuning_evaluator import AutoTuningEvaluator
-                    from app.services.auto_tuning_service import AutoTuningService
-                    from app.services.strategy_statistics import StrategyStatistics
-                    from app.services.database_service import DatabaseService
-                    from app.core.database import get_async_db
-                    
-                    # Create evaluator (will be started if database is available)
-                    # Note: We create a minimal evaluator here - full service requires user context
-                    # The evaluator will be created per-request in API routes
+                    # Note: Auto-tuning evaluator will be created per-request in API routes
+                    # Full service requires user context, so we don't create it here
                     logger.info("✅ Auto-tuning evaluator ready (will start on first evaluation request)")
                 except Exception as exc:
                     logger.warning(f"Auto-tuning evaluator setup skipped: {exc}")
@@ -602,7 +597,6 @@ def create_app() -> FastAPI:
                 )
         
         # If file not found, return detailed error
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=404,
             detail={
@@ -653,7 +647,6 @@ def create_app() -> FastAPI:
                 )
         
         # If file not found, return detailed error
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=404,
             detail={
@@ -677,8 +670,8 @@ def create_app() -> FastAPI:
     app.include_router(strategy_performance_router)
     app.include_router(reports_router)  # Must be before /reports GUI route
     app.include_router(market_analyzer_router)  # Market analyzer API
-    app.include_router(backtesting_router)
-    app.include_router(auto_tuning_router)  # Backtesting API
+    app.include_router(backtesting_router)  # Backtesting API
+    app.include_router(auto_tuning_router)  # Auto-tuning API
     app.include_router(risk_metrics_router)  # Risk metrics and monitoring API
     app.include_router(dashboard_router)  # Dashboard overview API
     
@@ -763,7 +756,6 @@ def create_app() -> FastAPI:
     @app.get("/register", tags=["gui"], include_in_schema=False)
     async def register_gui_redirect():
         """Redirect /register to /strategy-register for backward compatibility."""
-        from fastapi.responses import RedirectResponse
         return RedirectResponse(url="/strategy-register", status_code=301)
     
     # GUI routes for market analyzer - registered AFTER API routers

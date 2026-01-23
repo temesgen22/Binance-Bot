@@ -770,7 +770,7 @@ def get_pnl_overview(
         try:
             pnl = get_symbol_pnl(
                 symbol, 
-                account_id=account_id,
+                account_id=account_id, 
                 start_date=start_date,
                 end_date=end_date,
                 runner=runner, 

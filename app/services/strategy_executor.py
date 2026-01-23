@@ -809,8 +809,18 @@ class StrategyExecutor:
                 )
                 has_valid_orders = True  # Assume they exist if we can't verify
         
+        # ✅ CRITICAL FIX: Only place TP/SL if we're opening AND position wasn't just closed
+        # Check if position was just closed - if so, skip TP/SL placement
+        position_was_closed = is_closing_order or (exit_reason and exit_reason != "UNKNOWN")
+        
         # Check if we're opening a position (not closing)
-        is_opening = has_position and has_entry_price and not has_valid_orders
+        is_opening = (
+            has_position and 
+            has_entry_price and 
+            summary.position_side is not None and  # ✅ Ensure position_side is set
+            not has_valid_orders and
+            not position_was_closed  # ✅ Don't place TP/SL if position was just closed
+        )
         
         if is_opening:
             try:
