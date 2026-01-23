@@ -250,11 +250,12 @@ def create_completed_trades_on_position_close(
         
         # Join entry trades with allocated quantities subquery
         # Use outerjoin to include trades with no allocations (allocated_qty = 0)
+        # ✅ FIX: Use direct column access instead of func.coalesce() to avoid SQLAlchemy auto-generated names
         entry_trades_with_allocation_query = entry_trades_query.outerjoin(
             allocated_subquery,
             Trade.id == allocated_subquery.c.trade_id
         ).add_columns(
-            func.coalesce(allocated_subquery.c.allocated_qty, 0.0).label('allocated_qty')  # ✅ Explicit label
+            allocated_subquery.c.allocated_qty.label('allocated_qty')  # Direct column access, handle NULL in Python
         )
         
         # Filter for trades with remaining allocation: executed_qty - allocated_qty > 0
@@ -275,14 +276,26 @@ def create_completed_trades_on_position_close(
         
         # ✅ FIX: Build list with allocated_qty from joined results
         # Handle Row objects with explicit column access
+        # ✅ CRITICAL: Access allocated_qty by index (row[1]) instead of label to avoid SQLAlchemy auto-generated name issues
         entry_trades_with_allocation = []
         for row in entry_trades_results:
             try:
                 # Row structure: (Trade object, allocated_qty)
                 entry_trade = row[0]  # First element is the Trade object
-                allocated_qty = row.allocated_qty  # Access by label name
+                # ✅ FIX: Access by index instead of label to avoid 'coalesce_1' KeyError
+                # The add_columns() adds the allocated_qty as the second element
+                # Handle NULL values from outerjoin (NULL means no allocation = 0.0)
+                allocated_qty = row[1] if len(row) > 1 else None
                 
-                allocated_float = float(allocated_qty) if allocated_qty else 0.0
+                # Fallback: try accessing by label if index fails
+                if allocated_qty is None:
+                    try:
+                        allocated_qty = getattr(row, 'allocated_qty', None)
+                    except (KeyError, AttributeError):
+                        pass
+                
+                # Handle NULL from outerjoin (no allocation = 0.0)
+                allocated_float = float(allocated_qty) if allocated_qty is not None else 0.0
                 executed_float = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
                 remaining = executed_float - allocated_float
                 
@@ -297,7 +310,8 @@ def create_completed_trades_on_position_close(
                 # Handle column access errors gracefully
                 logger.error(
                     f"[{strategy_id}] Error processing entry trade row: {row_err}. "
-                    f"Row type: {type(row)}, Row content: {row}",
+                    f"Row type: {type(row)}, Row length: {len(row) if hasattr(row, '__len__') else 'N/A'}, "
+                    f"Row keys: {list(row.keys()) if hasattr(row, 'keys') else 'N/A'}",
                     exc_info=True
                 )
                 # Try to extract trade from row if possible
