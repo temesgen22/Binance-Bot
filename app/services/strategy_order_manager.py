@@ -1068,6 +1068,15 @@ class StrategyOrderManager:
             "tp_order_id": tp_order_id,
             "sl_order_id": sl_order_id,
         }
+        
+        # ✅ FIX: Raise exception if both TP and SL failed to place
+        # This allows the calling code to know that TP/SL placement failed
+        if not tp_order_id and not sl_order_id:
+            # Both orders failed - raise an exception with details
+            error_msg = f"Both TP and SL orders failed to place for {summary.symbol}"
+            # Try to get error details from the last exception if available
+            # (Note: We can't easily access the exception here, so we'll use a generic message)
+            raise RuntimeError(error_msg)
     
     async def cancel_tp_sl_orders(self, summary: StrategySummary) -> None:
         """Cancel existing TP/SL orders when position is closed.
@@ -1126,30 +1135,52 @@ class StrategyOrderManager:
         except ImportError:
             RetryError = None
         
-        # Extract underlying error from RetryError if present
+        # ✅ FIX: Safely extract underlying error to avoid KeyError when accessing attributes
         underlying_error = exc
-        if RetryError and isinstance(exc, RetryError):
-            if hasattr(exc, 'last_attempt') and exc.last_attempt:
-                underlying_error = exc.last_attempt.exception()
+        try:
+            if RetryError and isinstance(exc, RetryError):
+                if hasattr(exc, 'last_attempt') and exc.last_attempt:
+                    underlying_error = exc.last_attempt.exception()
+        except Exception:
+            # If extraction fails, use original exception
+            underlying_error = exc
         
-        # Get error details
-        error_details = {
-            "order_type": order_type,
-            "error_type": type(underlying_error).__name__,
-            "error_message": str(underlying_error),
-            "symbol": summary.symbol,
-            "stop_price": stop_price,
-            "entry_price": summary.entry_price,
-            "current_price": summary.current_price,
-            "position_side": summary.position_side,
-            "position_size": summary.position_size,
-        }
-        
-        # Extract Binance error code if available
-        if hasattr(underlying_error, 'error_code'):
-            error_details["binance_error_code"] = underlying_error.error_code
-        if hasattr(underlying_error, 'status_code'):
-            error_details["status_code"] = underlying_error.status_code
+        # ✅ FIX: Safely build error details dictionary, handling missing attributes
+        try:
+            error_details = {
+                "order_type": order_type,
+                "error_type": type(underlying_error).__name__,
+                "error_message": str(underlying_error),
+                "symbol": getattr(summary, 'symbol', 'UNKNOWN'),
+                "stop_price": stop_price,
+            }
+            
+            # Safely access summary attributes that might not exist
+            if hasattr(summary, 'entry_price'):
+                error_details["entry_price"] = summary.entry_price
+            if hasattr(summary, 'current_price'):
+                error_details["current_price"] = summary.current_price
+            if hasattr(summary, 'position_side'):
+                error_details["position_side"] = summary.position_side
+            if hasattr(summary, 'position_size'):
+                error_details["position_size"] = summary.position_size
+            
+            # Extract Binance error code if available
+            if hasattr(underlying_error, 'error_code'):
+                error_details["binance_error_code"] = underlying_error.error_code
+            if hasattr(underlying_error, 'status_code'):
+                error_details["status_code"] = underlying_error.status_code
+        except Exception as detail_err:
+            # ✅ FIX: If building error_details fails, return minimal safe structure
+            logger.warning(
+                f"Failed to extract error details: {detail_err}. Using minimal error info."
+            )
+            error_details = {
+                "order_type": order_type,
+                "error_type": type(underlying_error).__name__,
+                "error_message": str(underlying_error),
+                "extraction_error": str(detail_err),
+            }
         
         return error_details
     

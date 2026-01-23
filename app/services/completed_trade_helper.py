@@ -236,66 +236,43 @@ def create_completed_trades_on_position_close(
                 f"This may cause incorrect matching in hedge mode."
             )
         
-        # ✅ OPTIMIZATION: Use subquery join to filter out fully allocated trades at database level
-        # This is more performant than individual queries per trade_id
-        # ✅ FIX: Use explicit column labels to avoid SQLAlchemy auto-generated column name issues (coalesce_1, etc.)
-        
-        # Create subquery for allocated quantities per trade_id
-        allocated_subquery = db.query(
-            CompletedTradeOrder.trade_id.label('trade_id'),  # ✅ Explicit label
-            func.coalesce(func.sum(CompletedTradeOrder.quantity), 0.0).label('allocated_qty')  # ✅ Explicit label with coalesce
-        ).filter(
-            CompletedTradeOrder.order_role == "ENTRY"
-        ).group_by(CompletedTradeOrder.trade_id).subquery()
-        
-        # Join entry trades with allocated quantities subquery
-        # Use outerjoin to include trades with no allocations (allocated_qty = 0)
-        # ✅ FIX: Use direct column access instead of func.coalesce() to avoid SQLAlchemy auto-generated names
-        entry_trades_with_allocation_query = entry_trades_query.outerjoin(
-            allocated_subquery,
-            Trade.id == allocated_subquery.c.trade_id
-        ).add_columns(
-            allocated_subquery.c.allocated_qty.label('allocated_qty')  # Direct column access, handle NULL in Python
-        )
-        
-        # Filter for trades with remaining allocation: executed_qty - allocated_qty > 0
-        # Calculate remaining in the query using CASE or filter after
-        # For simplicity and to avoid complex SQL, we'll filter in Python after fetching
-        # But we can still use the join to get allocated_qty efficiently
+        # ✅ FIX: Query allocated quantities separately to avoid SQLAlchemy column naming issues
+        # This approach is more reliable than using subqueries with func.coalesce()
+        # which can cause 'coalesce_1' KeyError when SQLAlchemy generates internal column names
         
         # ✅ FIX: Query entry trades with row locking (FOR UPDATE SKIP LOCKED)
-        # Get all potential entry trades with their allocated quantities
-        entry_trades_results = entry_trades_with_allocation_query.with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
+        entry_trades = entry_trades_query.with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
         
-        if not entry_trades_results:
+        if not entry_trades:
             logger.debug(
-                f"No entry trades with remaining allocation found for strategy {strategy_id} "
+                f"No entry trades found for strategy {strategy_id} "
                 f"to match with exit trade {exit_order_id}"
             )
             return []
         
-        # ✅ FIX: Build list with allocated_qty from joined results
-        # Handle Row objects with explicit column access
-        # ✅ CRITICAL: Access allocated_qty by index (row[1]) instead of label to avoid SQLAlchemy auto-generated name issues
+        # Get all trade IDs for batch query
+        trade_ids = [trade.id for trade in entry_trades]
+        
+        # Query allocated quantities for all entry trades in one query
+        # ✅ FIX: Use simple aggregation without func.coalesce() in subquery to avoid naming issues
+        allocated_results = db.query(
+            CompletedTradeOrder.trade_id,
+            func.sum(CompletedTradeOrder.quantity).label('allocated_qty')
+        ).filter(
+            CompletedTradeOrder.trade_id.in_(trade_ids),
+            CompletedTradeOrder.order_role == "ENTRY"
+        ).group_by(CompletedTradeOrder.trade_id).all()
+        
+        # Build dictionary for O(1) lookup
+        allocated_map = {trade_id: float(qty) for trade_id, qty in allocated_results if qty is not None}
+        
+        # ✅ FIX: Build list with allocated_qty from separate query results
+        # This avoids SQLAlchemy Row object column name resolution issues
         entry_trades_with_allocation = []
-        for row in entry_trades_results:
+        for entry_trade in entry_trades:
             try:
-                # Row structure: (Trade object, allocated_qty)
-                entry_trade = row[0]  # First element is the Trade object
-                # ✅ FIX: Access by index instead of label to avoid 'coalesce_1' KeyError
-                # The add_columns() adds the allocated_qty as the second element
-                # Handle NULL values from outerjoin (NULL means no allocation = 0.0)
-                allocated_qty = row[1] if len(row) > 1 else None
-                
-                # Fallback: try accessing by label if index fails
-                if allocated_qty is None:
-                    try:
-                        allocated_qty = getattr(row, 'allocated_qty', None)
-                    except (KeyError, AttributeError):
-                        pass
-                
-                # Handle NULL from outerjoin (no allocation = 0.0)
-                allocated_float = float(allocated_qty) if allocated_qty is not None else 0.0
+                # Get allocated quantity from map (default to 0.0 if not found)
+                allocated_float = allocated_map.get(entry_trade.id, 0.0)
                 executed_float = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
                 remaining = executed_float - allocated_float
                 
@@ -306,31 +283,12 @@ def create_completed_trades_on_position_close(
                         "remaining": remaining,
                         "allocated": allocated_float,
                     })
-            except (KeyError, IndexError, AttributeError) as row_err:
-                # Handle column access errors gracefully
+            except Exception as row_err:
+                # Handle any errors gracefully
                 logger.error(
-                    f"[{strategy_id}] Error processing entry trade row: {row_err}. "
-                    f"Row type: {type(row)}, Row length: {len(row) if hasattr(row, '__len__') else 'N/A'}, "
-                    f"Row keys: {list(row.keys()) if hasattr(row, 'keys') else 'N/A'}",
+                    f"[{strategy_id}] Error processing entry trade {entry_trade.id}: {row_err}",
                     exc_info=True
                 )
-                # Try to extract trade from row if possible
-                if hasattr(row, '__getitem__'):
-                    try:
-                        entry_trade = row[0]
-                        logger.warning(
-                            f"[{strategy_id}] Attempting fallback: using entry_trade {entry_trade.id} "
-                            f"with allocated_qty=0 (assuming no allocation)"
-                        )
-                        executed_float = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
-                        if executed_float > 0.0001:
-                            entry_trades_with_allocation.append({
-                                "trade": entry_trade,
-                                "remaining": executed_float,
-                                "allocated": 0.0,
-                            })
-                    except Exception:
-                        pass
                 # Continue processing other trades
                 continue
         
