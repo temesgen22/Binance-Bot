@@ -133,17 +133,33 @@ class StrategyAccountManager:
                         account_config = account_service.get_account(user_id_to_use, account_id)
                     
                     if account_config:
-                        # Validate API keys before adding
-                        if not account_config.api_key or not account_config.api_secret:
+                        # For paper trading accounts, API keys are optional
+                        # For non-paper trading accounts, validate API keys before adding
+                        if not account_config.paper_trading and (not account_config.api_key or not account_config.api_secret):
                             logger.error(
                                 f"❌ Account '{account_id}' loaded but has empty API key or secret. "
                                 f"API key present: {bool(account_config.api_key)}, Secret present: {bool(account_config.api_secret)}. "
                                 f"This may indicate a decryption failure."
                             )
                         else:
+                            # Create balance persistence callback for paper trading accounts
+                            balance_callback = None
+                            if account_config.paper_trading and db:
+                                from app.services.database_service import DatabaseService
+                                db_service = DatabaseService(db)
+                                
+                                def persist_balance(acc_id: str, balance: float) -> None:
+                                    """Callback to persist paper trading balance to database."""
+                                    try:
+                                        db_service.update_paper_balance_by_account_id(acc_id, balance)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to persist paper balance for account {acc_id}: {e}")
+                                
+                                balance_callback = persist_balance
+                            
                             # Add client to manager
                             try:
-                                self.client_manager.add_client(account_id, account_config)
+                                self.client_manager.add_client(account_id, account_config, balance_callback)
                                 logger.info(f"✅ Loaded account '{account_id}' from database and added to client manager")
                                 loaded_client = self.client_manager.get_client(account_id)
                                 if loaded_client:

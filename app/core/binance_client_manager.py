@@ -1,10 +1,11 @@
 """Manager for multiple Binance client instances (one per account)."""
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, Callable
 from loguru import logger
 
 from app.core.my_binance_client import BinanceClient
+from app.core.paper_binance_client import PaperBinanceClient
 from app.core.config import Settings, BinanceAccountConfig, get_settings
 
 
@@ -18,7 +19,7 @@ class BinanceClientManager:
             settings: Settings instance (defaults to get_settings())
         """
         self.settings = settings or get_settings()
-        self._clients: Dict[str, BinanceClient] = {}
+        self._clients: Dict[str, Union[BinanceClient, PaperBinanceClient]] = {}
         self._accounts: Dict[str, BinanceAccountConfig] = {}
         self._initialize_clients()
     
@@ -33,17 +34,35 @@ class BinanceClientManager:
         self._clients = {}
         logger.debug("BinanceClientManager initialized - accounts will be loaded from database when needed")
     
-    def add_client(self, account_id: str, account_config: BinanceAccountConfig) -> None:
+    def add_client(self, account_id: str, account_config: BinanceAccountConfig, balance_persistence_callback: Optional[Callable[[str, float], None]] = None) -> None:
         """Add a client for an account (typically loaded from database).
         
         Args:
             account_id: Account identifier
             account_config: Account configuration
+            balance_persistence_callback: Optional callback(account_id: str, balance: float) for paper trading balance persistence
             
         Raises:
-            ValueError: If API keys are invalid or missing
+            ValueError: If API keys are invalid or missing (for non-paper trading accounts)
         """
-        # Validate API keys before creating client
+        # ✅ CRITICAL: Skip API key validation for paper trading accounts
+        if account_config.paper_trading:
+            # Paper trading: Create PaperBinanceClient (no API keys needed)
+            initial_balance = account_config.paper_balance if account_config.paper_balance else 10000.0
+            client = PaperBinanceClient(
+                account_id=account_id,
+                initial_balance=initial_balance,
+                balance_persistence_callback=balance_persistence_callback
+            )
+            self._clients[account_id.lower()] = client
+            self._accounts[account_id.lower()] = account_config
+            logger.info(
+                f"✅ Added PaperBinanceClient for account '{account_id}' "
+                f"({account_config.name}) - Initial Balance: ${initial_balance:.2f}"
+            )
+            return
+        
+        # Non-paper trading: Validate API keys before creating client
         if not account_config.api_key or not account_config.api_secret:
             error_msg = f"Account '{account_id}' has empty API key or secret"
             logger.error(error_msg)
@@ -77,19 +96,19 @@ class BinanceClientManager:
             logger.error(error_msg, exc_info=True)
             raise ValueError(error_msg) from e
     
-    def get_client(self, account_id: str) -> Optional[BinanceClient]:
+    def get_client(self, account_id: str) -> Optional[Union[BinanceClient, PaperBinanceClient]]:
         """Get Binance client for a specific account.
         
         Args:
             account_id: The account identifier
             
         Returns:
-            BinanceClient instance if found, None otherwise
+            BinanceClient or PaperBinanceClient instance if found, None otherwise
         """
         account_id_lower = account_id.lower()
         return self._clients.get(account_id_lower)
     
-    def get_default_client(self) -> Optional[BinanceClient]:
+    def get_default_client(self) -> Optional[Union[BinanceClient, PaperBinanceClient]]:
         """Get the default Binance client (account_id='default').
         
         Returns:

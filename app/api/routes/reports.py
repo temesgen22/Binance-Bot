@@ -141,13 +141,31 @@ def _get_completed_trades_from_database(
         List of TradeReport objects
     """
     try:
-        from app.models.db_models import CompletedTrade
+        from app.models.db_models import CompletedTrade, Strategy, Account
+        
+        # Check if strategy is using paper trading account
+        # If so, include paper trades; otherwise exclude them
+        strategy = db_service.db.query(Strategy).filter(Strategy.id == strategy_uuid).first()
+        include_paper_trades = False
+        
+        if strategy and strategy.account_id:
+            account = db_service.db.query(Account).filter(Account.id == strategy.account_id).first()
+            if account and account.paper_trading:
+                include_paper_trades = True
         
         # Build query
         query = db_service.db.query(CompletedTrade).filter(
             CompletedTrade.user_id == user_id,
             CompletedTrade.strategy_id == strategy_uuid,
         )
+        
+        # Filter paper trades based on strategy's account type
+        if include_paper_trades:
+            # Include only paper trades for paper trading strategies
+            query = query.filter(CompletedTrade.paper_trading == True)
+        else:
+            # Exclude paper trades for live trading strategies
+            query = query.filter(CompletedTrade.paper_trading == False)
         
         # Apply date filters
         if start_datetime:

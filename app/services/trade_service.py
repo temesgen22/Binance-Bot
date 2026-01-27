@@ -169,7 +169,8 @@ class TradeService:
         self,
         user_id: UUID,
         strategy_id: UUID,
-        order: OrderResponse
+        order: OrderResponse,
+        position_instance_id: Optional[UUID] = None  # Pass from caller if known
     ) -> DBTrade:
         """Save a trade to database and cache in Redis.
         
@@ -190,8 +191,38 @@ class TradeService:
         Raises:
             Exception: If database save fails after retries (transaction will rollback)
         """
+        # Get strategy from database to access account and position_instance_id
+        db_strategy = self.db_service.db.query(Strategy).filter(
+            Strategy.id == strategy_id
+        ).first()
+        
+        if not db_strategy:
+            logger.warning(f"Strategy {strategy_id} not found")
+            position_instance_id = None
+            paper_trading = False
+        else:
+            # Get position_instance_id from strategy if not provided
+            if position_instance_id is None:
+                position_instance_id = db_strategy.position_instance_id
+            
+            # ✅ NEW: Detect paper_trading from account
+            paper_trading = False
+            if db_strategy.account_id:
+                from app.models.db_models import Account
+                account = self.db_service.db.query(Account).filter(
+                    Account.id == db_strategy.account_id
+                ).first()
+                if account:
+                    paper_trading = account.paper_trading
+        
         # Convert OrderResponse to trade dict
         trade_data = self._order_response_to_trade_dict(order, strategy_id, user_id)
+        
+        # ✅ CRITICAL: Set position_instance_id on trade
+        trade_data["position_instance_id"] = position_instance_id
+        
+        # ✅ NEW: Set paper_trading flag on trade
+        trade_data["paper_trading"] = paper_trading
         
         # Check for existing trade first (idempotent update)
         existing_trade = self.db_service.db.query(DBTrade).filter(
@@ -262,6 +293,19 @@ class TradeService:
                         existing_trade.position_side = "LONG"  # BUY opens LONG
                     elif order.side == "SELL":
                         existing_trade.position_side = "SHORT"  # SELL opens SHORT
+            
+            # ✅ CRITICAL FIX: Only set position_instance_id if NULL (first write wins)
+            # This prevents accidental corruption if later code passes wrong ID
+            if existing_trade.position_instance_id is None and position_instance_id is not None:
+                existing_trade.position_instance_id = position_instance_id
+            elif existing_trade.position_instance_id is not None and position_instance_id is not None:
+                # Optional: Log warning if IDs don't match (indicates bug in caller)
+                if existing_trade.position_instance_id != position_instance_id:
+                    logger.warning(
+                        f"Trade {existing_trade.id} already has position_instance_id "
+                        f"{existing_trade.position_instance_id}, ignoring new value {position_instance_id}. "
+                        f"This may indicate a bug in the caller."
+                    )
             
             # ✅ SET default order_type if missing
             if not existing_trade.order_type:

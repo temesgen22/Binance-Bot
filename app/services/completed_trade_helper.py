@@ -236,6 +236,34 @@ def create_completed_trades_on_position_close(
                 f"This may cause incorrect matching in hedge mode."
             )
         
+        # ✅ CRITICAL FIX: Handle position_instance_id with backward compatibility
+        if exit_trade.position_instance_id is not None:
+            # New trades: match only within same position_instance_id
+            entry_trades_query = entry_trades_query.filter(
+                Trade.position_instance_id == exit_trade.position_instance_id
+            )
+        else:
+            # Old trades (NULL): match all with NULL position_instance_id
+            # This maintains backward compatibility
+            entry_trades_query = entry_trades_query.filter(
+                Trade.position_instance_id.is_(None)
+            )
+        
+        # ✅ CRITICAL SAFETY: Ensure entry trades are before exit trade timestamp
+        # This prevents weirdness if timestamps arrive out of order
+        # Entry trades must have timestamp <= exit trade timestamp
+        if exit_trade.timestamp:
+            entry_trades_query = entry_trades_query.filter(
+                Trade.timestamp <= exit_trade.timestamp
+            )
+        else:
+            # If exit trade has no timestamp, log warning but don't filter
+            # This should rarely happen, but we handle it gracefully
+            logger.warning(
+                f"[{strategy_id}] Exit trade {exit_trade.id} has no timestamp. "
+                f"Cannot enforce timestamp ordering constraint. This may indicate a data issue."
+            )
+        
         # ✅ FIX: Query allocated quantities separately to avoid SQLAlchemy column naming issues
         # This approach is more reliable than using subqueries with func.coalesce()
         # which can cause 'coalesce_1' KeyError when SQLAlchemy generates internal column names
@@ -244,9 +272,22 @@ def create_completed_trades_on_position_close(
         entry_trades = entry_trades_query.with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
         
         if not entry_trades:
+            # Log detailed query info for debugging
+            logger.warning(
+                f"[{strategy_id}] ❌ No entry trades found for strategy to match with exit trade {exit_order_id}. "
+                f"Query criteria: symbol={exit_trade.symbol}, entry_side={entry_side}, "
+                f"position_side={position_side}, position_instance_id={exit_trade.position_instance_id}, "
+                f"strategy_uuid={strategy_uuid}. "
+                f"This may indicate missing entry trades or incorrect matching criteria."
+            )
+            # Try to find any trades for this strategy/symbol to help debug
+            all_trades_for_symbol = db.query(Trade).filter(
+                Trade.strategy_id == strategy_uuid,
+                Trade.symbol == exit_trade.symbol
+            ).all()
             logger.debug(
-                f"No entry trades found for strategy {strategy_id} "
-                f"to match with exit trade {exit_order_id}"
+                f"[{strategy_id}] Found {len(all_trades_for_symbol)} total trades for symbol {exit_trade.symbol}: "
+                f"{[(t.order_id, t.side, t.position_side, t.status) for t in all_trades_for_symbol[:10]]}"
             )
             return []
         
@@ -293,9 +334,22 @@ def create_completed_trades_on_position_close(
                 continue
         
         if not entry_trades_with_allocation:
-            logger.debug(
-                f"No entry trades with remaining allocation for strategy {strategy_id}"
+            logger.warning(
+                f"[{strategy_id}] ❌ No entry trades with remaining allocation for strategy. "
+                f"Found {len(entry_trades)} entry trades, but all are fully allocated. "
+                f"Exit order: {exit_order_id}, Exit quantity: {exit_quantity}, "
+                f"Symbol: {exit_trade.symbol}, Position side: {position_side}. "
+                f"This may indicate duplicate completed trade creation or allocation mismatch."
             )
+            # Log allocation details for debugging
+            for entry_trade in entry_trades[:5]:  # Log first 5 for debugging
+                allocated = allocated_map.get(entry_trade.id, 0.0)
+                executed = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
+                remaining = executed - allocated
+                logger.debug(
+                    f"[{strategy_id}] Entry trade {entry_trade.order_id}: "
+                    f"executed={executed}, allocated={allocated}, remaining={remaining}"
+                )
             return []
         
         # ✅ FIX: Fetch funding fees ONCE per exit (not per entry/exit pair)
@@ -558,12 +612,19 @@ def create_completed_trades_on_position_close(
         
         # Log completion metrics
         duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-        logger.info(
-            f"[{strategy_id}] ✅ Completed trade creation finished: "
-            f"created={len(completed_trade_ids)} completed trades, "
-            f"duration={duration_ms:.2f}ms, "
-            f"exit_order_id={exit_order_id}"
-        )
+        if completed_trade_ids:
+            logger.info(
+                f"[{strategy_id}] ✅ Completed trade creation finished: "
+                f"created={len(completed_trade_ids)} completed trades, "
+                f"duration={duration_ms:.2f}ms, "
+                f"exit_order_id={exit_order_id}"
+            )
+        else:
+            logger.warning(
+                f"[{strategy_id}] ⚠️ Completed trade creation finished with NO trades created: "
+                f"duration={duration_ms:.2f}ms, exit_order_id={exit_order_id}. "
+                f"This may indicate a data issue - check logs above for details."
+            )
         
         return completed_trade_ids
         

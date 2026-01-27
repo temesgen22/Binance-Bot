@@ -109,6 +109,18 @@ class CompletedTradeService:
                 f"does not match exit trade {exit_trade_id} symbol={exit_trade.symbol}"
             )
         
+        # ✅ NEW: Validate paper_trading flag consistency
+        # Both trades must have the same paper_trading flag
+        if entry_trade.paper_trading != exit_trade.paper_trading:
+            raise ValueError(
+                f"Paper trading flag mismatch: entry_trade.paper_trading={entry_trade.paper_trading}, "
+                f"exit_trade.paper_trading={exit_trade.paper_trading}. "
+                f"Both trades must have the same paper_trading flag."
+            )
+        
+        # Store paper_trading flag for use in CompletedTrade creation
+        paper_trading = entry_trade.paper_trading
+        
         # 3. Check partial fill consistency (trades table manages this)
         if entry_trade.orig_qty and entry_trade.remaining_qty and entry_trade.remaining_qty > 0:
             logger.debug(f"Entry trade {entry_trade_id} has remaining_qty={entry_trade.remaining_qty} (partial fill)")
@@ -266,6 +278,8 @@ class CompletedTradeService:
                 if entry_trade.notional_value is not None 
                 else (float(entry_trade.avg_price or entry_trade.price) * quantity)
             ),
+            position_instance_id=entry_trade.position_instance_id,  # ✅ Copy from entry trade
+            paper_trading=paper_trading,  # ✅ NEW: Propagate from entry trade
         )
         self.db.add(completed_trade)
         self.db.flush()  # Get the ID

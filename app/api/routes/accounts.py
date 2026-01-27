@@ -31,12 +31,14 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 class CreateAccountRequest(BaseModel):
     """Request to create a new exchange account."""
     account_id: str = Field(..., min_length=1, max_length=50, description="Account identifier (unique per user)")
-    api_key: str = Field(..., description="Exchange API key")
-    api_secret: str = Field(..., description="Exchange API secret")
+    api_key: Optional[str] = Field(None, description="Exchange API key (required for live trading, optional for paper trading)")
+    api_secret: Optional[str] = Field(None, description="Exchange API secret (required for live trading, optional for paper trading)")
     name: Optional[str] = Field(None, max_length=255, description="Account display name")
     exchange_platform: str = Field("binance", description="Exchange platform name (binance, bybit, etc.)")
     testnet: bool = Field(True, description="Whether this is a testnet account")
     is_default: bool = Field(False, description="Set as default account for user")
+    paper_trading: bool = Field(False, description="Whether this is a paper trading account (simulated trading)")
+    paper_balance: Optional[float] = Field(None, description="Initial virtual balance for paper trading (default: 10000 USDT)")
 
 
 class UpdateAccountRequest(BaseModel):
@@ -46,6 +48,7 @@ class UpdateAccountRequest(BaseModel):
     testnet: Optional[bool] = Field(None, description="Whether this is a testnet account")
     is_default: Optional[bool] = Field(None, description="Set as default account")
     is_active: Optional[bool] = Field(None, description="Activate/deactivate account")
+    paper_balance: Optional[float] = Field(None, description="Update virtual balance for paper trading account")
 
 
 class AccountResponse(BaseModel):
@@ -56,11 +59,18 @@ class AccountResponse(BaseModel):
     testnet: bool
     is_default: bool
     is_active: bool
+    paper_trading: bool
+    paper_balance: Optional[float]
     created_at: str
 
     @classmethod
     def from_account(cls, account) -> "AccountResponse":
         """Create AccountResponse from Account model."""
+        # Handle paper_trading: ensure it's always a boolean (default False if None)
+        paper_trading = getattr(account, 'paper_trading', False)
+        if paper_trading is None:
+            paper_trading = False
+        
         return cls(
             account_id=account.account_id,
             name=account.name,
@@ -68,6 +78,8 @@ class AccountResponse(BaseModel):
             testnet=account.testnet,
             is_default=account.is_default,
             is_active=account.is_active,
+            paper_trading=paper_trading,
+            paper_balance=float(account.paper_balance) if hasattr(account, 'paper_balance') and account.paper_balance else None,
             created_at=account.created_at.isoformat() if account.created_at else ""
         )
 
@@ -188,7 +200,9 @@ async def create_account(
             name=request_data.name,
             exchange_platform=request_data.exchange_platform,
             testnet=request_data.testnet,
-            is_default=request_data.is_default
+            is_default=request_data.is_default,
+            paper_trading=request_data.paper_trading,
+            paper_balance=request_data.paper_balance
         )
         
         # Get the created account from database (async)
@@ -289,6 +303,8 @@ async def update_account(
             updates["is_default"] = request_data.is_default
         if request_data.is_active is not None:
             updates["is_active"] = request_data.is_active
+        if request_data.paper_balance is not None:
+            updates["paper_balance"] = request_data.paper_balance
         
         if not updates:
             raise HTTPException(

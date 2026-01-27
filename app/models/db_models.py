@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean, BigInteger, CheckConstraint, Column, DateTime, Enum, ForeignKey,
-    Integer, Numeric, String, Text, JSON, Index, func, Table, UniqueConstraint
+    Integer, Numeric, String, Text, JSON, Index, func, Table, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy.orm import relationship, declarative_base
@@ -184,6 +184,8 @@ class Account(Base):
     api_key_encrypted = Column(Text, nullable=False)
     api_secret_encrypted = Column(Text, nullable=False)
     testnet = Column(Boolean, nullable=False, default=True)
+    paper_trading = Column(Boolean, nullable=False, default=False, index=True)  # Paper trading mode (no real API calls)
+    paper_balance = Column(Numeric(20, 8), nullable=True)  # Virtual balance for paper trading accounts
     is_active = Column(Boolean, nullable=False, default=True, index=True)
     is_default = Column(Boolean, nullable=False, default=False)  # Default account for user
     
@@ -236,6 +238,9 @@ class Strategy(Base):
     position_size = Column(Numeric(20, 8))
     position_side = Column(String(10), index=True)
     unrealized_pnl = Column(Numeric(20, 8))
+    
+    # Position Instance ID (for isolating position cycles)
+    position_instance_id = Column(PGUUID(as_uuid=True), nullable=True, index=True)
 
     # Metadata
     meta = Column(JSONB, default=lambda: {})  # Use lambda to avoid shared mutable default
@@ -270,6 +275,8 @@ class Strategy(Base):
         Index("idx_strategies_params", "params", postgresql_using="gin"),
         # Ensure strategy_id is unique per user
         Index("idx_strategies_user_strategy_id", "user_id", "strategy_id", unique=True),
+        # Index for position_instance_id lookups
+        Index("idx_strategies_pos_instance", "position_instance_id"),
     )
 
 
@@ -316,6 +323,12 @@ class Trade(Base):
 
     # Strategy Context
     exit_reason = Column(String(50), index=True)
+    
+    # Position Instance ID (for isolating position cycles)
+    position_instance_id = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    
+    # Paper Trading Flag
+    paper_trading = Column(Boolean, nullable=False, default=False, index=True)  # Paper trading trade flag
 
     # Timestamps
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -347,6 +360,13 @@ class Trade(Base):
         Index("idx_trades_user_timestamp", "user_id", "timestamp", postgresql_ops={"timestamp": "DESC"}),
         # Prevent duplicate inserts from WebSocket retries
         Index("idx_trades_strategy_order_id", "strategy_id", "order_id", unique=True),
+        # Index for position_instance_id matching queries
+        Index("idx_trades_pos_instance", "strategy_id", "symbol", "position_side", "position_instance_id", "timestamp"),
+        # Separate index for NULL position_side (better performance for old trades)
+        Index("idx_trades_pos_instance_null", "strategy_id", "symbol", "position_instance_id", "timestamp", 
+              postgresql_where=text("position_side IS NULL")),
+        # Index for paper trading filtering
+        Index("idx_trades_paper_trading", "paper_trading", postgresql_where=text("paper_trading = false")),
     )
 
 
@@ -1083,6 +1103,12 @@ class CompletedTrade(Base):
     margin_type = Column(String(20))
     notional_value = Column(Numeric(20, 8))
     
+    # Position Instance ID (for isolating position cycles)
+    position_instance_id = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    
+    # Paper Trading Flag
+    paper_trading = Column(Boolean, nullable=False, default=False, index=True)  # Paper trading completed trade flag
+    
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     
@@ -1098,6 +1124,10 @@ class CompletedTrade(Base):
         Index("idx_completed_trades_exit_time", "exit_time"),
         Index("idx_completed_trades_symbol", "symbol"),
         Index("idx_completed_trades_account", "account_id"),
+        # Index for position_instance_id tracking
+        Index("idx_completed_trades_pos_instance", "strategy_id", "symbol", "position_instance_id", "exit_time"),
+        # Index for paper trading filtering
+        Index("idx_completed_trades_paper_trading", "paper_trading", postgresql_where=text("paper_trading = false")),
     )
 
 

@@ -652,6 +652,48 @@ class StrategyOrderManager:
                 ) from exc
             raise
         
+        # CRITICAL FIX: For reduce_only orders, verify position still exists right before execution
+        # This prevents race conditions where multiple strategies try to close the same position
+        if reduce_only_override:
+            try:
+                # Re-check position state from Binance right before executing reduce_only order
+                position_info = await asyncio.to_thread(
+                    account_client.futures_position_information,
+                    symbol=signal.symbol
+                )
+                
+                if position_info:
+                    position_amt = float(position_info.get("positionAmt", 0))
+                    # If position is already closed (positionAmt == 0), skip order execution
+                    if abs(position_amt) == 0:
+                        logger.warning(
+                            f"[{summary.id}] Position for {signal.symbol} already closed (positionAmt={position_amt}). "
+                            f"Skipping reduce_only order execution to avoid 'ReduceOnly Order is rejected' error."
+                        )
+                        # Return a mock order response indicating the position was already closed
+                        from app.models.order import OrderResponse
+                        from datetime import datetime, timezone
+                        return OrderResponse(
+                            order_id=0,  # No order was placed
+                            symbol=signal.symbol,
+                            side=signal.action,
+                            status="CANCELLED",
+                            executed_qty=0.0,
+                            avg_price=0.0,
+                            commission=0.0,
+                            timestamp=datetime.now(timezone.utc),
+                            leverage=None,
+                            notional=0.0,
+                            initial_margin=None,
+                            margin_type="CROSSED"
+                        )
+            except Exception as pos_check_exc:
+                # Log warning but continue - if position check fails, let Binance reject the order
+                logger.warning(
+                    f"[{summary.id}] Failed to verify position before reduce_only order: {pos_check_exc}. "
+                    f"Proceeding with order execution (Binance will reject if position doesn't exist)."
+                )
+        
         try:
             # Pass strategy_id for idempotency tracking
             order_response = account_executor.execute(
@@ -673,7 +715,31 @@ class StrategyOrderManager:
                 await portfolio_risk_manager.release_reservation(
                     account_id, summary.id
                 )
-            # Log and re-raise API errors
+            
+            # CRITICAL FIX: Handle "ReduceOnly Order is rejected" error gracefully
+            # This happens when position was already closed by another strategy/order
+            error_msg = str(exc).lower()
+            error_code = getattr(exc, 'error_code', None)
+            is_reduce_only_rejected = (
+                reduce_only_override and
+                (error_code == -2022 or 
+                 "reduceonly" in error_msg or 
+                 "reduce-only" in error_msg or
+                 "reduce only" in error_msg)
+            )
+            
+            if is_reduce_only_rejected:
+                # Position was already closed - this is expected in race conditions
+                # Log as warning and return None (position already closed, goal achieved)
+                logger.warning(
+                    f"[{summary.id}] Reduce-only order rejected for {signal.symbol}: "
+                    f"Position already closed (likely closed by another strategy/order). "
+                    f"This is expected in race conditions. Strategy will continue."
+                )
+                # Return None to indicate no order was executed (position already closed)
+                return None
+            
+            # Log and re-raise other API errors
             logger.error(
                 f"[{summary.id}] Order execution failed: {exc.message if hasattr(exc, 'message') else exc}"
             )
@@ -1170,6 +1236,15 @@ class StrategyOrderManager:
                 error_details["binance_error_code"] = underlying_error.error_code
             if hasattr(underlying_error, 'status_code'):
                 error_details["status_code"] = underlying_error.status_code
+        except Exception:
+            # Fallback if building error_details fails
+            error_details = {
+                "order_type": order_type,
+                "error_type": type(underlying_error).__name__,
+                "error_message": str(underlying_error),
+                "symbol": "UNKNOWN",
+                "stop_price": None,
+            }
         except Exception as detail_err:
             # ✅ FIX: If building error_details fails, return minimal safe structure
             logger.warning(

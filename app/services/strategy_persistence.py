@@ -3,8 +3,10 @@
 import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Optional
+from uuid import UUID, uuid4
 
 from loguru import logger
+from sqlalchemy.exc import OperationalError
 
 from app.core.redis_storage import RedisStorage
 from app.models.order import OrderResponse
@@ -47,6 +49,76 @@ class StrategyPersistence:
         self._trades = trades or {}
         self.account_manager = account_manager
         self.order_manager = order_manager
+    
+    @staticmethod
+    def _get_or_generate_position_instance_id(
+        db,
+        strategy_uuid: UUID,
+        is_opening_new_position: bool,
+        current_position_size: float
+    ) -> Optional[UUID]:
+        """Get or generate position_instance_id atomically.
+        
+        CRITICAL: Uses row lock to prevent race conditions.
+        
+        Args:
+            db: Database session
+            strategy_uuid: Strategy UUID
+            is_opening_new_position: True if this order opens a new position
+            current_position_size: Current position size after order
+        
+        Returns:
+            position_instance_id (UUID) or None if position is flat
+        
+        Raises:
+            ValueError: If lock cannot be obtained (caller should retry)
+        """
+        from app.models.db_models import Strategy
+        
+        try:
+            # ✅ CRITICAL: Lock strategy row to prevent concurrent ID generation
+            # Use nowait=True to fail fast if lock is held (prevents deadlocks)
+            # This matches the pattern used in completed_trade_service.py
+            db_strategy = db.query(Strategy).filter(
+                Strategy.id == strategy_uuid
+            ).with_for_update(nowait=True).first()
+        except OperationalError as e:
+            # ✅ CRITICAL FIX: Don't fallback to reading without lock
+            # If we can't get the lock, we can't safely generate ID (race condition risk)
+            # Raise error - caller should retry (similar to "allocation in progress" logic)
+            error_str = str(e).lower()
+            if "could not obtain lock" in error_str or "deadlock" in error_str:
+                raise ValueError(
+                    f"position_instance_id generation in progress for strategy {strategy_uuid}, retry"
+                ) from e
+            raise  # Re-raise other OperationalErrors
+        
+        if not db_strategy:
+            logger.error(f"Strategy {strategy_uuid} not found")
+            return None
+        
+        # ✅ CRITICAL FIX: Don't clear ID here - exit trades need it before position closes
+        # If position is flat, return existing ID (don't clear yet)
+        # ID will be cleared AFTER exit trade is saved (in reconcile_position_state)
+        if current_position_size == 0:
+            # Return existing ID (exit trade needs it to match entries)
+            # Don't clear here - clear after exit trade is saved
+            return db_strategy.position_instance_id
+        
+        # If opening new position and no existing ID, generate new one
+        if is_opening_new_position and not db_strategy.position_instance_id:
+            new_id = uuid4()
+            # ✅ CRITICAL FIX: Use flush() instead of commit()
+            # This keeps the update in the same transaction as the trade save
+            # Prevents inconsistent state if trade save fails after strategy update
+            db_strategy.position_instance_id = new_id
+            db.flush()  # Flush to database (visible in transaction, not committed)
+            logger.info(f"Generated new position_instance_id {new_id} for strategy {strategy_uuid}")
+            return new_id
+            # ✅ NO commit() here - let caller commit after trade is saved
+        
+        # Reuse existing ID (for adding to position or closing)
+        return db_strategy.position_instance_id
     
     def save_to_redis(self, strategy_id: str, summary: StrategySummary) -> None:
         """Save strategy to Redis."""
@@ -147,7 +219,7 @@ class StrategyPersistence:
                 f"Running strategies (to be restored): {running_count}"
             )
         except Exception as exc:
-            logger.error(f"Failed to load strategies from database: {exc!s}", exc_info=True)
+            logger.error(f"Failed to load strategies from database: {str(exc)}", exc_info=True)
     
     def load_from_redis(self) -> None:
         """Load all strategies and trades from Redis on startup."""
@@ -416,6 +488,7 @@ class StrategyPersistence:
             
             # Get database state (source of truth)
             db_state = None
+            db_strategy = None
             if self.strategy_service and self.user_id:
                 try:
                     db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
@@ -426,6 +499,33 @@ class StrategyPersistence:
                             "entry_price": float(db_strategy.entry_price) if db_strategy.entry_price else None,
                             "unrealized_pnl": float(db_strategy.unrealized_pnl) if db_strategy.unrealized_pnl else 0,
                         }
+                        
+                        # ✅ CRITICAL FIX: Recover position_instance_id if missing
+                        if summary.position_size and summary.position_size > 0 and not summary.position_instance_id:
+                            # Recover from last entry trade
+                            from app.models.db_models import Trade
+                            
+                            entry_side = "BUY" if summary.position_side == "LONG" else "SELL"
+                            last_entry = self.strategy_service.db_service.db.query(Trade).filter(
+                                Trade.strategy_id == db_strategy.id,
+                                Trade.symbol == summary.symbol,
+                                Trade.position_side == summary.position_side,
+                                Trade.side == entry_side,
+                                Trade.position_instance_id.isnot(None)
+                            ).order_by(Trade.timestamp.desc()).first()
+                            
+                            if last_entry:
+                                summary.position_instance_id = last_entry.position_instance_id
+                                db_strategy.position_instance_id = last_entry.position_instance_id
+                                try:
+                                    self.strategy_service.db_service.db.commit()
+                                    logger.info(
+                                        f"[{summary.id}] Recovered position_instance_id {last_entry.position_instance_id} "
+                                        f"from last entry trade"
+                                    )
+                                except Exception as e:
+                                    self.strategy_service.db_service.db.rollback()
+                                    logger.error(f"Failed to save recovered position_instance_id: {e}")
                 except Exception as db_exc:
                     logger.warning(f"Failed to get database state for reconciliation: {db_exc}")
             
@@ -434,6 +534,7 @@ class StrategyPersistence:
             binance_position_side = None
             binance_entry_price = None
             binance_unrealized_pnl = 0
+            position_was_closed = False
             
             if position and abs(float(position["positionAmt"])) > 0:
                 position_amt = float(position["positionAmt"])
@@ -441,6 +542,10 @@ class StrategyPersistence:
                 binance_position_side = "LONG" if position_amt > 0 else "SHORT"
                 binance_entry_price = float(position["entryPrice"])
                 binance_unrealized_pnl = float(position["unRealizedProfit"])
+            else:
+                # Position is flat on Binance
+                # Check if it was closed (had position before)
+                position_was_closed = summary.position_size is not None and summary.position_size != 0
             
             # Compare Binance (reality) with database (source of truth)
             state_mismatch = False
@@ -484,6 +589,44 @@ class StrategyPersistence:
                     f"[{summary.id}] Position state reconciled: "
                     f"Database and memory updated to match Binance"
                 )
+            
+            # ✅ CRITICAL: Handle position closure - clear position_instance_id AFTER exit trades are saved
+            if position_was_closed and db_strategy:
+                # Check if any exit trades are missing position_instance_id
+                from app.models.db_models import Trade
+                from datetime import datetime, timezone, timedelta
+                
+                previous_position_side = summary.position_side
+                if previous_position_side:
+                    exit_side = "SELL" if previous_position_side == "LONG" else "BUY"
+                    exit_trades_without_id = self.strategy_service.db_service.db.query(Trade).filter(
+                        Trade.strategy_id == db_strategy.id,
+                        Trade.symbol == summary.symbol,
+                        Trade.position_side == previous_position_side,
+                        Trade.side == exit_side,
+                        Trade.position_instance_id.is_(None),
+                        Trade.timestamp >= datetime.now(timezone.utc) - timedelta(hours=1)  # Recent trades
+                    ).all()
+                    
+                    # Update exit trades with position_instance_id if missing
+                    if exit_trades_without_id:
+                        for exit_trade in exit_trades_without_id:
+                            exit_trade.position_instance_id = db_strategy.position_instance_id
+                        logger.info(
+                            f"[{summary.id}] Updated {len(exit_trades_without_id)} exit trades "
+                            f"with position_instance_id {db_strategy.position_instance_id}"
+                        )
+                
+                # Now clear position_instance_id
+                if db_strategy.position_instance_id:
+                    db_strategy.position_instance_id = None
+                    summary.position_instance_id = None
+                    try:
+                        self.strategy_service.db_service.db.commit()
+                        logger.info(f"[{summary.id}] Cleared position_instance_id (position closed externally)")
+                    except Exception as e:
+                        self.strategy_service.db_service.db.rollback()
+                        logger.error(f"Failed to clear position_instance_id: {e}")
             
             # Also reconcile order statuses for partially filled orders
             await self.reconcile_order_statuses(summary, account_client)

@@ -504,7 +504,22 @@ class StrategyRunner:
                 
                 # Load accounts into client manager
                 for account_config in accounts:
-                    self.client_manager.add_client(account_config.account_id, account_config)
+                    # Create balance persistence callback for paper trading accounts
+                    balance_callback = None
+                    if account_config.paper_trading:
+                        from app.services.database_service import DatabaseService
+                        db_service = DatabaseService(db)
+                        
+                        def persist_balance(acc_id: str, balance: float) -> None:
+                            """Callback to persist paper trading balance to database."""
+                            try:
+                                db_service.update_paper_balance_by_account_id(acc_id, balance)
+                            except Exception as e:
+                                logger.warning(f"Failed to persist paper balance for account {acc_id}: {e}")
+                        
+                        balance_callback = persist_balance
+                    
+                    self.client_manager.add_client(account_config.account_id, account_config, balance_callback)
         
         # Check again after loading
         if not self.client_manager.account_exists(account_id):
@@ -1232,7 +1247,7 @@ class StrategyRunner:
                     )
                 except Exception as stop_exc:
                     logger.error(
-                        f"Error stopping strategy {strategy_id} during account-level pause: {stop_exc}",
+                        f"Error stopping strategy {strategy_id} during account-level pause: {str(stop_exc)}",
                         exc_info=True
                     )
                     # If stopping fails, at least mark as stopped_by_risk in DB and cancel task manually
@@ -1317,7 +1332,7 @@ class StrategyRunner:
             
         except Exception as e:
             logger.error(
-                f"Error pausing strategies for account {account_id}: {e}",
+                f"Error pausing strategies for account {account_id}: {str(e)}",
                 exc_info=True
             )
             return []

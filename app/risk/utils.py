@@ -140,6 +140,7 @@ def calculate_week_start(
         
     Returns:
         datetime: Start of current week in UTC (for internal use)
+        If today is the reset day, returns previous week's start to avoid overlap with daily calculations
     """
     from zoneinfo import ZoneInfo
     # Handle None, MagicMock, or invalid timezone strings
@@ -168,7 +169,14 @@ def calculate_week_start(
     except (TypeError, ValueError):
         days_to_subtract = 0
     
-    week_start = now - timedelta(days=days_to_subtract)
+    # BUG FIX: If today is the reset day (days_to_subtract == 0), use previous week
+    # This prevents daily and weekly calculations from showing the same values
+    if days_to_subtract == 0:
+        # Today is the reset day - use previous week's start
+        week_start = now - timedelta(days=7)
+    else:
+        week_start = now - timedelta(days=days_to_subtract)
+    
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
     return week_start.astimezone(timezone.utc)  # Convert to UTC for internal use
 

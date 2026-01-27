@@ -228,12 +228,12 @@ def upgrade() -> None:
     if 'idx_wf_analyses_created_at' not in wf_indexes:
         op.create_index('idx_wf_analyses_created_at', 'walk_forward_analyses', ['created_at'], unique=False, postgresql_ops={'created_at': 'DESC'})
     
-    # Update strategies status constraint to include 'paused_by_risk'
+    # Update strategies status constraint to include 'stopped_by_risk'
     op.drop_constraint('strategies_status_check', 'strategies', type_='check')
     op.create_check_constraint(
         'strategies_status_check',
         'strategies',
-        "status IN ('stopped', 'running', 'error', 'paused_by_risk')"
+        "status IN ('stopped', 'running', 'error', 'stopped_by_risk')"
     )
     # ### end Alembic commands ###
 

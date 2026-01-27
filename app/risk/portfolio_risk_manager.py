@@ -607,43 +607,54 @@ class PortfolioRiskManager:
         """Get realized PnL from closed trades since start_time.
         
         CRITICAL: Only includes closed trades (realized PnL), not open positions.
+        Uses CompletedTrade table directly for consistency and performance.
         """
-        if not self.strategy_runner or not self.user_id:
+        if not self.db_service or not self.user_id:
             return 0.0
         
         total_pnl = 0.0
         
-        # Get all strategies for this account
-        strategies = self.strategy_runner._strategies.values()
-        account_strategies = [
-            s for s in strategies
-            if s.account_id == account_id
-        ]
+        # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+        # This is much faster and more consistent with other endpoints
+        from app.models.db_models import CompletedTrade, Account, Strategy
         
-        # Get trades for each strategy and calculate realized PnL
-        for strategy in account_strategies:
-            trades = self.strategy_runner.get_trades(strategy.id)
-            
-            # Filter trades by timestamp
-            filtered_trades = [
-                t for t in trades
-                if t.timestamp and t.timestamp >= start_time
-            ]
-            
-            if not filtered_trades:
+        # Get account UUID from account_id string
+        try:
+            account = self.db_service.get_account_by_id(self.user_id, account_id)
+            if not account:
+                return 0.0
+        except Exception as e:
+            logger.warning(f"Failed to get account {account_id}: {e}")
+            return 0.0
+        
+        # Get all strategies for this account
+        try:
+            strategies = self.db_service.db.query(Strategy).filter(
+                Strategy.user_id == self.user_id,
+                Strategy.account_id == account.id
+            ).all()
+        except Exception as e:
+            logger.warning(f"Failed to get strategies for account {account_id}: {e}")
+            return 0.0
+        
+        # Query completed trades from CompletedTrade table (pre-computed)
+        for strategy in strategies:
+            try:
+                # Query completed trades with exit_time >= start_time
+                # ✅ NEW: Exclude paper trades from risk calculations
+                completed_trades = self.db_service.db.query(CompletedTrade).filter(
+                    CompletedTrade.user_id == self.user_id,
+                    CompletedTrade.strategy_id == strategy.id,
+                    CompletedTrade.exit_time >= start_time,
+                    CompletedTrade.paper_trading == False  # Exclude paper trades
+                ).all()
+                
+                # Sum net PnL from completed trades
+                for completed in completed_trades:
+                    total_pnl += float(completed.pnl_usd)
+            except Exception as e:
+                logger.warning(f"Failed to get completed trades for strategy {strategy.id}: {e}")
                 continue
-            
-            # Use trade matcher to get completed trades
-            from app.services.trade_matcher import match_trades_to_completed_positions
-            completed_trades = match_trades_to_completed_positions(
-                filtered_trades,
-                include_fees=True
-            )
-            
-            # Sum net PnL from completed trades using shared utility
-            from app.risk.utils import get_pnl_from_completed_trade
-            for completed in completed_trades:
-                total_pnl += get_pnl_from_completed_trade(completed)
         
         return total_pnl
     
@@ -1020,6 +1031,7 @@ class PortfolioRiskManager:
         """Get realized PnL for a specific strategy from closed trades since start_time.
         
         CRITICAL: Only includes closed trades (realized PnL), not open positions.
+        Uses CompletedTrade table directly for consistency and performance.
         
         Args:
             strategy_uuid: Strategy UUID (from Strategy.id, not strategy_id string)
@@ -1028,56 +1040,33 @@ class PortfolioRiskManager:
         Returns:
             Realized PnL in USDT
         """
-        if not self.trade_service or not self.user_id:
+        if not self.db_service or not self.user_id:
             return 0.0
         
-        # Get trades for this strategy from database
-        # Note: trade_service expects strategy_id (UUID), not strategy_id string
+        # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+        # This is much faster and more consistent with other endpoints
+        from app.models.db_models import CompletedTrade
+        
         try:
-            if self._is_async:
-                # Note: async_get_trades may not exist yet, so using sync for now
-                # This will be updated when TradeService is fully async
-                trades = await self.trade_service.async_get_trades(
-                    user_id=self.user_id,
-                    strategy_id=strategy_uuid,
-                    start_time=start_time
-                ) if hasattr(self.trade_service, 'async_get_trades') else []
-            else:
-                trades = self.trade_service.get_trades(
-                    user_id=self.user_id,
-                    strategy_id=strategy_uuid,
-                    start_time=start_time
-                ) if hasattr(self.trade_service, 'get_trades') else []
+            # Query completed trades from CompletedTrade table (pre-computed)
+            # Filter by exit_time >= start_time to get trades closed since start_time
+            # ✅ NEW: Exclude paper trades from risk calculations
+            completed_trades = self.db_service.db.query(CompletedTrade).filter(
+                CompletedTrade.user_id == self.user_id,
+                CompletedTrade.strategy_id == strategy_uuid,
+                CompletedTrade.exit_time >= start_time,
+                CompletedTrade.paper_trading == False  # Exclude paper trades
+            ).all()
+            
+            # Sum net PnL from completed trades
+            total_pnl = 0.0
+            for completed in completed_trades:
+                total_pnl += float(completed.pnl_usd)
+            
+            return total_pnl
         except Exception as e:
-            logger.warning(f"Failed to get trades for strategy {strategy_uuid}: {e}")
-            trades = []
-        
-        if not trades:
+            logger.warning(f"Failed to get completed trades for strategy {strategy_uuid}: {e}")
             return 0.0
-        
-        # Filter trades by timestamp
-        filtered_trades = [
-            t for t in trades
-            if t.timestamp and t.timestamp >= start_time
-        ]
-        
-        if not filtered_trades:
-            return 0.0
-        
-        # Use trade matcher to get completed trades
-        from app.services.trade_matcher import match_trades_to_completed_positions
-        completed_trades = match_trades_to_completed_positions(
-            filtered_trades,
-            include_fees=True
-        )
-        
-        # Sum net PnL from completed trades
-        from app.risk.utils import get_pnl_from_completed_trade
-        total_pnl = 0.0
-        for completed in completed_trades:
-            total_pnl += get_pnl_from_completed_trade(completed)
-        
-        return total_pnl
     
     def get_effective_risk_config(
         self,

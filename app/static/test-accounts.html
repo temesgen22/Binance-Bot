@@ -448,13 +448,31 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="apiKey">API Key *</label>
-                        <input type="text" id="apiKey" required placeholder="Enter your Exchange API key">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="paperTrading" onchange="togglePaperTradingFields()">
+                            <label for="paperTrading">📊 Paper Trading (Simulated trading with real market data)</label>
+                        </div>
+                        <small style="color: #666; font-size: 0.85em; display: block; margin-top: 5px;">
+                            Paper trading uses real market prices but simulates order execution. No API keys required.
+                        </small>
                     </div>
 
-                    <div class="form-group">
-                        <label for="apiSecret">API Secret *</label>
-                        <input type="password" id="apiSecret" required placeholder="Enter your Binance API secret">
+                    <div class="form-group" id="paperBalanceGroup" style="display: none;">
+                        <label for="paperBalance">Initial Virtual Balance (USDT)</label>
+                        <input type="number" id="paperBalance" placeholder="10000" min="1" step="0.01" value="10000">
+                        <small style="color: #666; font-size: 0.85em;">Starting balance for paper trading (default: 10,000 USDT)</small>
+                    </div>
+
+                    <div id="apiKeyFields">
+                        <div class="form-group">
+                            <label for="apiKey">API Key <span id="apiKeyRequired">*</span></label>
+                            <input type="text" id="apiKey" placeholder="Enter your Exchange API key">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="apiSecret">API Secret <span id="apiSecretRequired">*</span></label>
+                            <input type="password" id="apiSecret" placeholder="Enter your Binance API secret">
+                        </div>
                     </div>
 
                     <div class="form-group">
@@ -462,6 +480,9 @@
                             <input type="checkbox" id="testnet" checked>
                             <label for="testnet">Use Testnet (Recommended for testing)</label>
                         </div>
+                        <small style="color: #666; font-size: 0.85em; display: block; margin-top: 5px;">
+                            Note: Paper trading always uses real market data (no testnet needed)
+                        </small>
                     </div>
 
                     <div class="form-group">
@@ -534,11 +555,13 @@
                 // Display database accounts
                 for (const account of dbAccounts) {
                     const isTestnet = account.testnet === true || account.testnet === 'True';
+                    const isPaperTrading = account.paper_trading === true || account.paper_trading === 'True';
                     const accountId = account.account_id || account.id;
                     const exchangePlatform = account.exchange_platform || 'binance';
                     const isActive = account.is_active !== false; // Default to true if not specified
                     const statusClass = isActive ? '' : 'account-card-inactive';
                     const statusStyle = isActive ? '' : 'opacity: 0.7; border-color: #dc3545;';
+                    const paperBalance = account.paper_balance ? parseFloat(account.paper_balance).toFixed(2) : null;
                     
                     html += `
                         <div class="account-card ${statusClass}" data-account-id="${accountId}" data-source="database" style="${statusStyle}">
@@ -548,9 +571,20 @@
                                     <span class="account-badge ${isActive ? 'status-badge success' : 'status-badge error'}" style="margin-right: 8px;">
                                         ${isActive ? '✅ Active' : '❌ Inactive'}
                                     </span>
-                                    <span class="account-badge ${isTestnet ? 'testnet' : 'production'}">
-                                        ${isTestnet ? '🧪 Testnet' : '🌐 Production'}
-                                    </span>
+                                    ${isPaperTrading ? `
+                                        <span class="account-badge" style="background: #9c27b0; color: white; margin-right: 8px;">
+                                            📊 Paper Trading
+                                        </span>
+                                        ${paperBalance ? `
+                                            <span class="account-badge" style="background: #4caf50; color: white; margin-right: 8px;">
+                                                💰 Balance: $${paperBalance}
+                                            </span>
+                                        ` : ''}
+                                    ` : `
+                                        <span class="account-badge ${isTestnet ? 'testnet' : 'production'}">
+                                            ${isTestnet ? '🧪 Testnet' : '🌐 Production'}
+                                        </span>
+                                    `}
                                     <span class="account-badge" style="background: #6c757d; color: white;">💾 Database</span>
                                     <span class="account-badge" style="background: #17a2b8; color: white;">${exchangePlatform.toUpperCase()}</span>
                                     <span style="color: #999;">ID: ${accountId}</span>
@@ -639,6 +673,14 @@
                 document.getElementById('exchangePlatform').value = account.exchange_platform || 'binance';
                 document.getElementById('testnet').checked = account.testnet === true || account.testnet === 'True';
                 
+                // Handle paper trading fields
+                const paperTrading = account.paper_trading === true || account.paper_trading === 'True';
+                document.getElementById('paperTrading').checked = paperTrading;
+                if (paperTrading && account.paper_balance) {
+                    document.getElementById('paperBalance').value = parseFloat(account.paper_balance).toFixed(2);
+                }
+                togglePaperTradingFields(); // Update form visibility
+                
                 // Add is_active checkbox for editing
                 const testnetGroup = document.getElementById('testnet').closest('.form-group');
                 const isActiveGroup = document.createElement('div');
@@ -674,6 +716,7 @@
             const exchangePlatform = document.getElementById('exchangePlatform').value.trim();
             const testnet = document.getElementById('testnet').checked;
             const isActive = document.getElementById('isActive') ? document.getElementById('isActive').checked : undefined;
+            const paperTrading = document.getElementById('paperTrading').checked;
             
             const updateData = {
                 name: name || null,
@@ -684,6 +727,12 @@
             // Only include is_active if the checkbox exists (in edit mode)
             if (document.getElementById('isActive') !== null) {
                 updateData.is_active = isActive;
+            }
+            
+            // Include paper balance if paper trading is enabled
+            if (paperTrading) {
+                const paperBalance = parseFloat(document.getElementById('paperBalance').value) || 10000;
+                updateData.paper_balance = paperBalance;
             }
             
             try {
@@ -817,6 +866,7 @@
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            const paperTrading = document.getElementById('paperTrading').checked;
             const apiKey = document.getElementById('apiKey').value.trim();
             const apiSecret = document.getElementById('apiSecret').value.trim();
             const accountName = document.getElementById('accountName').value.trim();
@@ -825,6 +875,51 @@
             const testnet = document.getElementById('testnet').checked;
             const saveToDatabase = document.getElementById('saveToDatabase').checked;
 
+            // For paper trading, skip API test and go straight to save
+            if (paperTrading) {
+                if (saveToDatabase && !accountId) {
+                    alert('Please enter an Account ID to save to database');
+                    return;
+                }
+                
+                if (saveToDatabase) {
+                    // Save paper trading account directly
+                    testBtn.disabled = true;
+                    testBtnText.textContent = 'Saving...';
+                    loadingSpinner.classList.remove('hidden');
+                    
+                    try {
+                        await saveAccountToDatabase({
+                            accountId,
+                            accountName,
+                            exchangePlatform,
+                            testnet,
+                            apiKey: null,
+                            apiSecret: null
+                        });
+                        
+                        // Show success message
+                        displayResult({
+                            success: true,
+                            testnet: false,
+                            connection_status: '✅ Paper Trading Account Created',
+                            account_name: accountName || accountId,
+                            message: 'Paper trading account saved successfully! No API keys required.'
+                        });
+                    } catch (error) {
+                        displayError('Error saving paper trading account: ' + error.message);
+                    } finally {
+                        testBtn.disabled = false;
+                        testBtnText.textContent = '🧪 Test Account';
+                        loadingSpinner.classList.add('hidden');
+                    }
+                } else {
+                    alert('Paper trading accounts must be saved to database. Please check "Save to Database".');
+                }
+                return;
+            }
+
+            // For live trading, require API keys and test them
             if (!apiKey || !apiSecret) {
                 alert('Please enter both API Key and API Secret');
                 return;
@@ -1022,6 +1117,40 @@
             resultsDiv.insertBefore(card, resultsDiv.firstChild);
         }
 
+        // Toggle paper trading fields
+        function togglePaperTradingFields() {
+            const paperTrading = document.getElementById('paperTrading').checked;
+            const apiKeyFields = document.getElementById('apiKeyFields');
+            const paperBalanceGroup = document.getElementById('paperBalanceGroup');
+            const apiKeyInput = document.getElementById('apiKey');
+            const apiSecretInput = document.getElementById('apiSecret');
+            const apiKeyRequired = document.getElementById('apiKeyRequired');
+            const apiSecretRequired = document.getElementById('apiSecretRequired');
+            const testnetCheckbox = document.getElementById('testnet');
+            
+            if (paperTrading) {
+                // Paper trading: hide API key fields, show paper balance
+                apiKeyFields.style.display = 'none';
+                paperBalanceGroup.style.display = 'block';
+                apiKeyInput.removeAttribute('required');
+                apiSecretInput.removeAttribute('required');
+                apiKeyRequired.style.display = 'none';
+                apiSecretRequired.style.display = 'none';
+                // Paper trading uses real market data, so testnet is not relevant
+                testnetCheckbox.checked = false;
+                testnetCheckbox.disabled = true;
+            } else {
+                // Live trading: show API key fields, hide paper balance
+                apiKeyFields.style.display = 'block';
+                paperBalanceGroup.style.display = 'none';
+                apiKeyInput.setAttribute('required', 'required');
+                apiSecretInput.setAttribute('required', 'required');
+                apiKeyRequired.style.display = 'inline';
+                apiSecretRequired.style.display = 'inline';
+                testnetCheckbox.disabled = false;
+            }
+        }
+
         // Save account to database after successful test
         async function saveAccountToDatabase(formData) {
             if (!formData.accountId) {
@@ -1029,19 +1158,41 @@
                 return;
             }
             
+            const paperTrading = document.getElementById('paperTrading').checked;
+            const paperBalance = paperTrading ? parseFloat(document.getElementById('paperBalance').value) || 10000 : null;
+            
+            // For paper trading, API keys are optional
+            // For live trading, API keys are required
+            if (!paperTrading && (!formData.apiKey || !formData.apiSecret)) {
+                alert('API Key and Secret are required for live trading accounts');
+                return;
+            }
+            
             try {
+                const requestBody = {
+                    account_id: formData.accountId,
+                    name: formData.accountName || null,
+                    exchange_platform: formData.exchangePlatform || 'binance',
+                    testnet: formData.testnet,
+                    is_default: false,
+                    paper_trading: paperTrading
+                };
+                
+                // Only include API keys if provided (required for live trading, optional for paper)
+                if (formData.apiKey && formData.apiSecret) {
+                    requestBody.api_key = formData.apiKey;
+                    requestBody.api_secret = formData.apiSecret;
+                }
+                
+                // Include paper balance for paper trading accounts
+                if (paperTrading && paperBalance) {
+                    requestBody.paper_balance = paperBalance;
+                }
+                
                 const response = await authFetch('/accounts/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        account_id: formData.accountId,
-                        api_key: formData.apiKey,
-                        api_secret: formData.apiSecret,
-                        name: formData.accountName || null,
-                        exchange_platform: formData.exchangePlatform || 'binance',
-                        testnet: formData.testnet,
-                        is_default: false
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 if (response.ok) {

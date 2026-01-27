@@ -158,7 +158,9 @@ class DatabaseService:
         name: Optional[str] = None,
         exchange_platform: str = "binance",
         testnet: bool = True,
-        is_default: bool = False
+        is_default: bool = False,
+        paper_trading: bool = False,
+        paper_balance: Optional[float] = None
     ) -> Account:
         """Create a new Binance account for a user."""
         # If this is set as default, unset other defaults for this user
@@ -176,7 +178,9 @@ class DatabaseService:
             name=name,
             exchange_platform=exchange_platform,
             testnet=testnet,
-            is_default=is_default
+            is_default=is_default,
+            paper_trading=paper_trading,
+            paper_balance=paper_balance if paper_balance is not None else (10000.0 if paper_trading else None)
         )
         self.db.add(account)
         with self._transaction(account, error_message=f"Failed to create account {account_id}"):
@@ -337,6 +341,41 @@ class DatabaseService:
         with self._transaction(account, error_message=f"Failed to update account {account_id}"):
             pass
         return account
+    
+    def update_paper_balance_by_account_id(self, account_id: str, balance: float) -> bool:
+        """Update paper balance for an account by account_id (without user_id).
+        
+        This is a convenience method for paper trading balance updates.
+        Note: account_id is unique per user, so this queries all accounts.
+        
+        Args:
+            account_id: Account identifier (string)
+            balance: New paper balance value
+            
+        Returns:
+            True if account was found and updated, False otherwise
+        """
+        if self._is_async:
+            raise RuntimeError("Use async method for AsyncSession")
+        
+        account = self.db.query(Account).filter(
+            Account.account_id.ilike(account_id.lower()),
+            Account.is_active == True
+        ).first()
+        
+        if not account:
+            logger.warning(f"Account '{account_id}' not found for paper balance update")
+            return False
+        
+        if not account.paper_trading:
+            logger.warning(f"Account '{account_id}' is not a paper trading account")
+            return False
+        
+        account.paper_balance = balance
+        with self._transaction(account, error_message=f"Failed to update paper balance for account {account_id}"):
+            logger.debug(f"Updated paper balance for account '{account_id}' to ${balance:.2f}")
+        
+        return True
     
     def delete_account(self, user_id: UUID, account_id: str) -> bool:
         """Hard delete an account from the database.

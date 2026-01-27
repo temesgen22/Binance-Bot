@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -109,6 +110,7 @@ class StrategySummary(BaseModel):
     position_size: Optional[float] = None  # Current position quantity (0 if no position)
     position_side: Optional[Literal["LONG", "SHORT"]] = None  # Track current position direction
     unrealized_pnl: Optional[float] = None  # Current unrealized profit/loss
+    position_instance_id: Optional[UUID] = None  # Position cycle identifier (for isolating position cycles)
     started_at: Optional[datetime] = None  # When strategy was last started
     stopped_at: Optional[datetime] = None  # When strategy was last stopped
     meta: Dict[str, Any] = Field(default_factory=dict)

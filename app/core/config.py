@@ -13,10 +13,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class BinanceAccountConfig(BaseModel):
     """Configuration for a single Binance account."""
     account_id: str
-    api_key: str
-    api_secret: str
+    api_key: Optional[str] = None  # Optional for paper trading (only needed for market data)
+    api_secret: Optional[str] = None  # Optional for paper trading
     testnet: bool = True
+    paper_trading: bool = False  # Paper trading mode (no real API calls)
+    paper_balance: Optional[float] = None  # Initial virtual balance for paper trading
     name: Optional[str] = None  # Optional display name
+    
+    @model_validator(mode='after')
+    def validate_api_keys(self):
+        """Validate API keys are provided for non-paper trading accounts."""
+        if not self.paper_trading and (not self.api_key or not self.api_secret):
+            raise ValueError("API keys required for non-paper trading accounts")
+        return self
 
 
 class Settings(BaseSettings):

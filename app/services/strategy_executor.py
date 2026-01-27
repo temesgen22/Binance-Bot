@@ -470,7 +470,166 @@ class StrategyExecutor:
         if not order_response:
             return  # Order was skipped (e.g., risk blocked, insufficient balance)
         
-        # Track the trade
+        # ✅ CRITICAL: Capture previous state BEFORE mutation for position_instance_id generation
+        prev_side = summary.position_side
+        prev_size = summary.position_size
+        prev_entry = summary.entry_price
+        
+        # ✅ CRITICAL: Get strategy UUID first (summary.id is strategy_id string, not UUID)
+        db_strategy = None
+        position_instance_id = None
+        
+        if self.order_manager.strategy_service and self.order_manager.user_id:
+            db_strategy = self.order_manager.strategy_service.db_service.get_strategy(
+                self.order_manager.user_id,
+                summary.id
+            )
+        
+        if db_strategy:
+            try:
+                # Determine if opening new position (check prev_size, not current)
+                # Calculate expected position size after order
+                if order_response.side == "BUY":
+                    if prev_side == "SHORT":
+                        new_position_size = max(0, (prev_size or 0) - order_response.executed_qty)
+                    else:
+                        new_position_size = (prev_size or 0) + order_response.executed_qty
+                else:  # SELL
+                    if prev_side == "LONG":
+                        new_position_size = max(0, (prev_size or 0) - order_response.executed_qty)
+                    else:
+                        new_position_size = (prev_size or 0) + order_response.executed_qty
+                
+                # ✅ CRITICAL FIX: Determine if opening new position
+                # For closing trades (reduce_only or will close position), we need to find existing position_instance_id
+                # Note: OrderResponse doesn't have reduce_only field, so we infer from position size logic
+                is_closing_position = (
+                    getattr(order_response, 'reduce_only', False) or  # Explicit reduce_only order (if present)
+                    (prev_side == "LONG" and order_response.side == "SELL" and new_position_size == 0) or  # Closing LONG
+                    (prev_side == "SHORT" and order_response.side == "BUY" and new_position_size == 0)  # Closing SHORT
+                )
+                
+                is_opening_new_position = (
+                    not is_closing_position and
+                    (prev_size is None or prev_size == 0) and 
+                    order_response.executed_qty > 0  # Will have size after order
+                )
+            except Exception as pos_id_exc:
+                # Log error but continue - position_instance_id generation is not critical for completed trade creation
+                logger.warning(
+                    f"[{summary.id}] Error determining position_instance_id: {pos_id_exc}. "
+                    f"Will continue without it (completed trade creation may still work).",
+                    exc_info=True
+                )
+                is_closing_position = False
+                is_opening_new_position = False
+                new_position_size = 0
+            
+            # ✅ CRITICAL FIX: For closing trades, try to get position_instance_id from entry trades
+            # This handles cases where strategy summary is out of sync
+            position_instance_id = None
+            try:
+                if is_closing_position:
+                    from app.models.db_models import Trade
+                    # Determine position side from order side (BUY closes SHORT, SELL closes LONG)
+                    # If prev_side is None, infer from order side
+                    if prev_side:
+                        inferred_position_side = prev_side
+                    else:
+                        # Infer from order side: BUY closes SHORT, SELL closes LONG
+                        inferred_position_side = "SHORT" if order_response.side == "BUY" else "LONG"
+                    
+                    entry_side = "SELL" if inferred_position_side == "SHORT" else "BUY"
+                    
+                    # Find entry trades for this position to get position_instance_id
+                    entry_trade_query = self.order_manager.strategy_service.db_service.db.query(Trade).filter(
+                        Trade.strategy_id == db_strategy.id,
+                        Trade.symbol == summary.symbol,
+                        Trade.side == entry_side,
+                        Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+                        Trade.position_instance_id.isnot(None)
+                    )
+                    
+                    # Filter by position_side if we have it
+                    if inferred_position_side:
+                        entry_trade_query = entry_trade_query.filter(Trade.position_side == inferred_position_side)
+                    
+                    entry_trade = entry_trade_query.order_by(Trade.timestamp.desc()).first()
+                    
+                    if entry_trade and entry_trade.position_instance_id:
+                        position_instance_id = entry_trade.position_instance_id
+                        logger.info(
+                            f"[{summary.id}] ✅ Using position_instance_id {position_instance_id} from entry trade {entry_trade.order_id} "
+                            f"for closing {inferred_position_side} position (prev_side was {prev_side})"
+                        )
+                    else:
+                        logger.warning(
+                            f"[{summary.id}] ⚠️ Could not find entry trade with position_instance_id for closing position. "
+                            f"Order side: {order_response.side}, inferred position: {inferred_position_side}, prev_side: {prev_side}. "
+                            f"Will use strategy's position_instance_id or generate new one."
+                        )
+                
+                # ✅ CRITICAL: Get position_instance_id with retry logic for lock contention
+                # If lock is held, retry (similar to "allocation in progress" logic)
+                if position_instance_id is None:
+                    max_retries = 3
+                    retry_delay = 0.1  # 100ms
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            from app.services.strategy_persistence import StrategyPersistence
+                            position_instance_id = StrategyPersistence._get_or_generate_position_instance_id(
+                                self.order_manager.strategy_service.db_service.db,
+                                db_strategy.id,  # Strategy UUID
+                                is_opening_new_position,
+                                new_position_size  # Expected size after order
+                            )
+                            break  # Success
+                        except ValueError as e:
+                            if "generation in progress" in str(e) and attempt < max_retries - 1:
+                                # Lock contention - retry after delay
+                                import time
+                                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                                logger.debug(
+                                    f"[{summary.id}] Retry {attempt + 1}/{max_retries} for position_instance_id generation"
+                                )
+                                continue
+                            raise  # Re-raise if not retryable or max retries reached
+                
+                # Update in-memory summary (for quick access)
+                summary.position_instance_id = position_instance_id
+            except Exception as pos_id_exc:
+                # Log error but continue - position_instance_id generation is not critical for completed trade creation
+                logger.warning(
+                    f"[{summary.id}] Error in position_instance_id logic: {pos_id_exc}. "
+                    f"Will continue without it (completed trade creation may still work).",
+                    exc_info=True
+                )
+                # Set to None so code continues
+                position_instance_id = None
+        
+        # ✅ CRITICAL: Save trade with position_instance_id BEFORE updating position state
+        # This ensures exit trades get the ID before position is cleared
+        if self.order_manager.trade_service and self.order_manager.user_id and db_strategy:
+            try:
+                trade = self.order_manager.trade_service.save_trade(
+                    self.order_manager.user_id,
+                    db_strategy.id,
+                    order_response,
+                    position_instance_id=position_instance_id  # ✅ Pass ID
+                )
+                logger.debug(f"[{summary.id}] Saved trade {trade.id} with position_instance_id={position_instance_id}")
+                
+                # ✅ CRITICAL: Commit after trade is saved (strategy update was flushed, not committed)
+                # This ensures both strategy and trade are committed together (atomicity)
+                self.order_manager.strategy_service.db_service.db.commit()
+            except Exception as e:
+                # Rollback both strategy and trade if save fails
+                self.order_manager.strategy_service.db_service.db.rollback()
+                logger.error(f"[{summary.id}] Failed to save trade with position_instance_id: {e}")
+                raise
+        
+        # Track the trade in memory
         self.order_manager.track_trade(
             strategy_id=summary.id,
             order_response=order_response,
@@ -478,10 +637,7 @@ class StrategyExecutor:
         )
         
         # Update position state based on order
-        # Capture previous state BEFORE mutation for correct OPEN/CLOSE detection
-        prev_side = summary.position_side
-        prev_size = summary.position_size
-        prev_entry = summary.entry_price
+        # (Previous state already captured above)
         
         # Log position state before order for debugging
         logger.debug(
@@ -640,7 +796,7 @@ class StrategyExecutor:
                                     """Wrapper to catch and log errors from background task."""
                                     try:
                                         # Pass strategy UUID as string for better lookup reliability
-                                        await asyncio.to_thread(
+                                        completed_trade_ids = await asyncio.to_thread(
                                             create_completed_trades_on_position_close,
                                             self.order_manager.user_id,
                                             str(db_strategy.id),  # Pass UUID as string for better lookup
@@ -651,10 +807,16 @@ class StrategyExecutor:
                                             position_direction,  # Position side (LONG or SHORT)
                                             exit_reason,  # Exit reason
                                         )
-                                        logger.info(
-                                            f"[{summary.id}] ✅ Completed trade creation task finished successfully "
-                                            f"for exit_order_id={order_response.order_id}"
-                                        )
+                                        if completed_trade_ids:
+                                            logger.info(
+                                                f"[{summary.id}] ✅ Completed trade creation task finished successfully: "
+                                                f"created {len(completed_trade_ids)} completed trades for exit_order_id={order_response.order_id}"
+                                            )
+                                        else:
+                                            logger.warning(
+                                                f"[{summary.id}] ⚠️ Completed trade creation task finished but NO trades were created "
+                                                f"for exit_order_id={order_response.order_id}. Check logs above for details."
+                                            )
                                     except Exception as task_error:
                                         # Log error but don't fail the main flow
                                         logger.error(

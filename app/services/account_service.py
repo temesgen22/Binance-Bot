@@ -47,29 +47,38 @@ class AccountService(BaseCacheService):
         Returns:
             BinanceAccountConfig
         """
-        # Try to decrypt using encryption service
-        try:
-            encryption_service = get_encryption_service()
-            api_key = encryption_service.decrypt(db_account.api_key_encrypted)
-            api_secret = encryption_service.decrypt(db_account.api_secret_encrypted)
-        except (ValueError, ImportError) as e:
-            # If encryption service is not available or decryption fails,
-            # check if data is stored in plaintext (backward compatibility)
-            logger.warning(
-                f"Failed to decrypt API keys for account {db_account.account_id}: {e}. "
-                "Assuming plaintext storage (backward compatibility)."
-            )
-            # Try to use as plaintext if decryption fails
-            # This handles migration from plaintext to encrypted storage
+        # For paper trading accounts, API keys are empty strings (not encrypted)
+        # Skip decryption for paper trading accounts to avoid errors
+        paper_trading = getattr(db_account, 'paper_trading', False)
+        
+        if paper_trading:
+            # Paper trading accounts don't need API keys - use empty strings
+            api_key = ""
+            api_secret = ""
+        else:
+            # Try to decrypt using encryption service
             try:
-                # If it's already plaintext, this will work
-                api_key = db_account.api_key_encrypted
-                api_secret = db_account.api_secret_encrypted
-            except Exception:
-                raise ValueError(
-                    f"Failed to decrypt API keys and data is not in plaintext format. "
-                    f"Account {db_account.account_id} may need to be re-encrypted."
-                ) from e
+                encryption_service = get_encryption_service()
+                api_key = encryption_service.decrypt(db_account.api_key_encrypted)
+                api_secret = encryption_service.decrypt(db_account.api_secret_encrypted)
+            except (ValueError, ImportError) as e:
+                # If encryption service is not available or decryption fails,
+                # check if data is stored in plaintext (backward compatibility)
+                logger.warning(
+                    f"Failed to decrypt API keys for account {db_account.account_id}: {e}. "
+                    "Assuming plaintext storage (backward compatibility)."
+                )
+                # Try to use as plaintext if decryption fails
+                # This handles migration from plaintext to encrypted storage
+                try:
+                    # If it's already plaintext, this will work
+                    api_key = db_account.api_key_encrypted
+                    api_secret = db_account.api_secret_encrypted
+                except Exception:
+                    raise ValueError(
+                        f"Failed to decrypt API keys and data is not in plaintext format. "
+                        f"Account {db_account.account_id} may need to be re-encrypted."
+                    ) from e
         
         # Legacy decrypt_func support (deprecated)
         if decrypt_func:
@@ -82,6 +91,8 @@ class AccountService(BaseCacheService):
             api_key=api_key,
             api_secret=api_secret,
             testnet=db_account.testnet,
+            paper_trading=getattr(db_account, 'paper_trading', False),  # ✅ NEW: Include paper_trading flag
+            paper_balance=float(db_account.paper_balance) if hasattr(db_account, 'paper_balance') and db_account.paper_balance else None,  # ✅ NEW: Include paper_balance
             name=db_account.name
         )
     
@@ -209,12 +220,14 @@ class AccountService(BaseCacheService):
         self,
         user_id: UUID,
         account_id: str,
-        api_key: str,
-        api_secret: str,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
         name: Optional[str] = None,
         exchange_platform: str = "binance",
         testnet: bool = True,
         is_default: bool = False,
+        paper_trading: bool = False,
+        paper_balance: Optional[float] = None,
         encrypt_func: Optional[callable] = None
     ) -> BinanceAccountConfig:
         """Create a new account in database.
@@ -222,34 +235,44 @@ class AccountService(BaseCacheService):
         Args:
             user_id: User ID
             account_id: Account ID (string)
-            api_key: API key (will be encrypted automatically)
-            api_secret: API secret (will be encrypted automatically)
+            api_key: API key (will be encrypted automatically, optional for paper trading)
+            api_secret: API secret (will be encrypted automatically, optional for paper trading)
             name: Optional account name
             testnet: Whether this is a testnet account
             is_default: Whether this is the default account
+            paper_trading: Whether this is a paper trading account
+            paper_balance: Initial virtual balance for paper trading (default: 10000.0)
             encrypt_func: Optional function to encrypt API keys/secrets (deprecated, uses encryption service automatically)
         
         Returns:
             BinanceAccountConfig
         """
-        # Encrypt API keys using encryption service
-        try:
-            encryption_service = get_encryption_service()
-            api_key_encrypted = encryption_service.encrypt(api_key)
-            api_secret_encrypted = encryption_service.encrypt(api_secret)
-        except (ValueError, ImportError) as e:
-            # If encryption service is not available, fall back to plaintext (development only)
-            logger.warning(
-                f"Encryption service not available: {e}. "
-                "Storing API keys in plaintext (INSECURE - development only)."
-            )
-            if encrypt_func:
-                api_key_encrypted = encrypt_func(api_key)
-                api_secret_encrypted = encrypt_func(api_secret)
-            else:
-                # Store as plaintext only if encryption is not configured
-                api_key_encrypted = api_key
-                api_secret_encrypted = api_secret
+        # For paper trading accounts, API keys are optional
+        # For non-paper trading accounts, API keys are required
+        if not paper_trading and (not api_key or not api_secret):
+            raise ValueError("API keys are required for non-paper trading accounts")
+        
+        # Encrypt API keys using encryption service (if provided)
+        api_key_encrypted = ""
+        api_secret_encrypted = ""
+        if api_key and api_secret:
+            try:
+                encryption_service = get_encryption_service()
+                api_key_encrypted = encryption_service.encrypt(api_key)
+                api_secret_encrypted = encryption_service.encrypt(api_secret)
+            except (ValueError, ImportError) as e:
+                # If encryption service is not available, fall back to plaintext (development only)
+                logger.warning(
+                    f"Encryption service not available: {e}. "
+                    "Storing API keys in plaintext (INSECURE - development only)."
+                )
+                if encrypt_func:
+                    api_key_encrypted = encrypt_func(api_key)
+                    api_secret_encrypted = encrypt_func(api_secret)
+                else:
+                    # Store as plaintext only if encryption is not configured
+                    api_key_encrypted = api_key
+                    api_secret_encrypted = api_secret
         
         # Create in database
         db_account = self.db_service.create_account(
@@ -260,7 +283,9 @@ class AccountService(BaseCacheService):
             name=name,
             exchange_platform=exchange_platform,
             testnet=testnet,
-            is_default=is_default
+            is_default=is_default,
+            paper_trading=paper_trading,
+            paper_balance=paper_balance
         )
         
         # Convert to config
