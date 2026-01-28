@@ -235,9 +235,13 @@ class TestPositionInstanceIDStaleState:
         
         # Simulate closing the position (this should happen in strategy_executor)
         # After a SELL order that closes the LONG position
-        remaining = max(0.0, test_strategy.position_size - 1952.0)
+        # ✅ FIX: Convert to float for calculation, then back to Decimal
+        from decimal import Decimal
+        position_size_float = float(test_strategy.position_size or 0)
+        remaining_float = max(0.0, position_size_float - 1952.0)
+        remaining = Decimal(str(remaining_float))
         test_strategy.position_size = remaining
-        if remaining == 0:
+        if remaining_float == 0:
             test_strategy.entry_price = None
             test_strategy.position_side = None
             # Note: position_instance_id should be cleared, but that might happen later
@@ -245,7 +249,7 @@ class TestPositionInstanceIDStaleState:
         
         # Verify position is cleared
         db_session.refresh(test_strategy)
-        assert test_strategy.position_size == 0.0, \
+        assert float(test_strategy.position_size or 0) == 0.0, \
             "Position size should be 0 after closing"
         assert test_strategy.position_side is None, \
             "Position side should be None after closing"
