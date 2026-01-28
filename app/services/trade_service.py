@@ -204,6 +204,12 @@ class TradeService:
             # Get position_instance_id from strategy if not provided
             if position_instance_id is None:
                 position_instance_id = db_strategy.position_instance_id
+                if position_instance_id:
+                    logger.warning(
+                        f"Trade {order.order_id} position_instance_id not provided, "
+                        f"using strategy's value {position_instance_id}. "
+                        f"This may cause incorrect trade matching if opening a new position!"
+                    )
             
             # ✅ NEW: Detect paper_trading from account
             paper_trading = False
@@ -219,7 +225,14 @@ class TradeService:
         trade_data = self._order_response_to_trade_dict(order, strategy_id, user_id)
         
         # ✅ CRITICAL: Set position_instance_id on trade
+        # Use the passed position_instance_id (from caller) - don't fall back to strategy's value
+        # The caller is responsible for generating the correct ID for new positions
         trade_data["position_instance_id"] = position_instance_id
+        if position_instance_id:
+            logger.debug(
+                f"Setting position_instance_id={position_instance_id} on trade {order.order_id} "
+                f"(strategy.position_instance_id={db_strategy.position_instance_id if db_strategy else None})"
+            )
         
         # ✅ NEW: Set paper_trading flag on trade
         trade_data["paper_trading"] = paper_trading

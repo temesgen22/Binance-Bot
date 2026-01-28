@@ -237,16 +237,33 @@ def create_completed_trades_on_position_close(
             )
         
         # ✅ CRITICAL FIX: Handle position_instance_id with backward compatibility
+        # Log the position_instance_id for debugging
+        logger.debug(
+            f"[{strategy_id}] Matching entry trades for exit {exit_order_id}: "
+            f"exit_trade.position_instance_id={exit_trade.position_instance_id}, "
+            f"position_side={position_side}, entry_side={entry_side}, "
+            f"exit_trade.position_side={exit_trade.position_side}"
+        )
+        
         if exit_trade.position_instance_id is not None:
             # New trades: match only within same position_instance_id
-            entry_trades_query = entry_trades_query.filter(
+            entry_trades_query_with_id = entry_trades_query.filter(
                 Trade.position_instance_id == exit_trade.position_instance_id
             )
+            logger.debug(
+                f"[{strategy_id}] Filtering entry trades by position_instance_id={exit_trade.position_instance_id}"
+            )
+            # ✅ FIX: Check if we'll find matches with this ID before applying timestamp filter
+            # This allows us to fallback to NULL position_instance_id if needed
+            entry_trades_query = entry_trades_query_with_id
         else:
             # Old trades (NULL): match all with NULL position_instance_id
             # This maintains backward compatibility
             entry_trades_query = entry_trades_query.filter(
                 Trade.position_instance_id.is_(None)
+            )
+            logger.debug(
+                f"[{strategy_id}] Exit trade has NULL position_instance_id - matching entry trades with NULL position_instance_id (backward compatibility)"
             )
         
         # ✅ CRITICAL SAFETY: Ensure entry trades are before exit trade timestamp
@@ -270,6 +287,41 @@ def create_completed_trades_on_position_close(
         
         # ✅ FIX: Query entry trades with row locking (FOR UPDATE SKIP LOCKED)
         entry_trades = entry_trades_query.with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
+        
+        # ✅ FIX: If exit trade has position_instance_id but no matches found, try fallback to NULL
+        # This handles cases where entry trade has NULL but exit trade has an ID (due to incorrect detection)
+        if not entry_trades and exit_trade.position_instance_id is not None:
+            logger.warning(
+                f"[{strategy_id}] No entry trades found with position_instance_id={exit_trade.position_instance_id}. "
+                f"Trying fallback: matching with NULL position_instance_id trades (backward compatibility)."
+            )
+            # Rebuild query without position_instance_id filter
+            entry_trades_query_fallback = db.query(Trade).filter(
+                Trade.strategy_id == strategy_uuid,
+                Trade.symbol == exit_trade.symbol,
+                Trade.side == entry_side,
+                Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+                Trade.position_instance_id.is_(None)  # Match NULL position_instance_id
+            )
+            if position_side:
+                entry_trades_query_fallback = entry_trades_query_fallback.filter(
+                    Trade.position_side == position_side
+                )
+            if exit_trade.timestamp:
+                entry_trades_query_fallback = entry_trades_query_fallback.filter(
+                    Trade.timestamp <= exit_trade.timestamp
+                )
+            entry_trades = entry_trades_query_fallback.with_for_update(skip_locked=True).order_by(Trade.timestamp.asc()).all()
+            if entry_trades:
+                logger.info(
+                    f"[{strategy_id}] ✅ Fallback successful: Found {len(entry_trades)} entry trades with NULL position_instance_id"
+                )
+        
+        logger.info(
+            f"[{strategy_id}] Found {len(entry_trades)} potential entry trades for exit {exit_order_id}: "
+            f"symbol={exit_trade.symbol}, entry_side={entry_side}, position_side={position_side}, "
+            f"exit_trade.position_instance_id={exit_trade.position_instance_id}"
+        )
         
         if not entry_trades:
             # Log detailed query info for debugging
@@ -338,7 +390,8 @@ def create_completed_trades_on_position_close(
                 f"[{strategy_id}] ❌ No entry trades with remaining allocation for strategy. "
                 f"Found {len(entry_trades)} entry trades, but all are fully allocated. "
                 f"Exit order: {exit_order_id}, Exit quantity: {exit_quantity}, "
-                f"Symbol: {exit_trade.symbol}, Position side: {position_side}. "
+                f"Symbol: {exit_trade.symbol}, Position side: {position_side}, "
+                f"Exit trade position_instance_id: {exit_trade.position_instance_id}. "
                 f"This may indicate duplicate completed trade creation or allocation mismatch."
             )
             # Log allocation details for debugging
@@ -346,10 +399,27 @@ def create_completed_trades_on_position_close(
                 allocated = allocated_map.get(entry_trade.id, 0.0)
                 executed = float(entry_trade.executed_qty) if entry_trade.executed_qty else 0.0
                 remaining = executed - allocated
-                logger.debug(
-                    f"[{strategy_id}] Entry trade {entry_trade.order_id}: "
-                    f"executed={executed}, allocated={allocated}, remaining={remaining}"
+                logger.warning(
+                    f"[{strategy_id}] Entry trade {entry_trade.order_id} (ID: {entry_trade.id}): "
+                    f"executed={executed}, allocated={allocated}, remaining={remaining}, "
+                    f"position_instance_id={entry_trade.position_instance_id}, "
+                    f"position_side={entry_trade.position_side}, timestamp={entry_trade.timestamp}"
                 )
+            
+            # ✅ FIX: Check if there are any completed trades already using these entry trades
+            # This helps identify if this is a duplicate completed trade creation attempt
+            # Note: CompletedTradeOrder is already imported at the top of the file
+            for entry_trade in entry_trades[:3]:  # Check first 3
+                completed_trade_orders = db.query(CompletedTradeOrder).filter(
+                    CompletedTradeOrder.trade_id == entry_trade.id,
+                    CompletedTradeOrder.order_role == "ENTRY"
+                ).all()
+                if completed_trade_orders:
+                    completed_trade_ids = [cto.completed_trade_id for cto in completed_trade_orders]
+                    logger.warning(
+                        f"[{strategy_id}] Entry trade {entry_trade.order_id} is already used in completed trades: {completed_trade_ids}"
+                    )
+            
             return []
         
         # ✅ FIX: Fetch funding fees ONCE per exit (not per entry/exit pair)

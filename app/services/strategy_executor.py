@@ -475,6 +475,13 @@ class StrategyExecutor:
         prev_size = summary.position_size
         prev_entry = summary.entry_price
         
+        # ✅ DEBUG: Log previous state for diagnosis
+        logger.debug(
+            f"[{summary.id}] Position state before order: prev_side={prev_side}, "
+            f"prev_size={prev_size}, prev_entry={prev_entry}, "
+            f"order_side={order_response.side}, executed_qty={order_response.executed_qty}"
+        )
+        
         # ✅ CRITICAL: Get strategy UUID first (summary.id is strategy_id string, not UUID)
         db_strategy = None
         position_instance_id = None
@@ -503,27 +510,98 @@ class StrategyExecutor:
                 # ✅ CRITICAL FIX: Determine if opening new position
                 # For closing trades (reduce_only or will close position), we need to find existing position_instance_id
                 # Note: OrderResponse doesn't have reduce_only field, so we infer from position size logic
+                # ✅ FIX: Also check exit_reason - if TP/SL, it's definitely a closing trade
+                exit_reason = getattr(order_response, 'exit_reason', None) or getattr(signal, 'exit_reason', None)
+                has_exit_reason = exit_reason and exit_reason not in ("UNKNOWN", None)
+                
                 is_closing_position = (
                     getattr(order_response, 'reduce_only', False) or  # Explicit reduce_only order (if present)
                     (prev_side == "LONG" and order_response.side == "SELL" and new_position_size == 0) or  # Closing LONG
-                    (prev_side == "SHORT" and order_response.side == "BUY" and new_position_size == 0)  # Closing SHORT
+                    (prev_side == "SHORT" and order_response.side == "BUY" and new_position_size == 0) or  # Closing SHORT
+                    # ✅ FIX: If exit_reason is TP/SL and prev_side is None, infer from order side
+                    (has_exit_reason and prev_side is None and (
+                        (order_response.side == "SELL" and exit_reason in ("TP", "SL", "TP_TRAILING", "SL_TRAILING")) or  # SELL closes LONG
+                        (order_response.side == "BUY" and exit_reason in ("TP", "SL", "TP_TRAILING", "SL_TRAILING"))  # BUY closes SHORT
+                    ))
+                )
+                
+                # ✅ FIX: More robust check for prev_size (handle 0.0, 0, None, etc.)
+                prev_size_is_zero = (
+                    prev_size is None or 
+                    prev_size == 0 or 
+                    (isinstance(prev_size, (int, float)) and abs(float(prev_size)) < 0.0001)
                 )
                 
                 is_opening_new_position = (
                     not is_closing_position and
-                    (prev_size is None or prev_size == 0) and 
-                    order_response.executed_qty > 0  # Will have size after order
+                    prev_size_is_zero and 
+                    order_response.executed_qty > 0 and  # Will have size after order
+                    not has_exit_reason  # ✅ FIX: Don't treat TP/SL exits as opening new positions
                 )
+                
+                # ✅ DEBUG: Log position opening detection
+                logger.debug(
+                    f"[{summary.id}] Position detection result: is_opening_new_position={is_opening_new_position}, "
+                    f"is_closing_position={is_closing_position}, prev_size={prev_size}, "
+                    f"prev_side={prev_side}, has_exit_reason={has_exit_reason}, "
+                    f"new_position_size={new_position_size}"
+                )
+                if is_opening_new_position:
+                    logger.info(
+                        f"[{summary.id}] ✅ Detected opening new position: "
+                        f"prev_side={prev_side}, prev_size={prev_size}, "
+                        f"order_side={order_response.side}, executed_qty={order_response.executed_qty}"
+                    )
             except Exception as pos_id_exc:
-                # Log error but continue - position_instance_id generation is not critical for completed trade creation
+                # Log error but use heuristics instead of defaulting to False
                 logger.warning(
                     f"[{summary.id}] Error determining position_instance_id: {pos_id_exc}. "
-                    f"Will continue without it (completed trade creation may still work).",
+                    f"Using heuristics to determine position state.",
                     exc_info=True
                 )
-                is_closing_position = False
-                is_opening_new_position = False
-                new_position_size = 0
+                # ✅ FIX: Use heuristics instead of defaulting to False
+                # Get exit_reason from signal/order_response if available
+                exit_reason = getattr(order_response, 'exit_reason', None) or getattr(signal, 'exit_reason', None)
+                has_exit_reason = exit_reason and exit_reason not in ("UNKNOWN", None)
+                
+                # Heuristic: If prev_size is 0 and no exit_reason, likely opening new position
+                # If prev_size > 0 and has exit_reason, likely closing position
+                try:
+                    prev_size_safe = prev_size if prev_size is not None else 0
+                    prev_side_safe = prev_side if prev_side else None
+                except:
+                    prev_size_safe = 0
+                    prev_side_safe = None
+                
+                # Heuristic for closing: has exit_reason OR (prev_side exists and order will close it)
+                is_closing_position = (
+                    has_exit_reason or
+                    (prev_side_safe == "LONG" and order_response.side == "SELL") or
+                    (prev_side_safe == "SHORT" and order_response.side == "BUY")
+                )
+                
+                # Heuristic for opening: no exit_reason AND prev_size is 0 AND order has quantity
+                is_opening_new_position = (
+                    not is_closing_position and
+                    prev_size_safe == 0 and
+                    order_response.executed_qty > 0
+                )
+                
+                # Calculate new_position_size heuristically
+                try:
+                    if order_response.side == "BUY":
+                        new_position_size = prev_size_safe + order_response.executed_qty
+                    else:  # SELL
+                        new_position_size = prev_size_safe + order_response.executed_qty
+                except:
+                    new_position_size = order_response.executed_qty
+                
+                logger.info(
+                    f"[{summary.id}] Using heuristics after exception: "
+                    f"is_opening_new_position={is_opening_new_position}, "
+                    f"is_closing_position={is_closing_position}, "
+                    f"prev_size={prev_size_safe}, prev_side={prev_side_safe}"
+                )
             
             # ✅ CRITICAL FIX: For closing trades, try to get position_instance_id from entry trades
             # This handles cases where strategy summary is out of sync
@@ -542,19 +620,51 @@ class StrategyExecutor:
                     entry_side = "SELL" if inferred_position_side == "SHORT" else "BUY"
                     
                     # Find entry trades for this position to get position_instance_id
-                    entry_trade_query = self.order_manager.strategy_service.db_service.db.query(Trade).filter(
+                    # ✅ FIX: First try with non-NULL position_instance_id, then fallback to NULL
+                    base_query = self.order_manager.strategy_service.db_service.db.query(Trade).filter(
                         Trade.strategy_id == db_strategy.id,
                         Trade.symbol == summary.symbol,
                         Trade.side == entry_side,
-                        Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
-                        Trade.position_instance_id.isnot(None)
+                        Trade.status.in_(["FILLED", "PARTIALLY_FILLED"])
                     )
                     
                     # Filter by position_side if we have it
                     if inferred_position_side:
-                        entry_trade_query = entry_trade_query.filter(Trade.position_side == inferred_position_side)
+                        base_query = base_query.filter(Trade.position_side == inferred_position_side)
+                    
+                    # ✅ FIX: First try to find entry trade with non-NULL position_instance_id
+                    entry_trade_query = base_query.filter(Trade.position_instance_id.isnot(None))
+                    
+                    # Ensure entry trades are before exit trade timestamp
+                    if hasattr(order_response, 'timestamp') and order_response.timestamp:
+                        entry_trade_query = entry_trade_query.filter(Trade.timestamp <= order_response.timestamp)
                     
                     entry_trade = entry_trade_query.order_by(Trade.timestamp.desc()).first()
+                    
+                    # ✅ FIX: Fallback to NULL position_instance_id if not found
+                    if not entry_trade or not entry_trade.position_instance_id:
+                        logger.debug(
+                            f"[{summary.id}] No entry trade found with non-NULL position_instance_id. "
+                            f"Trying fallback to NULL position_instance_id trades."
+                        )
+                        # Fallback: try with NULL position_instance_id
+                        fallback_query = base_query.filter(Trade.position_instance_id.is_(None))
+                        if hasattr(order_response, 'timestamp') and order_response.timestamp:
+                            fallback_query = fallback_query.filter(Trade.timestamp <= order_response.timestamp)
+                        entry_trade = fallback_query.order_by(Trade.timestamp.desc()).first()
+                        
+                        if entry_trade:
+                            logger.info(
+                                f"[{summary.id}] ✅ Found entry trade {entry_trade.order_id} with NULL position_instance_id "
+                                f"(backward compatibility). Will use strategy's position_instance_id."
+                            )
+                            # Use strategy's position_instance_id if available
+                            if db_strategy.position_instance_id:
+                                position_instance_id = db_strategy.position_instance_id
+                                logger.info(
+                                    f"[{summary.id}] Using strategy's position_instance_id {position_instance_id} "
+                                    f"for closing {inferred_position_side} position"
+                                )
                     
                     if entry_trade and entry_trade.position_instance_id:
                         position_instance_id = entry_trade.position_instance_id
@@ -562,9 +672,9 @@ class StrategyExecutor:
                             f"[{summary.id}] ✅ Using position_instance_id {position_instance_id} from entry trade {entry_trade.order_id} "
                             f"for closing {inferred_position_side} position (prev_side was {prev_side})"
                         )
-                    else:
+                    elif not entry_trade:
                         logger.warning(
-                            f"[{summary.id}] ⚠️ Could not find entry trade with position_instance_id for closing position. "
+                            f"[{summary.id}] ⚠️ Could not find entry trade for closing position. "
                             f"Order side: {order_response.side}, inferred position: {inferred_position_side}, prev_side: {prev_side}. "
                             f"Will use strategy's position_instance_id or generate new one."
                         )
@@ -575,15 +685,76 @@ class StrategyExecutor:
                     max_retries = 3
                     retry_delay = 0.1  # 100ms
                     
+                    # ✅ FIX: Ensure new_position_size is defined (safety check)
+                    try:
+                        # Check if new_position_size was set in try/except block above
+                        _ = new_position_size
+                    except NameError:
+                        # new_position_size not defined, calculate it
+                        try:
+                            prev_size_safe = prev_size if prev_size is not None else 0
+                            if order_response.side == "BUY":
+                                new_position_size = prev_size_safe + order_response.executed_qty
+                            else:  # SELL
+                                new_position_size = prev_size_safe + order_response.executed_qty
+                        except:
+                            new_position_size = order_response.executed_qty
+                    
+                    # ✅ FIX: Use heuristics if is_opening_new_position is uncertain
+                    # If prev_size is 0 and no exit_reason, conservatively assume opening
+                    if not is_closing_position:
+                        try:
+                            prev_size_safe = prev_size if prev_size is not None else 0
+                            # Handle floating point near-zero values
+                            prev_size_safe_float = abs(float(prev_size_safe)) if prev_size_safe is not None else 0
+                            exit_reason = getattr(order_response, 'exit_reason', None) or getattr(signal, 'exit_reason', None)
+                            has_exit_reason = exit_reason and exit_reason not in ("UNKNOWN", None)
+                            
+                            # Heuristic: if prev_size is effectively 0 and no exit_reason, likely opening
+                            if prev_size_safe_float < 0.0001 and not has_exit_reason and order_response.executed_qty > 0:
+                                if not is_opening_new_position:
+                                    logger.info(
+                                        f"[{summary.id}] ✅ Heuristic: Treating as opening new position "
+                                        f"(prev_size={prev_size_safe}, has_exit_reason={has_exit_reason})"
+                                    )
+                                    is_opening_new_position = True
+                        except Exception as heuristic_exc:
+                            logger.debug(
+                                f"[{summary.id}] Could not apply heuristic for is_opening_new_position: {heuristic_exc}"
+                            )
+                    
                     for attempt in range(max_retries):
                         try:
                             from app.services.strategy_persistence import StrategyPersistence
+                            old_position_instance_id = db_strategy.position_instance_id
                             position_instance_id = StrategyPersistence._get_or_generate_position_instance_id(
                                 self.order_manager.strategy_service.db_service.db,
                                 db_strategy.id,  # Strategy UUID
                                 is_opening_new_position,
                                 new_position_size  # Expected size after order
                             )
+                            # ✅ DEBUG: Log position_instance_id generation result
+                            logger.debug(
+                                f"[{summary.id}] position_instance_id generation result: "
+                                f"returned={position_instance_id}, is_opening_new_position={is_opening_new_position}, "
+                                f"old_id={old_position_instance_id}, new_position_size={new_position_size}"
+                            )
+                            # ✅ DEBUG: Log position_instance_id generation
+                            if is_opening_new_position and position_instance_id != old_position_instance_id:
+                                logger.info(
+                                    f"[{summary.id}] ✅ Generated NEW position_instance_id={position_instance_id} "
+                                    f"for opening position (old was {old_position_instance_id})"
+                                )
+                            elif is_opening_new_position and position_instance_id == old_position_instance_id:
+                                logger.warning(
+                                    f"[{summary.id}] ⚠️ Opening new position but got SAME position_instance_id={position_instance_id} "
+                                    f"as previous position. This may cause incorrect trade matching!"
+                                )
+                            elif not is_opening_new_position and position_instance_id:
+                                logger.debug(
+                                    f"[{summary.id}] Using existing position_instance_id={position_instance_id} "
+                                    f"(not opening new position)"
+                                )
                             break  # Success
                         except ValueError as e:
                             if "generation in progress" in str(e) and attempt < max_retries - 1:
@@ -612,13 +783,23 @@ class StrategyExecutor:
         # This ensures exit trades get the ID before position is cleared
         if self.order_manager.trade_service and self.order_manager.user_id and db_strategy:
             try:
+                # ✅ DEBUG: Log position_instance_id before saving
+                logger.info(
+                    f"[{summary.id}] Saving trade {order_response.order_id} ({order_response.side} {order_response.executed_qty} {order_response.symbol}) "
+                    f"with position_instance_id={position_instance_id}, "
+                    f"strategy.position_instance_id={db_strategy.position_instance_id}"
+                )
                 trade = self.order_manager.trade_service.save_trade(
                     self.order_manager.user_id,
                     db_strategy.id,
                     order_response,
                     position_instance_id=position_instance_id  # ✅ Pass ID
                 )
-                logger.debug(f"[{summary.id}] Saved trade {trade.id} with position_instance_id={position_instance_id}")
+                logger.info(
+                    f"[{summary.id}] ✅ Saved trade {trade.id} (order_id={trade.order_id}) "
+                    f"with position_instance_id={trade.position_instance_id} "
+                    f"(passed={position_instance_id})"
+                )
                 
                 # ✅ CRITICAL: Commit after trade is saved (strategy update was flushed, not committed)
                 # This ensures both strategy and trade are committed together (atomicity)
@@ -816,7 +997,7 @@ class StrategyExecutor:
                                             logger.warning(
                                                 f"[{summary.id}] ⚠️ Completed trade creation task finished but NO trades were created "
                                                 f"for exit_order_id={order_response.order_id}. Check logs above for details."
-                                            )
+                                        )
                                     except Exception as task_error:
                                         # Log error but don't fail the main flow
                                         logger.error(

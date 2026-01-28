@@ -132,19 +132,21 @@ class OrderExecutor:
             return False  # Can't check database without service
         
         try:
-            # Check if order with this order_id already exists
-            # This is a simple check - in production, you might want to check by client_order_id too
+            # Check if order with this order_id already exists for this strategy
+            # ✅ FIX: Filter by strategy_id to ensure proper isolation between strategies
+            # Note: Database has unique constraint on (strategy_id, order_id), so this is extra safety
             from app.core.database import get_db_session
             with get_db_session() as db:
                 from app.models.db_models import Trade
                 existing_trade = db.query(Trade).filter(
                     Trade.order_id == order_id,
-                    Trade.symbol == symbol
+                    Trade.symbol == symbol,
+                    Trade.strategy_id == strategy_id  # ✅ FIX: Isolate by strategy
                 ).first()
                 
                 if existing_trade:
                     logger.warning(
-                        f"Order {order_id} for {symbol} already exists in database "
+                        f"Order {order_id} for {symbol} already exists in database for strategy {strategy_id} "
                         f"(trade_id={existing_trade.id}). Duplicate order detected."
                     )
                     return True

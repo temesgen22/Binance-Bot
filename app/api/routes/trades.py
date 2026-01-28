@@ -750,18 +750,26 @@ def get_pnl_overview(
     # This helps catch manually opened positions or positions from other systems
     try:
         # Get all positions from Binance
-        # Note: Binance futures_position_information() without symbol returns all positions
-        rest = position_client._ensure()
-        all_binance_positions = rest.futures_position_information()
+        # ✅ FIX: Handle both BinanceClient and PaperBinanceClient
+        from app.core.paper_binance_client import PaperBinanceClient
+        
+        if isinstance(position_client, PaperBinanceClient):
+            # Paper trading: use futures_position_information() method
+            all_binance_positions = position_client.futures_position_information()
+        else:
+            # Real Binance: use _ensure().futures_position_information()
+            rest = position_client._ensure()
+            all_binance_positions = rest.futures_position_information()
+        
         for pos in all_binance_positions:
             position_amt = float(pos.get("positionAmt", 0))
             if abs(position_amt) > 0:
                 symbol = pos.get("symbol", "").upper()
                 if symbol:
                     symbols.add(symbol)
-                    logger.debug(f"Found Binance position for {symbol} (not in strategies with trades)")
+                    logger.debug(f"Found position for {symbol} (not in strategies with trades)")
     except Exception as exc:
-        logger.debug(f"Could not fetch all positions from Binance (this is optional): {exc}")
+        logger.debug(f"Could not fetch all positions (this is optional): {exc}")
         # Continue with symbols from strategies only - this is not critical
     
     # Get PnL for each symbol

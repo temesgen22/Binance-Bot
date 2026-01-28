@@ -391,6 +391,32 @@ class PaperBinanceClient:
             "leverage": position.leverage,
         }
     
+    def futures_position_information(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all virtual positions (for compatibility with BinanceClient).
+        
+        Args:
+            symbol: Optional symbol filter (if None, returns all positions)
+            
+        Returns:
+            List of position dicts matching Binance format
+        """
+        positions_list = []
+        
+        # If symbol is specified, return only that position
+        if symbol:
+            position = self.get_open_position(symbol)
+            if position:
+                positions_list.append(position)
+            return positions_list
+        
+        # Return all positions
+        for symbol_key, position in self.positions.items():
+            pos_dict = self.get_open_position(symbol_key)
+            if pos_dict:
+                positions_list.append(pos_dict)
+        
+        return positions_list
+    
     # Order Execution Methods (simulated)
     
     def place_order(
