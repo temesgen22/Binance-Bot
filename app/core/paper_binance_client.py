@@ -107,6 +107,81 @@ class PaperBinanceClient:
         
         logger.info(f"Initialized PaperBinanceClient for account '{account_id}' with balance ${initial_balance:.2f}")
     
+    def restore_positions_from_database(self, db_service) -> None:
+        """Restore paper trading positions from database using position_instance_id.
+        
+        This method queries the database for all strategies with open positions
+        (position_instance_id != None) for this account and restores them in memory.
+        
+        Args:
+            db_service: DatabaseService instance with database session
+        """
+        try:
+            from app.models.db_models import Strategy, Account
+            from uuid import UUID
+            
+            # Get account UUID from account_id (could be UUID string or account name)
+            account = None
+            try:
+                # Try as UUID first
+                account_uuid = UUID(self.account_id) if self.account_id else None
+                if account_uuid:
+                    account = db_service.db.query(Account).filter(Account.id == account_uuid).first()
+            except (ValueError, TypeError):
+                # Not a UUID, will try by name below
+                pass
+            
+            if not account:
+                # Try to find account by name only (don't try to cast non-UUID string to UUID)
+                account = db_service.db.query(Account).filter(Account.name == self.account_id).first()
+            
+            if not account or not account.paper_trading:
+                logger.debug(f"Account '{self.account_id}' not found or not a paper trading account, skipping position restoration")
+                return
+            
+            # Get all strategies with open positions (position_instance_id != None) for this account
+            open_strategies = db_service.db.query(Strategy).filter(
+                Strategy.account_id == account.id,
+                Strategy.position_instance_id.isnot(None),  # Position is open
+                Strategy.position_size > 0  # Has position size
+            ).all()
+            
+            restored_count = 0
+            for strategy in open_strategies:
+                try:
+                    # Restore position
+                    self.positions[strategy.symbol] = VirtualPosition(
+                        symbol=strategy.symbol,
+                        side=strategy.position_side or "LONG",
+                        size=float(strategy.position_size),
+                        entry_price=float(strategy.entry_price) if strategy.entry_price else 0.0,
+                        leverage=strategy.leverage or 1,
+                        position_instance_id=str(strategy.position_instance_id)  # Match with strategy
+                    )
+                    
+                    # Restore leverage setting
+                    self._leverage_cache[strategy.symbol] = strategy.leverage or 1
+                    
+                    restored_count += 1
+                    logger.info(
+                        f"Restored paper position: {strategy.symbol} {strategy.position_side} "
+                        f"@ {strategy.entry_price} (size={strategy.position_size}, "
+                        f"instance_id={strategy.position_instance_id})"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to restore position for strategy {strategy.id} ({strategy.symbol}): {e}"
+                    )
+            
+            if restored_count > 0:
+                logger.info(f"Restored {restored_count} paper trading position(s) for account '{self.account_id}'")
+            else:
+                logger.debug(f"No open positions to restore for account '{self.account_id}'")
+                
+        except Exception as e:
+            logger.warning(f"Failed to restore positions from database for account '{self.account_id}': {e}")
+            # Don't raise - position restoration failure shouldn't prevent client initialization
+    
     def _fetch_public_data(self, endpoint: str, params: dict, max_retries: int = 3) -> Any:
         """Fetch data from Binance public API with error handling and retries.
         
@@ -429,6 +504,7 @@ class PaperBinanceClient:
         reduce_only: bool = False,
         price: Optional[float] = None,
         client_order_id: Optional[str] = None,
+        position_instance_id: Optional[str] = None,
     ) -> OrderResponse:
         """Place a simulated order.
         
@@ -472,7 +548,19 @@ class PaperBinanceClient:
         order_id = self._generate_order_id()
         
         # Update virtual position
-        pnl = self._update_position(symbol, side, rounded_quantity, fill_price, reduce_only)
+        # For new positions, pass position_instance_id; for existing positions, preserve it
+        existing_position = self.positions.get(symbol)
+        if existing_position and existing_position.position_instance_id:
+            # Preserve existing position_instance_id when adding to position
+            position_instance_id = existing_position.position_instance_id
+        elif not reduce_only:
+            # New position - use provided position_instance_id
+            pass  # Use the parameter value
+        else:
+            # Closing position - preserve existing ID if available
+            position_instance_id = existing_position.position_instance_id if existing_position else None
+        
+        pnl = self._update_position(symbol, side, rounded_quantity, fill_price, reduce_only, position_instance_id)
         
         # Update virtual balance (subtract fee, add PnL if closing position)
         old_balance = self.balance
@@ -519,7 +607,8 @@ class PaperBinanceClient:
         side: str,
         quantity: float,
         price: float,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        position_instance_id: Optional[str] = None
     ) -> float:
         """Update virtual position after order execution.
         
@@ -561,8 +650,12 @@ class PaperBinanceClient:
                         size=quantity,
                         entry_price=price,
                         leverage=leverage,
+                        position_instance_id=position_instance_id,  # Store position_instance_id
                     )
-                    logger.debug(f"Opened LONG position for {symbol}: {quantity} @ ${price:.8f} (leverage: {leverage}x)")
+                    logger.debug(
+                        f"Opened LONG position for {symbol}: {quantity} @ ${price:.8f} "
+                        f"(leverage: {leverage}x, instance_id={position_instance_id})"
+                    )
         
         else:  # SELL
             if position and position.side == "LONG":
@@ -595,8 +688,12 @@ class PaperBinanceClient:
                         size=quantity,
                         entry_price=price,
                         leverage=leverage,
+                        position_instance_id=position_instance_id,  # Store position_instance_id
                     )
-                    logger.debug(f"Opened SHORT position for {symbol}: {quantity} @ ${price:.8f} (leverage: {leverage}x)")
+                    logger.debug(
+                        f"Opened SHORT position for {symbol}: {quantity} @ ${price:.8f} "
+                        f"(leverage: {leverage}x, instance_id={position_instance_id})"
+                    )
         
         return pnl
     

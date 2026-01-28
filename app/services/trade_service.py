@@ -170,7 +170,8 @@ class TradeService:
         user_id: UUID,
         strategy_id: UUID,
         order: OrderResponse,
-        position_instance_id: Optional[UUID] = None  # Pass from caller if known
+        position_instance_id: Optional[UUID] = None,  # Pass from caller if known
+        commit: bool = True  # Whether to commit transaction (False = flush only, caller commits)
     ) -> DBTrade:
         """Save a trade to database and cache in Redis.
         
@@ -293,19 +294,32 @@ class TradeService:
                 existing_trade.initial_margin = order.initial_margin
             
             # ✅ INFER position_side if missing (same logic as in _order_response_to_trade_dict)
-            if not existing_trade.position_side:
-                if order.exit_reason and order.exit_reason != "UNKNOWN":
-                    # Closing a position
-                    if order.side == "SELL":
+            # ✅ CRITICAL FIX: If exit_reason is present, ALWAYS override position_side (even if already set)
+            # This ensures exit trades have correct position_side (SELL + exit_reason = LONG, etc.)
+            if order.exit_reason and order.exit_reason != "UNKNOWN":
+                # Closing a position - ALWAYS set position_side based on exit_reason + order side
+                if order.side == "SELL":
+                    if existing_trade.position_side != "LONG":
+                        if existing_trade.position_side:
+                            logger.warning(
+                                f"Trade {existing_trade.id} (order_id={existing_trade.order_id}) has incorrect position_side={existing_trade.position_side}. "
+                                f"Correcting to LONG for SELL order with exit_reason={order.exit_reason}"
+                            )
                         existing_trade.position_side = "LONG"  # SELL closes LONG
-                    elif order.side == "BUY":
+                elif order.side == "BUY":
+                    if existing_trade.position_side != "SHORT":
+                        if existing_trade.position_side:
+                            logger.warning(
+                                f"Trade {existing_trade.id} (order_id={existing_trade.order_id}) has incorrect position_side={existing_trade.position_side}. "
+                                f"Correcting to SHORT for BUY order with exit_reason={order.exit_reason}"
+                            )
                         existing_trade.position_side = "SHORT"  # BUY closes SHORT
-                else:
-                    # Opening a position
-                    if order.side == "BUY":
-                        existing_trade.position_side = "LONG"  # BUY opens LONG
-                    elif order.side == "SELL":
-                        existing_trade.position_side = "SHORT"  # SELL opens SHORT
+            elif not existing_trade.position_side:
+                # Opening a position - only set if not already set
+                if order.side == "BUY":
+                    existing_trade.position_side = "LONG"  # BUY opens LONG
+                elif order.side == "SELL":
+                    existing_trade.position_side = "SHORT"  # SELL opens SHORT
             
             # ✅ CRITICAL FIX: Set position_instance_id, but allow correction if stale
             # Allow updating if:
@@ -347,10 +361,14 @@ class TradeService:
             if not existing_trade.time_in_force and existing_trade.order_type == "LIMIT":
                 existing_trade.time_in_force = order.time_in_force or "GTC"
             
-            # Commit the update
+            # Commit or flush the update
             try:
-                self.db_service.db.commit()
-                logger.info(f"Successfully updated trade {existing_trade.id} for order {order.order_id}")
+                if commit:
+                    self.db_service.db.commit()
+                    logger.info(f"Successfully updated trade {existing_trade.id} for order {order.order_id}")
+                else:
+                    self.db_service.db.flush()
+                    logger.debug(f"Flushed trade {existing_trade.id} update (caller will commit)")
             except Exception as e:
                 self.db_service.db.rollback()
                 logger.error(f"Failed to update existing trade {existing_trade.id}: {e}")
@@ -360,9 +378,16 @@ class TradeService:
         else:
             # Create new trade
             try:
-                # Save to database within transaction (DatabaseService.create_trade handles this)
-                # If this fails, exception is raised and transaction is rolled back
-                db_trade = self.db_service.create_trade(trade_data)
+                if commit:
+                    # Save to database within transaction (DatabaseService.create_trade handles this)
+                    # If this fails, exception is raised and transaction is rolled back
+                    db_trade = self.db_service.create_trade(trade_data)
+                else:
+                    # Flush only - caller will commit (for atomicity with position_instance_id)
+                    db_trade = DBTrade(**trade_data)
+                    self.db_service.db.add(db_trade)
+                    self.db_service.db.flush()
+                    logger.debug(f"Flushed new trade {db_trade.id} (caller will commit)")
             except IntegrityError as e:
                 # Handle duplicate order gracefully (race condition: another process created it)
                 error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
@@ -432,7 +457,10 @@ class TradeService:
                             existing_trade.time_in_force = order.time_in_force or "GTC"
                         
                         try:
-                            self.db_service.db.commit()
+                            if commit:
+                                self.db_service.db.commit()
+                            else:
+                                self.db_service.db.flush()
                         except Exception as update_e:
                             self.db_service.db.rollback()
                             logger.error(f"Failed to update existing trade after IntegrityError: {update_e}")

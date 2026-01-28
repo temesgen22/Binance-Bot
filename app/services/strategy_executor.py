@@ -823,11 +823,19 @@ class StrategyExecutor:
                     f"with position_instance_id={position_instance_id}, "
                     f"strategy.position_instance_id={db_strategy.position_instance_id}"
                 )
+                # ✅ CRITICAL: Copy exit_reason from signal to order_response before saving
+                # This ensures position_side is correctly inferred (SELL with exit_reason = LONG, etc.)
+                if signal.exit_reason and not order_response.exit_reason:
+                    order_response = order_response.model_copy(update={"exit_reason": signal.exit_reason})
+                
+                # ✅ CRITICAL: Save trade with flush only (commit=False) to ensure atomicity
+                # with position_instance_id. Both will be committed together below.
                 trade = self.order_manager.trade_service.save_trade(
                     self.order_manager.user_id,
                     db_strategy.id,
                     order_response,
-                    position_instance_id=position_instance_id  # ✅ Pass ID
+                    position_instance_id=position_instance_id,  # ✅ Pass ID
+                    commit=False  # ✅ Flush only - commit together with position_instance_id
                 )
                 logger.info(
                     f"[{summary.id}] ✅ Saved trade {trade.id} (order_id={trade.order_id}) "

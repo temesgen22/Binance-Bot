@@ -847,33 +847,19 @@ class StrategyOrderManager:
                                         f"Skipping duplicate save."
                                     )
                                 else:
-                                    # Save trade to database early (safety net)
-                                    # Note: position_instance_id may be stale here, but will be corrected
-                                    # by strategy_executor when it saves the trade with the correct ID
-                                    self.trade_service.save_trade(
-                                        user_id=self.user_id,
-                                        strategy_id=db_strategy.id,  # UUID from database
-                                        order=order_with_exit_reason
-                                        # ✅ Don't pass position_instance_id here - let strategy_executor set it correctly
-                                    )
-                                    logger.info(
-                                        f"[{summary.id}] ✅ Saved trade {order_response.order_id} to database "
-                                        f"({order_response.side} {order_response.executed_qty} {order_response.symbol})"
+                                    # ✅ FIX: Don't save trade here - let strategy_executor save it atomically
+                                    # with position_instance_id. This ensures trade and position_instance_id
+                                    # are saved together in one transaction.
+                                    logger.debug(
+                                        f"[{summary.id}] Trade {order_response.order_id} will be saved by strategy_executor "
+                                        f"with position_instance_id in atomic transaction."
                                     )
                             except Exception as check_exc:
-                                # If duplicate check fails, still try to save (save_trade handles duplicates)
+                                # If duplicate check fails, log warning but don't save here
+                                # strategy_executor will save it with position_instance_id atomically
                                 logger.warning(
                                     f"[{summary.id}] Error checking for duplicate order: {check_exc}. "
-                                    f"Attempting save anyway (will handle duplicates)."
-                                )
-                                self.trade_service.save_trade(
-                                    user_id=self.user_id,
-                                    strategy_id=db_strategy.id,
-                                    order=order_with_exit_reason
-                                )
-                                logger.info(
-                                    f"[{summary.id}] ✅ Saved trade {order_response.order_id} to database "
-                                    f"({order_response.side} {order_response.executed_qty} {order_response.symbol})"
+                                    f"Trade will be saved by strategy_executor with position_instance_id."
                                 )
                         else:
                             logger.warning(

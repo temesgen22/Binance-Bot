@@ -54,6 +54,35 @@ class BinanceClientManager:
                 initial_balance=initial_balance,
                 balance_persistence_callback=balance_persistence_callback
             )
+            
+            # ✅ NEW: Restore positions from database using position_instance_id
+            # Try to get database service from callback context if available
+            # This is optional - if database service is not available, positions will be empty
+            # and will be synced on first strategy evaluation
+            try:
+                # Try to get database service from settings or create a temporary one
+                from app.services.database_service import DatabaseService
+                from app.core.database import get_db_session_dependency
+                
+                # Get database session
+                db_gen = get_db_session_dependency()
+                db = next(db_gen)
+                try:
+                    db_service = DatabaseService(db)
+                    client.restore_positions_from_database(db_service)
+                finally:
+                    # Close the database session
+                    try:
+                        next(db_gen, None)  # Close generator
+                    except StopIteration:
+                        pass
+            except Exception as e:
+                # Position restoration is optional - log warning but don't fail
+                logger.debug(
+                    f"Could not restore positions for paper trading account '{account_id}': {e}. "
+                    f"Positions will be synced on first strategy evaluation."
+                )
+            
             self._clients[account_id.lower()] = client
             self._accounts[account_id.lower()] = account_config
             logger.info(
