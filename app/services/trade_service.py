@@ -307,16 +307,35 @@ class TradeService:
                     elif order.side == "SELL":
                         existing_trade.position_side = "SHORT"  # SELL opens SHORT
             
-            # ✅ CRITICAL FIX: Only set position_instance_id if NULL (first write wins)
-            # This prevents accidental corruption if later code passes wrong ID
-            if existing_trade.position_instance_id is None and position_instance_id is not None:
-                existing_trade.position_instance_id = position_instance_id
-            elif existing_trade.position_instance_id is not None and position_instance_id is not None:
-                # Optional: Log warning if IDs don't match (indicates bug in caller)
-                if existing_trade.position_instance_id != position_instance_id:
+            # ✅ CRITICAL FIX: Set position_instance_id, but allow correction if stale
+            # Allow updating if:
+            # 1. Trade has no ID (first write)
+            # 2. Trade has old stale ID and strategy has new ID (correction needed)
+            if existing_trade.position_instance_id is None:
+                # First write - set it
+                if position_instance_id is not None:
+                    existing_trade.position_instance_id = position_instance_id
+            elif existing_trade.position_instance_id != position_instance_id and position_instance_id is not None:
+                # ID mismatch - check if correction needed
+                # If strategy has new ID and trade has old ID, this is a correction
+                db_strategy = self.db_service.db.query(Strategy).filter(
+                    Strategy.id == strategy_id
+                ).first()
+                
+                if db_strategy and db_strategy.position_instance_id == position_instance_id:
+                    # Strategy has new ID, trade has old ID - this is a correction
                     logger.warning(
-                        f"Trade {existing_trade.id} already has position_instance_id "
+                        f"Trade {existing_trade.id} (order_id={existing_trade.order_id}) has stale position_instance_id={existing_trade.position_instance_id}. "
+                        f"Updating to correct value {position_instance_id} (strategy has new ID). "
+                        f"This indicates trade was saved before position_instance_id was generated."
+                    )
+                    existing_trade.position_instance_id = position_instance_id
+                else:
+                    # Different scenario - log warning but don't update
+                    logger.warning(
+                        f"Trade {existing_trade.id} (order_id={existing_trade.order_id}) already has position_instance_id "
                         f"{existing_trade.position_instance_id}, ignoring new value {position_instance_id}. "
+                        f"Strategy.position_instance_id={db_strategy.position_instance_id if db_strategy else None}. "
                         f"This may indicate a bug in the caller."
                     )
             

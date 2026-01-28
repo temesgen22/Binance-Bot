@@ -105,14 +105,49 @@ class StrategyPersistence:
             # Don't clear here - clear after exit trade is saved
             return db_strategy.position_instance_id
         
-        # If opening new position and no existing ID, generate new one
-        if is_opening_new_position and not db_strategy.position_instance_id:
+        # ✅ FIX: If adding to position but position_instance_id is None, try to recover from last entry trade
+        if not is_opening_new_position and current_position_size > 0 and not db_strategy.position_instance_id:
+            logger.warning(
+                f"Strategy {strategy_uuid} has position (size={current_position_size}) but no position_instance_id. "
+                f"Attempting to recover from last entry trade."
+            )
+            # Try to recover from last entry trade
+            from app.models.db_models import Trade
+            # Get strategy's symbol and position_side from database
+            if db_strategy.symbol and db_strategy.position_side:
+                entry_side = "BUY" if db_strategy.position_side == "LONG" else "SELL"
+                last_entry = db.query(Trade).filter(
+                    Trade.strategy_id == strategy_uuid,
+                    Trade.symbol == db_strategy.symbol,
+                    Trade.position_side == db_strategy.position_side,
+                    Trade.side == entry_side,
+                    Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+                    Trade.position_instance_id.isnot(None)
+                ).order_by(Trade.timestamp.desc()).first()
+                
+                if last_entry and last_entry.position_instance_id:
+                    db_strategy.position_instance_id = last_entry.position_instance_id
+                    db.flush()
+                    logger.info(
+                        f"Recovered position_instance_id {last_entry.position_instance_id} from last entry trade "
+                        f"{last_entry.order_id} for strategy {strategy_uuid}"
+                    )
+                    return last_entry.position_instance_id
+        
+        # ✅ CRITICAL FIX: If opening new position, ALWAYS generate new ID
+        # Even if old ID exists (stale state from previous position that wasn't cleared)
+        # This prevents reusing stale IDs which causes incorrect trade matching
+        if is_opening_new_position:
             new_id = uuid4()
-            # ✅ CRITICAL FIX: Use flush() instead of commit()
-            # This keeps the update in the same transaction as the trade save
-            # Prevents inconsistent state if trade save fails after strategy update
+            old_id = db_strategy.position_instance_id
             db_strategy.position_instance_id = new_id
             db.flush()  # Flush to database (visible in transaction, not committed)
+            if old_id:
+                logger.warning(
+                    f"Strategy {strategy_uuid} had stale position_instance_id={old_id} "
+                    f"when opening new position. Generated new ID={new_id}. "
+                    f"This indicates position_instance_id wasn't cleared after previous position closed."
+                )
             logger.info(f"Generated new position_instance_id {new_id} for strategy {strategy_uuid}")
             return new_id
             # ✅ NO commit() here - let caller commit after trade is saved

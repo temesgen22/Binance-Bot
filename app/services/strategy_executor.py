@@ -539,8 +539,30 @@ class StrategyExecutor:
                     not has_exit_reason  # ✅ FIX: Don't treat TP/SL exits as opening new positions
                 )
                 
-                # ✅ DEBUG: Log position opening detection
-                logger.debug(
+                # ✅ CRITICAL FIX: Force opening detection for clear entry trades
+                # This handles two scenarios:
+                # 1. prev_size=0 but detection failed (prev_side might be set)
+                # 2. prev_size > 0 but stale state (position wasn't cleared after previous close)
+                #    - If prev_size matches executed_qty exactly, it's likely stale state
+                #    - If no exit_reason, it's definitely an entry trade
+                if not is_opening_new_position and not has_exit_reason and order_response.executed_qty > 0:
+                    # Check if this looks like stale state (prev_size matches executed_qty exactly)
+                    # or if prev_size is 0 (normal entry)
+                    prev_size_float = float(prev_size or 0)
+                    executed_qty_float = float(order_response.executed_qty)
+                    is_stale_state = abs(prev_size_float - executed_qty_float) < 0.0001
+                    
+                    if prev_size_is_zero or is_stale_state:
+                        logger.warning(
+                            f"[{summary.id}] ⚠️ Force setting is_opening_new_position=True "
+                            f"(prev_size={prev_size}, prev_side={prev_side}, has_exit_reason={has_exit_reason}, "
+                            f"executed_qty={order_response.executed_qty}, is_stale_state={is_stale_state}). "
+                            f"Detection logic may have failed due to stale state, but this is clearly an entry trade."
+                        )
+                        is_opening_new_position = True
+                
+                # ✅ DEBUG: Log position opening detection (changed to INFO for visibility)
+                logger.info(
                     f"[{summary.id}] Position detection result: is_opening_new_position={is_opening_new_position}, "
                     f"is_closing_position={is_closing_position}, prev_size={prev_size}, "
                     f"prev_side={prev_side}, has_exit_reason={has_exit_reason}, "
@@ -778,6 +800,18 @@ class StrategyExecutor:
                 )
                 # Set to None so code continues
                 position_instance_id = None
+                # ✅ FIX: Also set is_opening_new_position and is_closing_position for consistency
+                # These might be used later even if exception occurred
+                if 'is_opening_new_position' not in locals():
+                    is_opening_new_position = False
+                if 'is_closing_position' not in locals():
+                    is_closing_position = False
+                if 'new_position_size' not in locals():
+                    try:
+                        prev_size_safe = prev_size if prev_size is not None else 0
+                        new_position_size = prev_size_safe + order_response.executed_qty
+                    except:
+                        new_position_size = order_response.executed_qty
         
         # ✅ CRITICAL: Save trade with position_instance_id BEFORE updating position state
         # This ensures exit trades get the ID before position is cleared
@@ -941,6 +975,24 @@ class StrategyExecutor:
                 f"{order_response.side} {order_response.symbol} "
                 f"qty={order_response.executed_qty} @ {order_response.avg_price or order_response.price:.8f}"
             )
+            
+            # ✅ CRITICAL FIX: Clear position_instance_id immediately after position closes
+            # This prevents stale ID from being used for next position
+            if db_strategy and db_strategy.position_instance_id:
+                old_id = db_strategy.position_instance_id
+                db_strategy.position_instance_id = None
+                summary.position_instance_id = None
+                try:
+                    self.order_manager.strategy_service.db_service.db.commit()
+                    logger.info(
+                        f"[{summary.id}] ✅ Cleared position_instance_id={old_id} after position closed "
+                        f"(exit_order_id={order_response.order_id})"
+                    )
+                except Exception as clear_exc:
+                    self.order_manager.strategy_service.db_service.db.rollback()
+                    logger.error(
+                        f"[{summary.id}] Failed to clear position_instance_id after position close: {clear_exc}"
+                    )
             
             # ✅ Create completed trades when position closes (ON-WRITE)
             # This pre-computes matched trades for better performance

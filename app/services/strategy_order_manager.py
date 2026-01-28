@@ -847,11 +847,14 @@ class StrategyOrderManager:
                                         f"Skipping duplicate save."
                                     )
                                 else:
-                                    # Save trade to database
+                                    # Save trade to database early (safety net)
+                                    # Note: position_instance_id may be stale here, but will be corrected
+                                    # by strategy_executor when it saves the trade with the correct ID
                                     self.trade_service.save_trade(
                                         user_id=self.user_id,
                                         strategy_id=db_strategy.id,  # UUID from database
                                         order=order_with_exit_reason
+                                        # ✅ Don't pass position_instance_id here - let strategy_executor set it correctly
                                     )
                                     logger.info(
                                         f"[{summary.id}] ✅ Saved trade {order_response.order_id} to database "
