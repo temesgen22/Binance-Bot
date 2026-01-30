@@ -66,7 +66,7 @@ class CreateStrategyRequest(BaseModel):
     @field_validator("symbol")
     @classmethod
     def uppercase_symbol(cls, value: str) -> str:
-        return value.upper()
+        return value.strip().upper()
     
     @field_validator("leverage")
     @classmethod

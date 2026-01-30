@@ -213,6 +213,8 @@ class BinanceClient:
         Returns:
             Current leverage as integer, or None if not found
         """
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         rest = self._ensure()
         try:
             positions = rest.futures_position_information(symbol=symbol)
@@ -266,6 +268,9 @@ class BinanceClient:
         """
         from app.core.exceptions import InvalidLeverageError
         
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
+        
         if not (1 <= leverage <= 50):
             raise InvalidLeverageError(
                 leverage=leverage,
@@ -294,6 +299,8 @@ class BinanceClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_price(self, symbol: str) -> float:
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         """Get current market price for a symbol with circuit breaker protection.
         
         Raises:
@@ -315,6 +322,8 @@ class BinanceClient:
     
     def _get_price_impl(self, symbol: str) -> float:
         """Internal implementation of get_price (without circuit breaker)."""
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         rest = self._ensure()
         try:
             ticker = rest.futures_symbol_ticker(symbol=symbol)
@@ -354,6 +363,8 @@ class BinanceClient:
             BinanceAPIError: If API call fails
             BinanceNetworkError: If network error occurs
         """
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         rest = self._ensure()
         try:
             klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
@@ -511,6 +522,8 @@ class BinanceClient:
         Returns:
             Order status dict with filled price, quantity, etc.
         """
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         rest = self._ensure()
         return rest.futures_get_order(symbol=symbol, orderId=order_id)
 
@@ -558,6 +571,8 @@ class BinanceClient:
         client_order_id: Optional[str] = None,
     ) -> OrderResponse:
         """Internal implementation of place_order (without circuit breaker)."""
+        # Strip whitespace to prevent signature errors (defensive fix)
+        symbol = symbol.strip()
         # Round quantity to correct precision for the symbol
         rounded_quantity = self.round_quantity(symbol, quantity)
         logger.info(

@@ -567,6 +567,8 @@ class DatabaseService:
         max_positions: int = 1
     ) -> Strategy:
         """Create a new strategy."""
+        # Strip whitespace from symbol to prevent API signature errors
+        symbol = symbol.strip() if symbol else ""
         strategy = Strategy(
             user_id=user_id,
             strategy_id=strategy_id,
@@ -658,6 +660,10 @@ class DatabaseService:
         strategy = self.get_strategy(user_id, strategy_id)
         if not strategy:
             return None
+        
+        # Strip whitespace from symbol if being updated
+        if "symbol" in updates and updates["symbol"]:
+            updates["symbol"] = updates["symbol"].strip()
         
         for key, value in updates.items():
             if hasattr(strategy, key):

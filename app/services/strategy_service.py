@@ -123,7 +123,7 @@ class StrategyService(BaseCacheService):
         return StrategySummary(
             id=db_strategy.strategy_id,  # Use strategy_id (string identifier) not id (database UUID)
             name=db_strategy.name,
-            symbol=db_strategy.symbol,
+            symbol=db_strategy.symbol.strip() if db_strategy.symbol else "",  # Strip whitespace to prevent API signature errors
             strategy_type=StrategyType(db_strategy.strategy_type),
             status=StrategyState(db_strategy.status),
             leverage=db_strategy.leverage,
@@ -251,6 +251,8 @@ class StrategyService(BaseCacheService):
         max_positions: int = 1
     ) -> StrategySummary:
         """Create a new strategy in database and cache."""
+        # Strip whitespace from symbol to prevent API signature errors
+        symbol = symbol.strip() if symbol else ""
         # Create in database
         # Create strategy in database within transaction (DatabaseService handles this)
         # If this fails, exception is raised and transaction is rolled back
@@ -311,6 +313,9 @@ class StrategyService(BaseCacheService):
         Returns:
             Updated StrategySummary, or None if strategy not found
         """
+        # Strip whitespace from symbol if being updated
+        if "symbol" in updates and updates["symbol"]:
+            updates["symbol"] = updates["symbol"].strip()
         # Update in database within transaction (DatabaseService handles this)
         # If this fails, exception is raised and transaction is rolled back
         db_strategy = self.db_service.update_strategy(user_id, strategy_id, **updates)
