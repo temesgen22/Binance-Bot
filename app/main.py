@@ -42,6 +42,7 @@ from app.api.exception_handlers import (
     risk_limit_exceeded_handler,
     circuit_breaker_active_handler,
     drawdown_limit_exceeded_handler,
+    symbol_conflict_handler,
     binance_bot_exception_handler,
     validation_error_handler,
     general_exception_handler,
@@ -69,6 +70,7 @@ from app.core.exceptions import (
     RiskLimitExceededError,
     CircuitBreakerActiveError,
     DrawdownLimitExceededError,
+    SymbolConflictError,
     BinanceBotException,
 )
 from app.risk.manager import RiskManager
@@ -165,7 +167,7 @@ def create_app() -> FastAPI:
     
     # Initialize Telegram notification service if enabled
     notification_service = None
-    if settings.telegram_enabled:
+    if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
         telegram_notifier = TelegramNotifier(
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
@@ -175,6 +177,11 @@ def create_app() -> FastAPI:
             telegram_notifier=telegram_notifier,
             profit_threshold_usd=settings.telegram_profit_threshold_usd,
             loss_threshold_usd=settings.telegram_loss_threshold_usd,
+        )
+    elif settings.telegram_enabled and (not settings.telegram_bot_token or not settings.telegram_chat_id):
+        logger.warning(
+            "Telegram notifications are enabled but bot_token or chat_id is missing. "
+            "Notifications will be disabled."
         )
     
     runner = StrategyRunner(
@@ -533,6 +540,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(StrategyAlreadyRunningError, strategy_already_running_handler)
     app.add_exception_handler(StrategyNotRunningError, strategy_not_running_handler)
     app.add_exception_handler(MaxConcurrentStrategiesError, max_concurrent_strategies_handler)
+    app.add_exception_handler(SymbolConflictError, symbol_conflict_handler)
     app.add_exception_handler(InvalidLeverageError, invalid_leverage_handler)
     app.add_exception_handler(PositionSizingError, position_sizing_handler)
     app.add_exception_handler(OrderExecutionError, order_execution_handler)

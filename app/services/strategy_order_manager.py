@@ -196,25 +196,46 @@ class StrategyOrderManager:
             
             # Only check for conflicts if we're opening a position
             if is_opening_order:
-                binance_position = await asyncio.to_thread(account_client.get_open_position, signal.symbol)
-                has_binance_position = binance_position and abs(float(binance_position.get("positionAmt", 0))) > 0
+                # ✅ LAYER 3: Check database for ALL running strategies, not just in-memory
+                # This is a safety net - should rarely trigger if layers 1-2 work correctly
+                conflicting_strategy = None
+                if self.strategy_service and self.user_id:
+                    # Check database for running strategies with same symbol+account
+                    all_strategies = await self.strategy_service.async_list_strategies(self.user_id)
+                    for other_strategy in all_strategies:
+                        # Skip current strategy
+                        if other_strategy.id == summary.id:
+                            continue
+                        
+                        # Check symbol match (case-insensitive, stripped)
+                        if other_strategy.symbol.strip().upper() != signal.symbol.strip().upper():
+                            continue
+                        
+                        # Check account match
+                        if other_strategy.account_id != summary.account_id:
+                            continue
+                        
+                        # Check if strategy is running
+                        if other_strategy.status == StrategyState.running:
+                            conflicting_strategy = other_strategy
+                            break
                 
-                if has_binance_position:
-                    # Check if any OTHER strategy (not current) has this position
-                    conflicting_strategy = None
+                # Fallback: Also check in-memory strategies (for backward compatibility)
+                if not conflicting_strategy:
                     for strategy_id, other_summary in self._strategies.items():
                         # Skip current strategy
                         if strategy_id == summary.id:
                             continue
                         
                         # Check if other strategy has open position for same symbol
-                        if (other_summary.symbol == signal.symbol and
+                        if (other_summary.symbol.strip().upper() == signal.symbol.strip().upper() and
+                            other_summary.account_id == summary.account_id and
                             other_summary.position_size and
                             float(other_summary.position_size) > 0):
                             conflicting_strategy = other_summary
                             break
-                    
-                    if conflicting_strategy:
+                
+                if conflicting_strategy:
                         error_msg = (
                             f"Cannot open position for {signal.symbol}: "
                             f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "

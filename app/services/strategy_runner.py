@@ -20,6 +20,7 @@ from app.core.exceptions import (
     PositionSizingError,
     OrderExecutionError,
     BinanceAPIError,
+    SymbolConflictError,
 )
 from app.risk.manager import RiskManager, PositionSizingResult
 from app.models.strategy import CreateStrategyRequest, StrategyState, StrategySummary, StrategyType, StrategyStats, OverallStats
@@ -221,6 +222,94 @@ class StrategyRunner:
     def _get_account_client(self, account_id: str) -> BinanceClient:
         """Get client for an account (delegates to account_manager)."""
         return self.account_manager.get_account_client(account_id)
+    
+    def _check_symbol_conflict(
+        self,
+        user_id: "UUID",
+        symbol: str,
+        account_id: str,
+        exclude_strategy_id: Optional[str] = None
+    ) -> Optional[StrategySummary]:
+        """Check if another running strategy exists for the same symbol+account.
+        
+        Args:
+            user_id: User ID
+            symbol: Trading symbol (must be stripped and uppercased)
+            account_id: Account ID string
+            exclude_strategy_id: Strategy ID to exclude from check (e.g., current strategy)
+        
+        Returns:
+            Conflicting StrategySummary if found, None otherwise
+        """
+        if not self.strategy_service:
+            return None
+        
+        # Get all strategies for user from database
+        all_strategies = self.strategy_service.list_strategies(user_id)
+        
+        # Find running strategies for same symbol+account
+        for strategy in all_strategies:
+            # Skip excluded strategy
+            if exclude_strategy_id and strategy.id == exclude_strategy_id:
+                continue
+            
+            # Check symbol match (case-insensitive, stripped)
+            if strategy.symbol.strip().upper() != symbol.strip().upper():
+                continue
+            
+            # Check account match
+            if strategy.account_id != account_id:
+                continue
+            
+            # Check if strategy is running
+            if strategy.status == StrategyState.running:
+                return strategy
+        
+        return None
+    
+    async def _check_symbol_conflict_async(
+        self,
+        user_id: "UUID",
+        symbol: str,
+        account_id: str,
+        exclude_strategy_id: Optional[str] = None
+    ) -> Optional[StrategySummary]:
+        """Async version of _check_symbol_conflict for order execution context.
+        
+        Args:
+            user_id: User ID
+            symbol: Trading symbol (must be stripped and uppercased)
+            account_id: Account ID string
+            exclude_strategy_id: Strategy ID to exclude from check (e.g., current strategy)
+        
+        Returns:
+            Conflicting StrategySummary if found, None otherwise
+        """
+        if not self.strategy_service:
+            return None
+        
+        # Get all strategies for user from database (async)
+        all_strategies = await self.strategy_service.async_list_strategies(user_id)
+        
+        # Find running strategies for same symbol+account
+        for strategy in all_strategies:
+            # Skip excluded strategy
+            if exclude_strategy_id and strategy.id == exclude_strategy_id:
+                continue
+            
+            # Check symbol match (case-insensitive, stripped)
+            if strategy.symbol.strip().upper() != symbol.strip().upper():
+                continue
+            
+            # Check account match
+            if strategy.account_id != account_id:
+                continue
+            
+            # Check if strategy is running
+            if strategy.status == StrategyState.running:
+                return strategy
+        
+        return None
     
     # _update_strategy_in_db() removed - now handled by state_manager.update_strategy_in_db()
 
@@ -481,6 +570,31 @@ class StrategyRunner:
         # Validate account_id exists
         account_id = payload.account_id.lower() if payload.account_id else "default"
         
+        # ✅ LAYER 1: Check for symbol conflict BEFORE creating strategy
+        # This prevents conflicts at the source - before any database writes
+        if self.strategy_service and self.user_id:
+            conflicting_strategy = self._check_symbol_conflict(
+                user_id=self.user_id,
+                symbol=payload.symbol.strip().upper(),
+                account_id=account_id,
+                exclude_strategy_id=None  # No strategy to exclude (new registration)
+            )
+            
+            if conflicting_strategy:
+                raise SymbolConflictError(
+                    symbol=payload.symbol,
+                    account_id=account_id,
+                    conflicting_strategy_id=conflicting_strategy.id,
+                    conflicting_strategy_name=conflicting_strategy.name,
+                    message=(
+                        f"Cannot register strategy for {payload.symbol} on account '{account_id}': "
+                        f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "
+                        f"is already running for this symbol. "
+                        f"Only one strategy can trade a symbol per account to prevent position conflicts. "
+                        f"Please stop the conflicting strategy first or use a different account."
+                    )
+                )
+        
         # Load accounts from database if we have a user_id and they're not already loaded
         if self.user_id and not self.client_manager.account_exists(account_id):
             from app.services.account_service import AccountService
@@ -626,6 +740,31 @@ class StrategyRunner:
         
         # Get the strategy summary (must be done early as it's used in checks below)
         summary = self._strategies[strategy_id]
+        
+        # ✅ LAYER 2: Check for symbol conflict BEFORE starting strategy
+        # This catches conflicts when strategies are started manually or restored
+        if self.strategy_service and self.user_id:
+            # Use sync version since we might have a sync database session
+            conflicting_strategy = self._check_symbol_conflict(
+                user_id=self.user_id,
+                symbol=summary.symbol.strip().upper(),
+                account_id=summary.account_id,
+                exclude_strategy_id=strategy_id  # Exclude current strategy
+            )
+            
+            if conflicting_strategy:
+                raise SymbolConflictError(
+                    symbol=summary.symbol,
+                    account_id=summary.account_id,
+                    conflicting_strategy_id=conflicting_strategy.id,
+                    conflicting_strategy_name=conflicting_strategy.name,
+                    message=(
+                        f"Cannot start strategy for {summary.symbol} on account '{summary.account_id}': "
+                        f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "
+                        f"is already running for this symbol. "
+                        f"Stop the conflicting strategy first, or use a different account."
+                    )
+                )
         
         # Clean up any dead/completed tasks before checking limit
         # This prevents dead tasks from counting toward concurrent limit

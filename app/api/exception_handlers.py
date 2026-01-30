@@ -28,6 +28,7 @@ from app.core.exceptions import (
     RiskLimitExceededError,
     CircuitBreakerActiveError,
     DrawdownLimitExceededError,
+    SymbolConflictError,
 )
 
 
@@ -105,6 +106,28 @@ async def max_concurrent_strategies_handler(request: Request, exc: MaxConcurrent
         content={
             "error": "Maximum Concurrent Strategies Reached",
             "message": exc.message,
+            "details": exc.details,
+        },
+    )
+
+
+async def symbol_conflict_handler(request: Request, exc: SymbolConflictError) -> JSONResponse:
+    """Handle symbol conflict errors (multiple strategies for same symbol+account)."""
+    logger.warning(
+        f"Symbol conflict detected: {exc.symbol} on account '{exc.account_id}'. "
+        f"Conflicting strategy: {exc.conflicting_strategy_name} ({exc.conflicting_strategy_id})"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": "Symbol Conflict",
+            "message": exc.message,
+            "symbol": exc.symbol,
+            "account_id": exc.account_id,
+            "conflicting_strategy": {
+                "id": exc.conflicting_strategy_id,
+                "name": exc.conflicting_strategy_name,
+            },
             "details": exc.details,
         },
     )

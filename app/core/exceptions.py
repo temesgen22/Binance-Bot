@@ -167,3 +167,30 @@ class DrawdownLimitExceededError(BinanceBotException):
         self.account_id = account_id
         self.current_drawdown = current_drawdown
         self.max_drawdown = max_drawdown
+
+
+class SymbolConflictError(BinanceBotException):
+    """Exception raised when attempting to run multiple strategies for the same symbol on the same account."""
+    
+    def __init__(
+        self,
+        symbol: str,
+        account_id: str,
+        conflicting_strategy_id: str,
+        conflicting_strategy_name: str,
+        message: str
+    ):
+        super().__init__(
+            message,
+            details={
+                "symbol": symbol,
+                "account_id": account_id,
+                "conflicting_strategy_id": conflicting_strategy_id,
+                "conflicting_strategy_name": conflicting_strategy_name,
+            }
+        )
+        self.symbol = symbol
+        self.account_id = account_id
+        self.conflicting_strategy_id = conflicting_strategy_id
+        self.conflicting_strategy_name = conflicting_strategy_name
+        self.message = message
