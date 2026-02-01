@@ -572,7 +572,7 @@
 
         async function loadAccounts() {
             try {
-                const response = await authFetch('/accounts/list');
+                const response = await authFetch('/api/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 

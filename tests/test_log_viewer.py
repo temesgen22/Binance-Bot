@@ -262,7 +262,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/")
+        response = client.get("/api/logs/")
         
         assert response.status_code == 200
         data = response.json()
@@ -278,7 +278,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?symbol=BTCUSDT")
+        response = client.get("/api/logs/?symbol=BTCUSDT")
         
         assert response.status_code == 200
         data = response.json()
@@ -292,7 +292,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?level=ERROR")
+        response = client.get("/api/logs/?level=ERROR")
         
         assert response.status_code == 200
         data = response.json()
@@ -306,7 +306,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?date_from=2025-11-25")
+        response = client.get("/api/logs/?date_from=2025-11-25")
         
         assert response.status_code == 200
         data = response.json()
@@ -320,7 +320,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?limit=2")
+        response = client.get("/api/logs/?limit=2")
         
         assert response.status_code == 200
         data = response.json()
@@ -333,7 +333,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?search_text=order")
+        response = client.get("/api/logs/?search_text=order")
         
         assert response.status_code == 200
         data = response.json()
@@ -344,7 +344,7 @@ class TestLogAPIEndpoints:
         """Test getting logs when no log files exist."""
         mock_read_files.return_value = []
         
-        response = client.get("/logs/")
+        response = client.get("/api/logs/")
         
         assert response.status_code == 200
         data = response.json()
@@ -359,7 +359,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?module=strategy_runner")
+        response = client.get("/api/logs/?module=strategy_runner")
         
         assert response.status_code == 200
         data = response.json()
@@ -372,7 +372,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/?function=_execute")
+        response = client.get("/api/logs/?function=_execute")
         
         assert response.status_code == 200
         data = response.json()
@@ -385,7 +385,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/")
+        response = client.get("/api/logs/")
         
         assert response.status_code == 200
         data = response.json()
@@ -400,7 +400,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/symbols")
+        response = client.get("/api/logs/symbols")
         
         assert response.status_code == 200
         symbols = response.json()
@@ -415,7 +415,7 @@ class TestLogAPIEndpoints:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, sample_log_content)
         
-        response = client.get("/logs/stats")
+        response = client.get("/api/logs/stats")
         
         assert response.status_code == 200
         stats = response.json()
@@ -484,7 +484,7 @@ class TestLogViewerIntegration:
         setup_mock_file(mock_file, log_content)
         
         # Test: Filter by symbol, level, and date
-        response = client.get("/logs/?symbol=BTCUSDT&level=INFO&date_from=2025-11-24&limit=10")
+        response = client.get("/api/logs/?symbol=BTCUSDT&level=INFO&date_from=2025-11-24&limit=10")
         
         assert response.status_code == 200
         data = response.json()
@@ -503,7 +503,7 @@ class TestLogViewerIntegration:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, log_content)
         
-        response = client.get("/logs/symbols")
+        response = client.get("/api/logs/symbols")
         
         assert response.status_code == 200
         symbols = response.json()
@@ -523,7 +523,7 @@ class TestLogViewerIntegration:
         mock_read_files.return_value = ["logs/bot.log"]
         setup_mock_file(mock_file, log_content)
         
-        response = client.get("/logs/stats")
+        response = client.get("/api/logs/stats")
         
         assert response.status_code == 200
         stats = response.json()
@@ -536,7 +536,7 @@ class TestLogViewerIntegration:
     def test_invalid_date_format_handled_gracefully(self, client):
         """Test that invalid date formats don't cause errors."""
         # Invalid date format should be ignored (not cause 500 error)
-        response = client.get("/logs/?date_from=invalid-date")
+        response = client.get("/api/logs/?date_from=invalid-date")
         
         # Should still return 200, just ignore the invalid date
         assert response.status_code == 200
@@ -544,12 +544,12 @@ class TestLogViewerIntegration:
     def test_limit_validation(self, client):
         """Test that limit parameter is validated correctly."""
         # Limit too high should be capped
-        response = client.get("/logs/?limit=50000")
+        response = client.get("/api/logs/?limit=50000")
         
         # Should either return 422 (validation error) or cap at max
         assert response.status_code in [200, 422]
         
         # Limit too low should return validation error
-        response = client.get("/logs/?limit=0")
+        response = client.get("/api/logs/?limit=0")
         assert response.status_code == 422
 

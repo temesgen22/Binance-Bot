@@ -499,7 +499,7 @@
             const statusDiv = document.getElementById('account-help-text');
             
             try {
-                const response = await authFetch('/accounts/list');
+                const response = await authFetch('/api/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 const accounts = await response.json();
                 
@@ -528,7 +528,7 @@
         async function loadExistingStrategies() {
             const select = document.getElementById('existing_strategy');
             try {
-                const response = await authFetch('/strategies/list');
+                const response = await authFetch('/api/strategies/list');
                 if (!response.ok) throw new Error('Failed to load strategies');
                 const strategies = await response.json();
                 
@@ -613,7 +613,7 @@
                     });
                 }
                 
-                const response = await authFetch('/strategies/', {
+                const response = await authFetch('/api/strategies/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
@@ -669,7 +669,7 @@
                     fixed_amount: selectedStrategy.fixed_amount
                 };
                 
-                const response = await authFetch('/strategies/', {
+                const response = await authFetch('/api/strategies/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)

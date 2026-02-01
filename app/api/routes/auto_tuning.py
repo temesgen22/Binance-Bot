@@ -32,7 +32,7 @@ from app.services.strategy_statistics import StrategyStatistics
 from app.services.database_service import DatabaseService
 from app.models.db_models import User
 
-router = APIRouter(prefix="/auto-tuning", tags=["auto-tuning"])
+router = APIRouter(prefix="/api/auto-tuning", tags=["auto-tuning"])
 
 
 # ============================================================================

@@ -166,7 +166,7 @@ class TestLogsDatetimeFiltering:
         setup_mock_file(mock_file, log_content)
         
         # Filter using ISO datetime
-        response = client.get("/logs/?date_from=2025-11-28T11:00:00Z&date_to=2025-11-28T16:00:00Z")
+        response = client.get("/api/logs/?date_from=2025-11-28T11:00:00Z&date_to=2025-11-28T16:00:00Z")
         
         assert response.status_code == 200
         data = response.json()
@@ -190,7 +190,7 @@ class TestLogsDatetimeFiltering:
         setup_mock_file(mock_file, log_content)
         
         # Filter using date-only format (should still work)
-        response = client.get("/logs/?date_from=2025-11-28&date_to=2025-11-28")
+        response = client.get("/api/logs/?date_from=2025-11-28&date_to=2025-11-28")
         
         assert response.status_code == 200
         data = response.json()
@@ -309,7 +309,7 @@ class TestTradesDatetimeFiltering:
             
             # Test with ISO datetime format
             response = client.get(
-                "/trades/list?"
+                "/api/trades/list?"
                 "start_date=2025-11-28T10:00:00Z&"
                 "end_date=2025-11-28T12:00:00Z"
             )

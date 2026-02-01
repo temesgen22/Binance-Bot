@@ -14,7 +14,7 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, PrivateAttr
 
-router = APIRouter(prefix="/logs", tags=["logs"])
+router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 try:
     _cache_line_limit = int(os.getenv("LOG_VIEWER_CACHE_MAX_LINES", "50000"))

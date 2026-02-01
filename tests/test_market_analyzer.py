@@ -270,7 +270,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "interval": "5m",
@@ -294,7 +294,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -309,7 +309,7 @@ class TestMarketAnalyzerEndpoint:
         """Test parameter validation."""
         # Test max_ema_spread_pct <= 0
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "max_ema_spread_pct": 0.0,
@@ -319,7 +319,7 @@ class TestMarketAnalyzerEndpoint:
         
         # Test lookback_period < 50
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 30,
@@ -329,7 +329,7 @@ class TestMarketAnalyzerEndpoint:
         
         # Test ema_fast_period >= ema_slow_period
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "ema_fast_period": 50,
@@ -357,7 +357,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=60000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -391,7 +391,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -423,7 +423,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50400.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -442,7 +442,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -463,7 +463,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -488,7 +488,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -520,7 +520,7 @@ class TestMarketAnalyzerEndpoint:
             app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
             
             response = client.get(
-                "/market-analyzer/analyze",
+                "/api/market-analyzer/analyze",
                 params={
                     "symbol": "BTCUSDT",
                     "lookback_period": 150,
@@ -538,7 +538,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.123456789)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -569,7 +569,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50600.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -591,7 +591,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,
@@ -613,7 +613,7 @@ class TestMarketAnalyzerEndpoint:
         app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
-            "/market-analyzer/analyze",
+            "/api/market-analyzer/analyze",
             params={
                 "symbol": "BTCUSDT",
                 "lookback_period": 150,

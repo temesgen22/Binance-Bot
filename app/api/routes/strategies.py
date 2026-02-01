@@ -29,7 +29,7 @@ from app.core.exceptions import (
 )
 
 
-router = APIRouter(prefix="/strategies", tags=["strategies"])
+router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
 @router.get("/list", response_model=list[StrategySummary])

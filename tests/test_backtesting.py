@@ -179,7 +179,7 @@ class TestBacktestingEndpoint:
     def test_backtest_endpoint_exists(self, client):
         """Test that the backtesting endpoint exists."""
         # This should return 422 (validation error) not 404 (not found)
-        response = client.post("/backtesting/run", json={})
+        response = client.post("/api/backtesting/run", json={})
         assert response.status_code != 404
     
     def test_backtest_ema_scalping_success(self, client):
@@ -215,7 +215,7 @@ class TestBacktestingEndpoint:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         # Should succeed (200) or return validation error (422)
         assert response.status_code in [200, 422, 400]
@@ -263,7 +263,7 @@ class TestBacktestingEndpoint:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         # Should succeed (200) or return validation error (422)
         assert response.status_code in [200, 422, 400]
@@ -276,7 +276,7 @@ class TestBacktestingEndpoint:
     
     def test_backtest_validation_error_missing_fields(self, client):
         """Test that missing required fields return validation error."""
-        response = client.post("/backtesting/run", json={})
+        response = client.post("/api/backtesting/run", json={})
         assert response.status_code == 422
     
     def test_backtest_validation_error_invalid_strategy_type(self, client):
@@ -292,7 +292,7 @@ class TestBacktestingEndpoint:
             "initial_balance": 1000.0
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         assert response.status_code == 422
     
     def test_backtest_validation_error_invalid_leverage(self, client):
@@ -309,7 +309,7 @@ class TestBacktestingEndpoint:
             "initial_balance": 1000.0
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         assert response.status_code == 422
     
     def test_backtest_insufficient_data(self, client):
@@ -339,7 +339,7 @@ class TestBacktestingEndpoint:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         # Should either succeed with 0 trades or return error
         assert response.status_code in [200, 400]
@@ -383,7 +383,7 @@ class TestBacktestingCalculations:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -426,7 +426,7 @@ class TestBacktestingCalculations:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -460,7 +460,7 @@ class TestBacktestingCalculations:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -500,7 +500,7 @@ class TestBacktestingTradeTracking:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -542,7 +542,7 @@ class TestBacktestingTradeTracking:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -585,7 +585,7 @@ class TestBacktestingEdgeCases:
             }
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         if response.status_code == 200:
             data = response.json()
@@ -621,7 +621,7 @@ class TestBacktestingEdgeCases:
             "initial_balance": 1000.0
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         # Should return error status
         assert response.status_code in [400, 500]
@@ -644,7 +644,7 @@ class TestBacktestingEdgeCases:
             "initial_balance": 1000.0
         }
         
-        response = client.post("/backtesting/run", json=request_data)
+        response = client.post("/api/backtesting/run", json=request_data)
         
         # Should return validation error or handle gracefully
         assert response.status_code in [200, 400, 422]

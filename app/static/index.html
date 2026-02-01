@@ -338,7 +338,7 @@
         // Load available symbols for autocomplete
         async function loadSymbols() {
             try {
-                const response = await fetch(`${API_BASE}/logs/symbols`);
+                const response = await fetch(`${API_BASE}/api/logs/symbols`);
                 const symbols = await response.json();
                 
                 // Create datalist for autocomplete
@@ -402,7 +402,7 @@
                 if (limit > 10000) limit = 10000;
                 params.append('limit', limit.toString());
 
-                const response = await fetch(`${API_BASE}/logs/?${params.toString()}`);
+                const response = await fetch(`${API_BASE}/api/logs/?${params.toString()}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);

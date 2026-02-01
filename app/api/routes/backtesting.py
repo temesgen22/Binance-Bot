@@ -32,7 +32,7 @@ from app.utils.backtest_params import (
 from loguru import logger
 
 
-router = APIRouter(prefix="/backtesting", tags=["backtesting"])
+router = APIRouter(prefix="/api/backtesting", tags=["backtesting"])
 
 
 # Binance futures fee rates (average between maker and taker)

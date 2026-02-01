@@ -1397,7 +1397,7 @@
                     displayWalkForwardResults(result);
                 } else {
                     // Single backtest
-                    response = await authFetch('/backtesting/run', {
+                    response = await authFetch('/api/backtesting/run', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1455,7 +1455,7 @@
         async function runWalkForwardWithProgress(walkForwardRequest) {
             return new Promise((resolve, reject) => {
                 // Start the analysis
-                authFetch('/backtesting/walk-forward/start', {
+                authFetch('/api/backtesting/walk-forward/start', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1514,7 +1514,7 @@
                     const stopBtn = document.getElementById('stopBtn');
                     stopBtn.onclick = () => {
                         if (currentWalkForwardTaskId) {
-                            authFetch(`/backtesting/walk-forward/cancel/${currentWalkForwardTaskId}`, {
+                            authFetch(`/api/backtesting/walk-forward/cancel/${currentWalkForwardTaskId}`, {
                                 method: 'POST'
                             }).catch(err => console.error('Error cancelling:', err));
                         }
@@ -1523,7 +1523,7 @@
                     // Connect to progress stream
                     // Note: EventSource doesn't support custom headers, so we pass token as query param
                     const token = Auth.getToken();
-                    const progressUrl = `/backtesting/walk-forward/progress/${data.task_id}?token=${encodeURIComponent(token || '')}`;
+                    const progressUrl = `/api/backtesting/walk-forward/progress/${data.task_id}?token=${encodeURIComponent(token || '')}`;
                     currentEventSource = new EventSource(progressUrl);
                     
                     let lastProgressData = null;
@@ -1570,7 +1570,7 @@
                                 currentEventSource = null;
                                 
                                 // Fetch the result
-                                authFetch(`/backtesting/walk-forward/result/${data.task_id}`, {
+                                authFetch(`/api/backtesting/walk-forward/result/${data.task_id}`, {
                                     method: 'GET'
                                 })
                                 .then(response => {
@@ -3208,7 +3208,7 @@
                 }
                 
                 const queryParams = new URLSearchParams(filters).toString();
-                const response = await authFetch(`/backtesting/walk-forward/history?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/history?${queryParams}`);
                 
                 if (!response.ok) {
                     throw new Error(`Failed to load history: ${response.statusText}`);
@@ -3327,7 +3327,7 @@
         
         async function viewHistoryDetails(analysisId) {
             try {
-                const response = await authFetch(`/backtesting/walk-forward/history/${analysisId}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/history/${analysisId}`);
                 if (!response.ok) {
                     throw new Error(`Failed to load details: ${response.statusText}`);
                 }
@@ -3824,7 +3824,7 @@
         
         async function reuseHistoryConfig(analysisId) {
             try {
-                const response = await authFetch(`/backtesting/walk-forward/history/${analysisId}/config`);
+                const response = await authFetch(`/api/backtesting/walk-forward/history/${analysisId}/config`);
                 if (!response.ok) {
                     throw new Error(`Failed to load config: ${response.statusText}`);
                 }
@@ -3961,7 +3961,7 @@
             }
             
             try {
-                const response = await authFetch(`/backtesting/walk-forward/history/${analysisId}`, {
+                const response = await authFetch(`/api/backtesting/walk-forward/history/${analysisId}`, {
                     method: 'DELETE'
                 });
                 
@@ -4312,7 +4312,7 @@
                 submitBtn.disabled = true;
                 submitBtn.textContent = 'Starting...';
                 
-                const response = await authFetch('/backtesting/sensitivity-analysis/start', {
+                const response = await authFetch('/api/backtesting/sensitivity-analysis/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(request)
@@ -4353,7 +4353,7 @@
             const progressBar = document.getElementById('sensitivityProgressFill');
             const progressText = document.getElementById('sensitivityProgressText');
             
-            sensitivityEventSource = new EventSource(`/backtesting/sensitivity-analysis/progress/${taskId}`);
+            sensitivityEventSource = new EventSource(`/api/backtesting/sensitivity-analysis/progress/${taskId}`);
             
             sensitivityEventSource.onmessage = (event) => {
                 try {
@@ -4395,7 +4395,7 @@
         
         async function loadSensitivityResult(taskId) {
             try {
-                const response = await authFetch(`/backtesting/sensitivity-analysis/result/${taskId}`);
+                const response = await authFetch(`/api/backtesting/sensitivity-analysis/result/${taskId}`);
                 if (!response.ok) throw new Error('Failed to load result');
                 
                 const result = await response.json();
@@ -4814,7 +4814,7 @@
             if (!confirm('Are you sure you want to cancel this analysis?')) return;
             
             try {
-                const response = await authFetch(`/backtesting/sensitivity-analysis/cancel/${sensitivityTaskId}`, {
+                const response = await authFetch(`/api/backtesting/sensitivity-analysis/cancel/${sensitivityTaskId}`, {
                     method: 'POST'
                 });
                 

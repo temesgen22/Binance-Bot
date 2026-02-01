@@ -16,7 +16,7 @@ from app.strategies.indicators import (
 from loguru import logger
 
 
-router = APIRouter(prefix="/market-analyzer", tags=["market-analyzer"])
+router = APIRouter(prefix="/api/market-analyzer", tags=["market-analyzer"])
 
 
 class MarketAnalysisResponse(BaseModel):

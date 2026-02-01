@@ -24,7 +24,7 @@ from app.core.redis_storage import RedisStorage
 from app.core.config import get_settings
 
 
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 def _fetch_klines_for_strategy(

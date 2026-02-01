@@ -543,7 +543,7 @@
 
         async function loadStrategies() {
             try {
-                const response = await authFetch('/strategies/list');
+                const response = await authFetch('/api/strategies/list');
                 if (!response.ok) throw new Error('Failed to load strategies');
                 allStrategies = await response.json();
                 
@@ -562,7 +562,7 @@
 
         async function loadAccounts() {
             try {
-                const response = await authFetch('/accounts/list');
+                const response = await authFetch('/api/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 
@@ -585,7 +585,7 @@
 
         async function loadSymbols() {
             try {
-                const response = await authFetch('/trades/symbols');
+                const response = await authFetch('/api/trades/symbols');
                 if (!response.ok) throw new Error('Failed to load symbols');
                 allSymbols = await response.json();
                 
@@ -605,7 +605,7 @@
         async function loadData() {
             try {
                 const accountId = document.getElementById('accountFilter').value;
-                let url = '/trades/pnl/overview';
+                let url = '/api/trades/pnl/overview';
                 if (accountId) {
                     url += `?account_id=${encodeURIComponent(accountId)}`;
                 }
@@ -795,7 +795,7 @@
             }
             
             // Only append ? if there are parameters
-            const url = params.toString() ? `/trades/list?${params.toString()}` : '/trades/list';
+            const url = params.toString() ? `/api/trades/list?${params.toString()}` : '/api/trades/list';
 
             try {
                 // Add cache-busting timestamp to prevent browser cache issues

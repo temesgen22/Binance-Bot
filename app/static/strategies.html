@@ -706,7 +706,7 @@
 
         async function loadAccounts() {
             try {
-                const response = await authFetch('/accounts/list');
+                const response = await authFetch('/api/accounts/list');
                 if (!response.ok) throw new Error('Failed to load accounts');
                 availableAccounts = await response.json();
                 
@@ -1042,7 +1042,7 @@
         
         async function loadActivityHistory(strategyId) {
             try {
-                const response = await authFetch(`/strategies/${strategyId}/activity?limit=20`);
+                const response = await authFetch(`/api/strategies/${strategyId}/activity?limit=20`);
                 if (!response.ok) throw new Error('Failed to load activity history');
                 const activities = await response.json();
                 
@@ -1136,8 +1136,8 @@
 
             try {
                 const endpoint = isCurrentlyRunning 
-                    ? `/strategies/${strategyId}/stop`
-                    : `/strategies/${strategyId}/start`;
+                    ? `/api/strategies/${strategyId}/stop`
+                    : `/api/strategies/${strategyId}/start`;
                 
                 const response = await authFetch(endpoint, {
                     method: 'POST',
@@ -1191,7 +1191,7 @@
             button.textContent = '⏳';
 
             try {
-                const response = await authFetch(`/strategies/${strategyId}`, {
+                const response = await authFetch(`/api/strategies/${strategyId}`, {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1308,7 +1308,7 @@
 
         async function loadHealthStatus(strategyId) {
             try {
-                const response = await authFetch(`/strategies/${strategyId}/health`);
+                const response = await authFetch(`/api/strategies/${strategyId}/health`);
                 if (!response.ok) {
                     updateHealthIndicator(strategyId, 'error', ['Health check failed']);
                     return;
@@ -1699,7 +1699,7 @@
         // Auto-Tuning Functions
         async function loadAutoTuningStatus(strategyId) {
             try {
-                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/status`);
+                const response = await authFetch(`/api/auto-tuning/strategies/${strategyId}/status`);
                 if (!response.ok) throw new Error('Failed to load auto-tuning status');
                 const status = await response.json();
                 
@@ -1750,8 +1750,8 @@
             
             try {
                 const endpoint = enable 
-                    ? `/auto-tuning/strategies/${strategyId}/enable`
-                    : `/auto-tuning/strategies/${strategyId}/disable`;
+                    ? `/api/auto-tuning/strategies/${strategyId}/enable`
+                    : `/api/auto-tuning/strategies/${strategyId}/disable`;
                 
                 const response = await authFetch(endpoint, {
                     method: 'POST',
@@ -1894,7 +1894,7 @@
                 };
                 
                 try {
-                    const response = await authFetch(`/auto-tuning/strategies/${strategyId}/enable`, {
+                    const response = await authFetch(`/api/auto-tuning/strategies/${strategyId}/enable`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -1930,7 +1930,7 @@
             // Load actual config in background and update fields
             (async () => {
                 try {
-                    const response = await authFetch(`/auto-tuning/strategies/${strategyId}/status`);
+                    const response = await authFetch(`/api/auto-tuning/strategies/${strategyId}/status`);
                     if (response.ok) {
                         const status = await response.json();
                         const config = status.config || {};
@@ -2287,7 +2287,7 @@
             }
             
             try {
-                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/tune-now`, {
+                const response = await authFetch(`/api/auto-tuning/strategies/${strategyId}/tune-now`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -2342,7 +2342,7 @@
             
             // Load history in background
             try {
-                const response = await authFetch(`/auto-tuning/strategies/${strategyId}/history?limit=50`);
+                const response = await authFetch(`/api/auto-tuning/strategies/${strategyId}/history?limit=50`);
                 if (!response.ok) throw new Error('Failed to load tuning history');
                 const data = await response.json();
                 

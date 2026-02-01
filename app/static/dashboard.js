@@ -201,7 +201,7 @@ async function fetchSymbolPerformance(filters) {
     if (filters.start_date) params.append('start_date', filters.start_date);
     if (filters.end_date) params.append('end_date', filters.end_date);
     
-    const response = await authFetch(`/trades/pnl/overview?${params}`);
+    const response = await authFetch(`/api/trades/pnl/overview?${params}`);
     if (!response.ok) {
         throw new Error(`Failed to fetch symbol performance: ${response.statusText}`);
     }
@@ -242,7 +242,7 @@ async function fetchTradeActivity(filters) {
     if (filters.side) params.append('side', filters.side);
     if (filters.account_id) params.append('account_id', filters.account_id);
     
-    const response = await authFetch(`/trades/list?${params}`);
+    const response = await authFetch(`/api/trades/list?${params}`);
     if (!response.ok) {
         throw new Error(`Failed to fetch trades: ${response.statusText}`);
     }
@@ -1366,7 +1366,7 @@ function renderTrades(data) {
 // Load Accounts for Filter
 async function loadAccounts() {
     try {
-        const response = await authFetch('/accounts/list');
+        const response = await authFetch('/api/accounts/list');
         if (response.ok) {
             const accounts = await response.json();
             const select = document.getElementById('account-filter');

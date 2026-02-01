@@ -699,7 +699,7 @@ class TestWalkForwardAPIEndpoints:
         task_id = asyncio.run(setup_task())
         
         response = client.post(
-            f"/backtesting/walk-forward/cancel/{task_id}"
+            f"/api/backtesting/walk-forward/cancel/{task_id}"
         )
         
         assert response.status_code == 200
@@ -711,7 +711,7 @@ class TestWalkForwardAPIEndpoints:
         """Test cancelling a non-existent task."""
         # The client fixture already sets up authentication
         response = client.post(
-            "/backtesting/walk-forward/cancel/nonexistent"
+            "/api/backtesting/walk-forward/cancel/nonexistent"
         )
         
         assert response.status_code == 404
@@ -733,7 +733,7 @@ class TestWalkForwardAPIEndpoints:
         task_id = asyncio.run(setup_completed_task())
         
         response = client.get(
-            f"/backtesting/walk-forward/result/{task_id}"
+            f"/api/backtesting/walk-forward/result/{task_id}"
         )
         
         assert response.status_code == 200
@@ -755,7 +755,7 @@ class TestWalkForwardAPIEndpoints:
         task_id = asyncio.run(setup_running_task())
         
         response = client.get(
-            f"/backtesting/walk-forward/result/{task_id}"
+            f"/api/backtesting/walk-forward/result/{task_id}"
         )
         
         assert response.status_code == 400
@@ -895,7 +895,7 @@ class TestWalkForwardAPIEndpoints:
         # Note: TestClient may buffer, but we can verify headers
         # Since task is completed, the stream will exit after first event
         response = client.get(
-            f"/backtesting/walk-forward/progress/{task_id}?token={token}",
+            f"/api/backtesting/walk-forward/progress/{task_id}?token={token}",
             headers={"Accept": "text/event-stream"},
             timeout=5.0  # Add timeout to prevent hanging
         )

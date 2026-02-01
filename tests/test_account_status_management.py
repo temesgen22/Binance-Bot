@@ -119,7 +119,7 @@ class TestListAccountsWithInactive:
         
         mock_account_service.db_service.async_get_user_accounts = AsyncMock(side_effect=mock_get_user_accounts)
         
-        response = authenticated_client.get("/accounts/list")
+        response = authenticated_client.get("/api/accounts/list")
         
         assert response.status_code == 200
         accounts = response.json()
@@ -144,7 +144,7 @@ class TestListAccountsWithInactive:
         mock_async_db.execute = AsyncMock(side_effect=mock_execute)
         mock_account_service.db_service.db = mock_async_db
         
-        response = authenticated_client.get("/accounts/list?include_inactive=true")
+        response = authenticated_client.get("/api/accounts/list?include_inactive=true")
         
         assert response.status_code == 200
         accounts = response.json()
@@ -181,7 +181,7 @@ class TestGetAccount:
         mock_async_db.execute = AsyncMock(side_effect=mock_execute)
         mock_account_service.db_service.db = mock_async_db
         
-        response = authenticated_client.get("/accounts/test_account_1")
+        response = authenticated_client.get("/api/accounts/test_account_1")
         
         assert response.status_code == 200
         account = response.json()
@@ -204,7 +204,7 @@ class TestGetAccount:
         mock_async_db.execute = AsyncMock(side_effect=mock_execute)
         mock_account_service.db_service.db = mock_async_db
         
-        response = authenticated_client.get("/accounts/test_account_2")
+        response = authenticated_client.get("/api/accounts/test_account_2")
         
         assert response.status_code == 200
         account = response.json()
@@ -268,7 +268,7 @@ class TestActivateAccount:
         mock_account_service.db_service.db.execute = AsyncMock(side_effect=mock_execute_endpoint)
         
         response = authenticated_client.put(
-            "/accounts/test_account_2",
+            "/api/accounts/test_account_2",
             json={"is_active": True}
         )
         
@@ -344,7 +344,7 @@ class TestDeactivateAccount:
         mock_account_service.db_service.db.execute = AsyncMock(side_effect=mock_execute_endpoint)
         
         response = authenticated_client.put(
-            "/accounts/test_account_1",
+            "/api/accounts/test_account_1",
             json={"is_active": False}
         )
         
@@ -413,7 +413,7 @@ class TestUpdateAccountStatus:
         mock_account_service.db_service.db.execute = AsyncMock(side_effect=mock_execute_endpoint)
         
         response = authenticated_client.put(
-            "/accounts/test_account_2",
+            "/api/accounts/test_account_2",
             json={
                 "name": "Updated Name",
                 "is_active": True
@@ -457,7 +457,7 @@ class TestAccountNotFound:
         mock_account_service.async_update_account = AsyncMock(side_effect=mock_update_account)
         
         response = authenticated_client.put(
-            "/accounts/nonexistent",
+            "/api/accounts/nonexistent",
             json={"is_active": True}
         )
         

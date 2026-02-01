@@ -694,7 +694,7 @@
                 const accountId = accountSelector ? accountSelector.value : '';
                 
                 // Get list of strategies first
-                const strategiesResponse = await authFetch(`${API_BASE}/strategies/list`);
+                const strategiesResponse = await authFetch(`${API_BASE}/api/strategies/list`);
                 if (!strategiesResponse.ok) throw new Error('Failed to load strategies');
                 
                 let strategies = await strategiesResponse.json();
@@ -1207,7 +1207,7 @@
         async function loadAccountsForSelectors() {
             // Load accounts for both dashboard and config selectors
             try {
-                const accountsResponse = await authFetch(`${API_BASE}/accounts/list`);
+                const accountsResponse = await authFetch(`${API_BASE}/api/accounts/list`);
                 if (accountsResponse.ok) {
                     const accounts = await accountsResponse.json();
                     

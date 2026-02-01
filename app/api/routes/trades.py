@@ -33,7 +33,7 @@ from app.core.redis_storage import RedisStorage
 from app.core.config import get_settings
 
 
-router = APIRouter(prefix="/trades", tags=["trades"])
+router = APIRouter(prefix="/api/trades", tags=["trades"])
 
 
 def _convert_order_to_trade_with_timestamp(

@@ -515,7 +515,7 @@
 
         async function loadSymbols() {
             try {
-                const response = await fetch('/logs/symbols');
+                const response = await fetch('/api/logs/symbols');
                 if (response.ok) {
                     const symbols = await response.json();
                     const datalist = document.getElementById('symbolsList');
@@ -539,7 +539,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/summary?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/summary?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load summary');
 
                 const data = await response.json();
@@ -601,7 +601,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/recommendations?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/recommendations?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load recommendations');
 
                 const data = await response.json();
@@ -742,7 +742,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/top-performers?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/top-performers?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load top performers');
 
                 const data = await response.json();
@@ -860,7 +860,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/distribution?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/distribution?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load distribution');
 
                 const data = await response.json();
@@ -967,7 +967,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/parameter-insights?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/parameter-insights?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load parameter insights');
 
                 const data = await response.json();
@@ -1055,7 +1055,7 @@
                 if (currentFilters.start_date) queryParams.append('start_date', currentFilters.start_date);
                 if (currentFilters.end_date) queryParams.append('end_date', currentFilters.end_date);
 
-                const response = await authFetch(`/backtesting/walk-forward/dashboard/trends?${queryParams}`);
+                const response = await authFetch(`/api/backtesting/walk-forward/dashboard/trends?${queryParams}`);
                 if (!response.ok) throw new Error('Failed to load trends');
 
                 const data = await response.json();
@@ -1213,7 +1213,7 @@
                 
                 // Fetch all analyses in batches
                 while (hasMore) {
-                    const response = await authFetch(`/backtesting/walk-forward/history?limit=${limit}&offset=${offset}`);
+                    const response = await authFetch(`/api/backtesting/walk-forward/history?limit=${limit}&offset=${offset}`);
                     if (!response.ok) {
                         const errorText = await response.text();
                         console.error('Failed to load analyses:', response.status, errorText);
@@ -1342,7 +1342,7 @@
                 
                 const analyses = [];
                 for (const id of ids) {
-                    const response = await authFetch(`/backtesting/walk-forward/history/${id}`);
+                    const response = await authFetch(`/api/backtesting/walk-forward/history/${id}`);
                     if (!response.ok) {
                         throw new Error(`Failed to load analysis ${id}`);
                     }

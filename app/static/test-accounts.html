@@ -542,7 +542,7 @@
             
             try {
                 // Load accounts from database including inactive ones
-                const dbResponse = await authFetch('/accounts/list?include_inactive=true');
+                const dbResponse = await authFetch('/api/accounts/list?include_inactive=true');
                 const dbAccounts = await dbResponse.json();
                 
                 if (!dbAccounts || dbAccounts.length === 0) {
@@ -659,7 +659,7 @@
         // Edit account
         async function editAccount(accountId) {
             try {
-                const response = await authFetch(`/accounts/${accountId}`);
+                const response = await authFetch(`/api/accounts/${accountId}`);
                 const account = await response.json();
                 
                 // Remove existing isActiveGroup if it exists
@@ -736,7 +736,7 @@
             }
             
             try {
-                const response = await authFetch(`/accounts/${accountId}`, {
+                const response = await authFetch(`/api/accounts/${accountId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(updateData)
@@ -770,7 +770,7 @@
             }
             
             try {
-                const response = await authFetch(`/accounts/${accountId}`, {
+                const response = await authFetch(`/api/accounts/${accountId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -807,7 +807,7 @@
             }
             
             try {
-                const response = await authFetch(`/accounts/${accountId}`, {
+                const response = await authFetch(`/api/accounts/${accountId}`, {
                     method: 'DELETE'
                 });
                 
@@ -1189,7 +1189,7 @@
                     requestBody.paper_balance = paperBalance;
                 }
                 
-                const response = await authFetch('/accounts/', {
+                const response = await authFetch('/api/accounts/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)

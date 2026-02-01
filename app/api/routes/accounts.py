@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 
-router = APIRouter(prefix="/accounts", tags=["accounts"])
+router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
 # ============================================
