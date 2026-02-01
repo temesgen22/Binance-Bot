@@ -615,6 +615,108 @@ class TradeService:
         """Get trades for a specific strategy."""
         return self.get_recent_trades(user_id, strategy_id, limit)
     
+    async def async_get_strategy_trades(
+        self,
+        user_id: UUID,
+        strategy_id: UUID,
+        limit: int = 100,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> List[OrderResponse]:
+        """Get trades for a specific strategy (async version).
+        
+        Args:
+            user_id: User ID
+            strategy_id: Strategy UUID
+            limit: Maximum number of trades to return
+            start_time: Optional start time filter
+            end_time: Optional end time filter
+            
+        Returns:
+            List of OrderResponse
+        """
+        if not self._is_async:
+            raise RuntimeError("Use get_strategy_trades() with Session")
+        
+        # Try Redis first (for recent trades)
+        if self.redis and self.redis.enabled:
+            try:
+                key = self._redis_key(user_id, str(strategy_id))
+                if self.redis._client:
+                    # Get recent trades from sorted set (last 24 hours)
+                    cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
+                    cached_trades = self.redis._client.zrangebyscore(
+                        key,
+                        min=cutoff_time,
+                        max="+inf",
+                        withscores=False,
+                        start=0,
+                        num=limit
+                    )
+                    
+                    if cached_trades:
+                        orders = []
+                        for trade_json in cached_trades:
+                            try:
+                                trade_dict = json.loads(trade_json)
+                                # Convert timestamp string back to datetime
+                                if "timestamp" in trade_dict and isinstance(trade_dict["timestamp"], str):
+                                    trade_dict["timestamp"] = datetime.fromisoformat(trade_dict["timestamp"])
+                                if "update_time" in trade_dict and isinstance(trade_dict["update_time"], str):
+                                    trade_dict["update_time"] = datetime.fromisoformat(trade_dict["update_time"])
+                                orders.append(OrderResponse(**trade_dict))
+                            except Exception as e:
+                                logger.warning(f"Failed to parse cached trade: {e}")
+                                continue
+                        
+                        if len(orders) >= limit:
+                            logger.debug(f"Cache HIT: Found {len(orders)} recent trades in Redis")
+                            # Filter by time range if provided
+                            if start_time or end_time:
+                                filtered_orders = []
+                                for order in orders:
+                                    if order.timestamp:
+                                        if start_time and order.timestamp < start_time:
+                                            continue
+                                        if end_time and order.timestamp > end_time:
+                                            continue
+                                    filtered_orders.append(order)
+                                return filtered_orders[:limit]
+                            return orders[:limit]
+            except Exception as e:
+                logger.warning(f"Redis cache read error: {e}")
+        
+        # Cache miss or not enough trades: query database (async)
+        logger.debug(f"Cache MISS or insufficient trades, querying database")
+        db_trades = await self.db_service.async_get_user_trades(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            limit=limit,
+            start_time=start_time,
+            end_time=end_time
+        )
+        
+        orders = [self._db_trade_to_order_response(trade) for trade in db_trades]
+        
+        # Cache recent trades in Redis
+        if self.redis and self.redis.enabled and orders:
+            try:
+                key = self._redis_key(user_id, str(strategy_id))
+                if self.redis._client:
+                    # Add all trades to sorted set
+                    for order in orders:
+                        trade_dict = order.model_dump(mode='json')
+                        timestamp_score = order.timestamp.timestamp() if order.timestamp else datetime.now(timezone.utc).timestamp()
+                        self.redis._client.zadd(
+                            key,
+                            {json.dumps(trade_dict, default=str): timestamp_score}
+                        )
+                    self.redis._client.expire(key, self._cache_ttl)
+            except Exception as e:
+                logger.warning(f"Redis cache write error: {e}")
+        
+        return orders
+    
     def get_trades_batch(
         self,
         user_id: UUID,

@@ -15,6 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from starlette.requests import Request
 import asyncio
 from loguru import logger
 
@@ -622,6 +623,7 @@ async def get_portfolio_risk_metrics(
 
 @router.get("/status/portfolio")
 async def get_portfolio_risk_status(
+    request: Request,
     account_id: Optional[str] = Query(None),
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db_session_dependency),
@@ -648,29 +650,64 @@ async def get_portfolio_risk_status(
         risk_service = RiskManagementService(db=db)
         risk_config = risk_service.get_risk_config(user_id, normalized_account_id)
         
+        # Calculate basic portfolio metrics (simplified for now)
+        # TODO: Implement full portfolio metrics calculation
+        total_exposure_usdt = 0.0
+        total_exposure_pct = 0.0
+        daily_pnl_usdt = 0.0
+        daily_pnl_pct = 0.0
+        weekly_pnl_usdt = 0.0
+        weekly_pnl_pct = 0.0
+        current_drawdown_pct = 0.0
+        max_drawdown_pct = 0.0
+        
         if not risk_config:
+            # Return response with default values when no config exists
+            # This matches PortfolioRiskStatusDto structure expected by Android app
             return {
                 "account_id": normalized_account_id,
-                "status": "no_config",
-                "message": f"No risk configuration found for account: {normalized_account_id}"
+                "risk_status": "no_config",
+                "total_exposure_usdt": total_exposure_usdt,
+                "total_exposure_pct": total_exposure_pct,
+                "max_exposure_usdt": None,
+                "max_exposure_pct": None,
+                "daily_pnl_usdt": daily_pnl_usdt,
+                "daily_pnl_pct": daily_pnl_pct,
+                "max_daily_loss_usdt": None,
+                "max_daily_loss_pct": None,
+                "weekly_pnl_usdt": weekly_pnl_usdt,
+                "weekly_pnl_pct": weekly_pnl_pct,
+                "max_weekly_loss_usdt": None,
+                "max_weekly_loss_pct": None,
+                "current_drawdown_pct": current_drawdown_pct,
+                "max_drawdown_pct": max_drawdown_pct,
+                "max_drawdown_limit_pct": None,
+                "active_circuit_breakers": [],
+                "warnings": [f"No risk configuration found for account: {normalized_account_id}. Please create a risk configuration."]
             }
         
-        # Get portfolio risk manager (would be from factory in production)
-        # For now, return basic status
+        # Return response with actual config values
+        # TODO: Calculate actual portfolio metrics from trades
         return {
             "account_id": normalized_account_id,
-            "status": "active",
-            "risk_config": {
-                "max_portfolio_exposure_usdt": risk_config.max_portfolio_exposure_usdt,
-                "max_daily_loss_usdt": risk_config.max_daily_loss_usdt,
-                "max_weekly_loss_usdt": risk_config.max_weekly_loss_usdt,
-                "max_drawdown_pct": risk_config.max_drawdown_pct,
-            },
-            "circuit_breakers": {
-                "enabled": risk_config.circuit_breaker_enabled,
-                "max_consecutive_losses": risk_config.max_consecutive_losses,
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "risk_status": "active",
+            "total_exposure_usdt": total_exposure_usdt,
+            "total_exposure_pct": total_exposure_pct,
+            "max_exposure_usdt": risk_config.max_portfolio_exposure_usdt,
+            "max_exposure_pct": risk_config.max_portfolio_exposure_pct,
+            "daily_pnl_usdt": daily_pnl_usdt,
+            "daily_pnl_pct": daily_pnl_pct,
+            "max_daily_loss_usdt": risk_config.max_daily_loss_usdt,
+            "max_daily_loss_pct": risk_config.max_daily_loss_pct,
+            "weekly_pnl_usdt": weekly_pnl_usdt,
+            "weekly_pnl_pct": weekly_pnl_pct,
+            "max_weekly_loss_usdt": risk_config.max_weekly_loss_usdt,
+            "max_weekly_loss_pct": risk_config.max_weekly_loss_pct,
+            "current_drawdown_pct": current_drawdown_pct,
+            "max_drawdown_pct": max_drawdown_pct,
+            "max_drawdown_limit_pct": risk_config.max_drawdown_pct,
+            "active_circuit_breakers": [],
+            "warnings": []
         }
     except Exception as e:
         logger.error(f"Error getting portfolio risk status: {e}")
