@@ -615,6 +615,67 @@ class ReverseScalpingStrategy(Strategy):
                     # TRULY OPPOSITE: When Scalping enters SHORT on Death Cross, we enter LONG on Death Cross (same signal, opposite position)
                     # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
                     if death_cross and self.position is None:
+                        # Higher-timeframe bias check (C) - SAME LOGIC AS SCALPING SHORT ENTRY
+                        # ✅ FIX: Add HTF bias check to ensure consistent entry timing with Scalping
+                        # When Scalping is blocked from SHORT (5m trend UP), we should also block LONG (same condition)
+                        # This ensures both strategies enter/block at the same time
+                        if self.enable_htf_bias and self.interval == "1m":
+                            # Check 5m trend
+                            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
+                            htf_klines = await asyncio.to_thread(
+                                self.client.get_klines,
+                                symbol=self.context.symbol,
+                                interval="5m",
+                                limit=self.slow_period + 5
+                            )
+                            # BUG FIX: Fail-closed behavior - block long if HTF data unavailable when bias is enabled
+                            # This prevents unwanted longs when HTF trend check cannot be performed
+                            if not htf_klines or len(htf_klines) < self.slow_period + 1:
+                                logger.warning(
+                                    f"[{self.context.id}] Long blocked: HTF bias enabled but insufficient 5m data "
+                                    f"(got {len(htf_klines) if htf_klines else 0} klines, need {self.slow_period + 1})"
+                                )
+                                # Early return: state will be updated in finally block
+                                return StrategySignal(
+                                    action="HOLD",
+                                    symbol=self.context.symbol,
+                                    confidence=0.1,
+                                    price=live_price
+                                )
+                            
+                            htf_closes = [float(k[4]) for k in htf_klines[:-1]]  # Exclude forming candle
+                            if len(htf_closes) >= self.slow_period:
+                                htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
+                                htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
+                                
+                                # ✅ FIX: Block LONG if 5m trend is UP (SAME condition as Scalping blocks SHORT)
+                                # This ensures both strategies are blocked/allowed at the same time
+                                # Scalping blocks SHORT if 5m trend is UP, so we block LONG if 5m trend is UP (same condition)
+                                if htf_fast_ema >= htf_slow_ema:
+                                    logger.debug(
+                                        f"[{self.context.id}] Long blocked: 5m trend is up (same as scalping blocks short) "
+                                        f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
+                                    )
+                                    # Early return: state will be updated in finally block
+                                    return StrategySignal(
+                                        action="HOLD",
+                                        symbol=self.context.symbol,
+                                        confidence=0.1,
+                                        price=live_price
+                                    )
+                            else:
+                                # Insufficient closed candles for HTF EMA calculation
+                                logger.warning(
+                                    f"[{self.context.id}] Long blocked: HTF bias enabled but insufficient closed 5m candles "
+                                    f"(got {len(htf_closes)} closed, need {self.slow_period})"
+                                )
+                                return StrategySignal(
+                                    action="HOLD",
+                                    symbol=self.context.symbol,
+                                    confidence=0.1,
+                                    price=live_price
+                                )
+                        
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
@@ -729,13 +790,11 @@ class ReverseScalpingStrategy(Strategy):
                                 htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
                                 htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
                                 
-                                # TRULY OPPOSITE: For truly opposite behavior, we should use the SAME HTF bias as scalping
+                                # ✅ INTENTIONAL: Use the SAME HTF bias as Scalping SHORT entry to ensure consistent entry timing
                                 # Scalping blocks SHORT if 5m trend is UP (htf_fast >= htf_slow)
-                                # For opposite: We enter SHORT when Scalping enters LONG, so we should use SAME HTF bias
-                                # Actually, if we want truly opposite, we should NOT block based on HTF bias
-                                # OR we should block when Scalping would NOT block (opposite bias)
-                                # For now, let's use the SAME HTF bias check as scalping (to ensure same entry conditions)
-                                # Scalping blocks SHORT if 5m trend is UP, so we should also block SHORT if 5m trend is UP
+                                # We also block SHORT if 5m trend is UP (same condition)
+                                # This ensures both strategies are blocked/allowed at the same time, maintaining truly opposite behavior
+                                # with consistent entry timing (same signal, opposite positions)
                                 if htf_fast_ema >= htf_slow_ema:
                                     logger.debug(
                                         f"[{self.context.id}] Short blocked: 5m trend is up (same as scalping) "
