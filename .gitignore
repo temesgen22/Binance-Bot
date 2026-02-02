@@ -71,3 +71,6 @@ dmypy.json
 *.sqlite
 *.sqlite3
 
+# Android test cases (excluded from repository)
+tests/test_android_app_endpoints.py
+
