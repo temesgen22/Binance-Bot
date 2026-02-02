@@ -44,6 +44,7 @@ from app.core.exceptions import (
 )
 from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitBreakerOpenError
 from app.core.metrics import track_api_request
+from app.core.public_market_data_client import PublicMarketDataClient
 
 
 def _is_test_environment() -> bool:
@@ -101,6 +102,10 @@ class BinanceClient:
         # Track last time sync to avoid too frequent syncs
         self._last_time_sync: Optional[float] = None
         self._time_sync_interval: float = 300.0  # Resync every 5 minutes if needed
+        
+        # Public market data client (no authentication required for market data)
+        # This is more secure and faster than using authenticated API for klines/prices
+        self._public_client = PublicMarketDataClient()
         
         # Circuit breaker for Binance API calls
         # Protects against cascading failures when Binance API is down
@@ -321,35 +326,18 @@ class BinanceClient:
                 ) from exc
     
     def _get_price_impl(self, symbol: str) -> float:
-        """Internal implementation of get_price (without circuit breaker)."""
-        # Strip whitespace to prevent signature errors (defensive fix)
-        symbol = symbol.strip()
-        rest = self._ensure()
-        try:
-            ticker = rest.futures_symbol_ticker(symbol=symbol)
-            price = float(ticker["price"])
-            if price <= 0:
-                raise BinanceAPIError(
-                    f"Invalid price returned for {symbol}: {price}",
-                    details={"symbol": symbol}
-                )
-            return price
-        except ClientError as exc:
-            error_code = getattr(exc, 'code', None)
-            status_code = getattr(exc, 'status_code', None)
-            error_msg = f"Failed to get price for {symbol}: {exc}"
-            if status_code == 429:
-                raise BinanceRateLimitError(error_msg, retry_after=10, details={"symbol": symbol}) from exc
-            elif error_code == -1121:  # Invalid symbol
-                raise BinanceAPIError(f"Invalid symbol: {symbol}", error_code=error_code, details={"symbol": symbol}) from exc
-            else:
-                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol}) from exc
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            raise BinanceNetworkError(f"Network error getting price for {symbol}: {exc}", details={"symbol": symbol}) from exc
+        """Internal implementation of get_price (without circuit breaker).
+        
+        Uses public API instead of authenticated API (more secure and faster).
+        """
+        # Use public API instead of authenticated API (no API keys needed)
+        return self._public_client.get_price(symbol=symbol)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_klines(self, symbol: str, interval: str = "1m", limit: int = 100) -> list[list[Any]]:
-        """Get klines (candlestick data) from Binance futures.
+        """Get klines (candlestick data) from Binance public API (no authentication required).
+        
+        Uses public API endpoint for better security and performance.
+        No API keys needed for market data.
         
         Args:
             symbol: Trading symbol (e.g., 'BTCUSDT')
@@ -363,26 +351,8 @@ class BinanceClient:
             BinanceAPIError: If API call fails
             BinanceNetworkError: If network error occurs
         """
-        # Strip whitespace to prevent signature errors (defensive fix)
-        symbol = symbol.strip()
-        rest = self._ensure()
-        try:
-            klines = rest.futures_klines(symbol=symbol, interval=interval, limit=limit)
-            if not klines:
-                logger.warning(f"No klines returned for {symbol} with interval {interval}")
-            return klines
-        except ClientError as exc:
-            error_code = getattr(exc, 'code', None)
-            status_code = getattr(exc, 'status_code', None)
-            error_msg = f"Failed to get klines for {symbol}: {exc}"
-            if status_code == 429:
-                raise BinanceRateLimitError(error_msg, retry_after=10, details={"symbol": symbol, "interval": interval}) from exc
-            elif error_code == -1121:  # Invalid symbol
-                raise BinanceAPIError(f"Invalid symbol: {symbol}", error_code=error_code, details={"symbol": symbol}) from exc
-            else:
-                raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol, "interval": interval}) from exc
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            raise BinanceNetworkError(f"Network error getting klines for {symbol}: {exc}", details={"symbol": symbol}) from exc
+        # Use public API instead of authenticated API (more secure and faster)
+        return self._public_client.get_klines(symbol=symbol, interval=interval, limit=limit)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_quantity_precision(self, symbol: str) -> int:
