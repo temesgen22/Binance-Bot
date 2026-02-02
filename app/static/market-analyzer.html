@@ -412,7 +412,7 @@
                     lookback_period: lookback.toString()
                 });
 
-                const response = await authFetch(`/market-analyzer/analyze?${params}`);
+                const response = await authFetch(`/api/market-analyzer/analyze?${params}`);
                 const data = await response.json();
 
                 if (!response.ok) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import List, Optional
+from uuid import UUID
 
 from dateutil import parser as date_parser
 from fastapi import APIRouter, Depends, Query
@@ -34,6 +35,133 @@ from app.core.config import get_settings
 
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
+
+
+async def _get_completed_trades_from_database_for_trades_page(
+    db_service: DatabaseService,
+    user_id: UUID,
+    strategy_uuid: UUID,
+    strategy_id: str,
+    strategy_name: str,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None,
+) -> List[TradeWithTimestamp]:
+    """Get completed trades from CompletedTrade table and convert to TradeWithTimestamp.
+    
+    Returns both entry and exit orders for each completed trade so the frontend
+    can display them as individual trades.
+    
+    Args:
+        db_service: Database service (async)
+        user_id: User UUID
+        strategy_uuid: Strategy UUID (from database)
+        strategy_id: Strategy ID string
+        strategy_name: Strategy name
+        start_datetime: Optional start date filter
+        end_datetime: Optional end date filter
+    
+    Returns:
+        List of TradeWithTimestamp objects (entry and exit orders)
+    """
+    try:
+        from app.models.db_models import CompletedTrade, Strategy, Account
+        from sqlalchemy import select
+        
+        # Check if strategy is using paper trading account (async)
+        stmt = select(Strategy).filter(Strategy.id == strategy_uuid)
+        result = await db_service.db.execute(stmt)
+        strategy = result.scalar_one_or_none()
+        include_paper_trades = False
+        
+        if strategy and strategy.account_id:
+            account_stmt = select(Account).filter(Account.id == strategy.account_id)
+            account_result = await db_service.db.execute(account_stmt)
+            account = account_result.scalar_one_or_none()
+            if account and account.paper_trading:
+                include_paper_trades = True
+        
+        # Build query (async)
+        stmt = select(CompletedTrade).filter(
+            CompletedTrade.user_id == user_id,
+            CompletedTrade.strategy_id == strategy_uuid,
+        )
+        
+        # Filter paper trades based on strategy's account type
+        if include_paper_trades:
+            stmt = stmt.filter(CompletedTrade.paper_trading == True)
+        else:
+            stmt = stmt.filter(CompletedTrade.paper_trading == False)
+        
+        # Apply date filters
+        if start_datetime:
+            stmt = stmt.filter(CompletedTrade.exit_time >= start_datetime)
+        if end_datetime:
+            stmt = stmt.filter(CompletedTrade.exit_time <= end_datetime)
+        
+        # Order by exit time (most recent first)
+        stmt = stmt.order_by(CompletedTrade.exit_time.desc())
+        
+        # Execute query (async)
+        result = await db_service.db.execute(stmt)
+        completed_trades = result.scalars().all()
+        
+        # Convert to TradeWithTimestamp (create entry and exit orders)
+        trade_list = []
+        for ct in completed_trades:
+            # Create entry order
+            entry_side = "BUY" if ct.side == "LONG" else "SELL"
+            entry_trade = TradeWithTimestamp(
+                symbol=ct.symbol,
+                order_id=ct.entry_order_id,
+                status="FILLED",
+                side=entry_side,
+                price=float(ct.entry_price),
+                avg_price=float(ct.entry_price),
+                executed_qty=float(ct.quantity),
+                timestamp=ct.entry_time,
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                commission=float(ct.fee_paid) / 2 if ct.fee_paid else None,  # Split fee between entry/exit
+                leverage=ct.leverage or None,
+                initial_margin=float(ct.initial_margin) if ct.initial_margin else None,
+                margin_type=ct.margin_type,
+                notional_value=float(ct.notional_value) if ct.notional_value else None,
+            )
+            trade_list.append(entry_trade)
+            
+            # Create exit order
+            exit_side = "SELL" if ct.side == "LONG" else "BUY"
+            exit_trade = TradeWithTimestamp(
+                symbol=ct.symbol,
+                order_id=ct.exit_order_id,
+                status="FILLED",
+                side=exit_side,
+                price=float(ct.exit_price),
+                avg_price=float(ct.exit_price),
+                executed_qty=float(ct.quantity),
+                timestamp=ct.exit_time,
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                commission=float(ct.fee_paid) / 2 if ct.fee_paid else None,  # Split fee between entry/exit
+                leverage=ct.leverage or None,
+                initial_margin=None,  # Exit doesn't have initial margin
+                margin_type=ct.margin_type,
+                notional_value=float(ct.exit_price * ct.quantity) if ct.exit_price and ct.quantity else None,
+            )
+            trade_list.append(exit_trade)
+        
+        logger.info(
+            f"_get_completed_trades_from_database_for_trades_page: Found {len(completed_trades)} completed trades "
+            f"({len(trade_list)} order entries) for strategy {strategy_id} (UUID {strategy_uuid})"
+        )
+        return trade_list
+        
+    except Exception as e:
+        logger.warning(
+            f"Failed to get completed trades from database for strategy {strategy_id}: {e}",
+            exc_info=True
+        )
+        return []
 
 
 def _convert_order_to_trade_with_timestamp(
@@ -128,9 +256,9 @@ async def list_all_trades(
         
         all_trades = []
         
-        # Try to fetch from database first (more reliable for historical data)
+        # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+        # This is much faster than on-demand matching and uses existing functionality
         try:
-            # Create TradeService for database access
             settings = get_settings()
             redis_storage = None
             if settings.redis_enabled:
@@ -138,13 +266,15 @@ async def list_all_trades(
                     redis_url=settings.redis_url,
                     enabled=settings.redis_enabled
                 )
-            # Get the underlying SQLAlchemy session from DatabaseService
-            from sqlalchemy.orm import Session
-            db_session: Session = db_service.db
-            trade_service = TradeService(db_session, redis_storage)
             
             # Get all strategies for this user
             strategies = runner.list_strategies()
+            
+            # Get strategy service for database lookups
+            from app.services.strategy_service import StrategyService
+            from sqlalchemy.orm import Session
+            db_session: Session = db_service.db
+            strategy_service = StrategyService(db_session, redis_storage)
             
             # If strategy_id filter is provided, get trades for that specific strategy
             if strategy_id:
@@ -156,105 +286,74 @@ async def list_all_trades(
                         break
                 
                 if target_strategy:
-                    # Get strategy UUID from database (async)
-                    from app.services.strategy_service import StrategyService
-                    strategy_service = StrategyService(db_session, redis_storage)
-                    db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy_id)
-                    
-                    if db_strategy:
-                        # Fetch trades from database for this strategy (async)
-                        db_trades = await trade_service.async_get_strategy_trades(
-                            user_id=current_user.id,
-                            strategy_id=db_strategy.id,
-                            limit=10000  # Large limit to get all trades
-                        )
+                    # Apply account_id filter
+                    if account_id and target_strategy.account_id != account_id:
+                        pass  # Skip this strategy
+                    else:
+                        # Get strategy UUID from database (async)
+                        db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy_id)
                         
-                        for trade in db_trades:
-                            trade_with_ts = _convert_order_to_trade_with_timestamp(
-                                trade,
+                        if db_strategy:
+                            # Fetch completed trades from database (pre-computed)
+                            completed_trades = await _get_completed_trades_from_database_for_trades_page(
+                                db_service=db_service,
+                                user_id=current_user.id,
+                                strategy_uuid=db_strategy.id,
                                 strategy_id=target_strategy.id,
                                 strategy_name=target_strategy.name,
+                                start_datetime=start_datetime,
+                                end_datetime=end_datetime,
                             )
                             
                             # Apply filters
-                            if symbol and trade_with_ts.symbol.upper() != symbol.upper():
-                                continue
-                            if side and trade_with_ts.side.upper() != side.upper():
-                                continue
-                            if account_id and target_strategy.account_id != account_id:
-                                continue
-                            if start_datetime or end_datetime:
-                                trade_timestamp = trade_with_ts.timestamp
-                                if trade_timestamp.tzinfo is None:
-                                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
-                                if start_datetime and trade_timestamp < start_datetime:
+                            for trade in completed_trades:
+                                if symbol and trade.symbol.upper() != symbol.upper():
                                     continue
-                                if end_datetime and trade_timestamp > end_datetime:
+                                if side and trade.side.upper() != side.upper():
                                     continue
-                            
-                            all_trades.append(trade_with_ts)
+                                
+                                all_trades.append(trade)
             else:
-                # Get trades for all strategies (batch query for efficiency)
-                strategy_uuids = []
-                strategy_map = {}  # Map UUID to StrategySummary
-                
+                # Get completed trades for all strategies
                 for strategy in strategies:
                     # Apply account_id filter
                     if account_id and strategy.account_id != account_id:
                         continue
-                    # Apply symbol filter
+                    # Apply symbol filter (pre-filter for efficiency)
                     if symbol and strategy.symbol.upper() != symbol.upper():
                         continue
                     
-                    # Get strategy UUID from database (async)
-                    from app.services.strategy_service import StrategyService
-                    strategy_service = StrategyService(db_service.db, redis_storage)
-                    db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy.id)
-                    
-                    if db_strategy:
-                        strategy_uuids.append(db_strategy.id)
-                        strategy_map[db_strategy.id] = strategy
-                
-                if strategy_uuids:
-                    # Batch fetch trades from database (async)
-                    trades_by_strategy = await trade_service.async_get_trades_batch(
-                        user_id=current_user.id,
-                        strategy_ids=strategy_uuids,
-                        limit_per_strategy=10000
-                    )
-                    
-                    # Convert to TradeWithTimestamp and apply filters
-                    for strategy_uuid, trades in trades_by_strategy.items():
-                        strategy = strategy_map.get(strategy_uuid)
-                        if not strategy:
-                            continue
+                    try:
+                        # Get strategy UUID from database (async)
+                        db_strategy = await strategy_service.db_service.async_get_strategy(current_user.id, strategy.id)
                         
-                        for trade in trades:
-                            trade_with_ts = _convert_order_to_trade_with_timestamp(
-                                trade,
+                        if db_strategy:
+                            # Fetch completed trades from database (pre-computed)
+                            completed_trades = await _get_completed_trades_from_database_for_trades_page(
+                                db_service=db_service,
+                                user_id=current_user.id,
+                                strategy_uuid=db_strategy.id,
                                 strategy_id=strategy.id,
                                 strategy_name=strategy.name,
+                                start_datetime=start_datetime,
+                                end_datetime=end_datetime,
                             )
                             
                             # Apply filters
-                            if side and trade_with_ts.side.upper() != side.upper():
-                                continue
-                            if start_datetime or end_datetime:
-                                trade_timestamp = trade_with_ts.timestamp
-                                if trade_timestamp.tzinfo is None:
-                                    trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
-                                if start_datetime and trade_timestamp < start_datetime:
+                            for trade in completed_trades:
+                                if side and trade.side.upper() != side.upper():
                                     continue
-                                if end_datetime and trade_timestamp > end_datetime:
-                                    continue
-                            
-                            all_trades.append(trade_with_ts)
+                                
+                                all_trades.append(trade)
+                    except Exception as exc:
+                        logger.warning(f"Error getting completed trades for strategy {strategy.id}: {exc}")
+                        continue
             
-            logger.info(f"Retrieved {len(all_trades)} trades from database with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
+            logger.info(f"Retrieved {len(all_trades)} trades from completed_trades table with filters: symbol={symbol}, side={side}, strategy_id={strategy_id}")
             
         except Exception as db_exc:
-            logger.warning(f"Failed to fetch trades from database: {db_exc}, falling back to StrategyRunner")
-            # Fallback to StrategyRunner method (Redis/in-memory)
+            logger.warning(f"Failed to fetch completed trades from database: {db_exc}, falling back to StrategyRunner")
+            # Fallback to StrategyRunner method (Redis/in-memory) - this is the old behavior
             strategies = runner.list_strategies()
             
             for strategy in strategies:
@@ -384,189 +483,86 @@ def get_symbol_pnl(
     if account_id:
         symbol_strategies = [s for s in symbol_strategies if s.account_id == account_id]
     
-    # Initialize variables for trade-based calculations
-    all_trades: List[OrderResponse] = []
+    # ✅ PREFER: Get completed trades from pre-computed CompletedTrade table (ON-WRITE)
+    # This is much faster than on-demand matching and uses existing functionality
     completed_trades = []
-    position_queue = []  # List of (quantity, entry_price, side, strategy_id, strategy_name) tuples
-    order_to_strategy = {}
+    total_trade_fees = 0.0
+    total_funding_fees = 0.0
     
-    # Only calculate trade-based PnL if there are strategies with trades
-    if symbol_strategies:
-        # Collect all trades for this symbol
-        for strategy in symbol_strategies:
-            trades = runner.get_trades(strategy.id)
-            all_trades.extend(trades)
-        
-        # Filter trades by date range if provided
-        if start_datetime or end_datetime:
-            filtered_trades = []
-            for trade in all_trades:
-                # Get trade timestamp
-                trade_timestamp = trade.timestamp or trade.update_time
-                if trade_timestamp:
-                    # Ensure timezone-aware comparison
-                    if isinstance(trade_timestamp, datetime):
-                        if trade_timestamp.tzinfo is None:
-                            trade_timestamp = trade_timestamp.replace(tzinfo=timezone.utc)
-                    else:
-                        # Skip trades without valid timestamp if date filtering is enabled
-                        continue
-                    
-                    # Apply date filters
-                    if start_datetime and trade_timestamp < start_datetime:
-                        continue
-                    if end_datetime and trade_timestamp > end_datetime:
+    if symbol_strategies and db_service:
+        try:
+            # Verify db_service is actually a DatabaseService instance (not a Depends object)
+            if not isinstance(db_service, DatabaseService):
+                logger.warning(f"db_service is not a DatabaseService instance. Type: {type(db_service)}. Skipping database operations.")
+                db_service = None
+            
+            if db_service:
+                # Get completed trades from database for all strategies
+                from app.api.routes.reports import _get_completed_trades_from_database
+                from app.services.strategy_service import StrategyService
+                settings = get_settings()
+                redis_storage = None
+                if settings.redis_enabled:
+                    redis_storage = RedisStorage(
+                        redis_url=settings.redis_url,
+                        enabled=settings.redis_enabled
+                    )
+                
+                # Ensure db_service has db attribute
+                if not hasattr(db_service, 'db'):
+                    logger.warning(f"db_service does not have 'db' attribute. Type: {type(db_service)}")
+                    raise AttributeError("db_service does not have 'db' attribute")
+                
+                strategy_service = StrategyService(db_service.db, redis_storage)
+                
+                for strategy in symbol_strategies:
+                    try:
+                        # Get strategy UUID from database
+                        db_strategy = strategy_service.db_service.get_strategy(current_user.id, strategy.id)
+                        
+                        if db_strategy:
+                            # Get completed trades from database (pre-computed)
+                            trade_reports = _get_completed_trades_from_database(
+                                db_service=db_service,
+                                user_id=current_user.id,
+                                strategy_uuid=db_strategy.id,
+                                strategy_id=strategy.id,
+                                start_datetime=start_datetime,
+                                end_datetime=end_datetime,
+                            )
+                            
+                            # Convert TradeReport to TradeSummary for PnL calculation
+                            # Also accumulate fees from TradeReport
+                            for tr in trade_reports:
+                                completed_trades.append(TradeSummary(
+                                    symbol=tr.symbol,
+                                    entry_price=tr.entry_price,
+                                    exit_price=tr.exit_price,
+                                    quantity=tr.quantity,
+                                    side=tr.side,  # "LONG" or "SHORT"
+                                    realized_pnl=tr.pnl_usd,  # Use pre-computed PnL from database
+                                    entry_time=tr.entry_time,
+                                    exit_time=tr.exit_time,
+                                    strategy_id=tr.strategy_id,
+                                    strategy_name=strategy.name,
+                                ))
+                                # Accumulate fees from TradeReport
+                                total_trade_fees += tr.fee_paid
+                                total_funding_fees += tr.funding_fee
+                    except Exception as e:
+                        logger.warning(f"Could not get completed trades for strategy {strategy.id}: {e}", exc_info=True)
                         continue
                 
-                filtered_trades.append(trade)
-            all_trades = filtered_trades
-            logger.debug(f"Filtered {len(all_trades)} trades for {symbol} (start_date={start_date}, end_date={end_date})")
-    
-        # CRITICAL: Sort trades by timestamp (oldest first) for correct FIFO position matching
-        # The position queue logic requires trades to be processed in chronological order
-        all_trades.sort(key=lambda t: t.timestamp or t.update_time or datetime.min.replace(tzinfo=timezone.utc))
-        
-        # Build a map of order_id to strategy for faster lookup
-        for strategy in symbol_strategies:
-            strategy_trades = runner.get_trades(strategy.id)
-            for t in strategy_trades:
-                if t.order_id not in order_to_strategy:
-                    order_to_strategy[t.order_id] = (strategy.id, strategy.name)
-    
-        # Process trades to calculate realized PnL
-        for trade in all_trades:
-            entry_price = trade.avg_price or trade.price
-            quantity = trade.executed_qty
-            side = trade.side
-            
-            # Find strategy info from map
-            strategy_id, strategy_name = order_to_strategy.get(trade.order_id, (None, None))
-            
-            if side == "BUY":
-                if position_queue and position_queue[0][2] == "SHORT":
-                    # Closing or reducing SHORT position
-                    remaining_qty = quantity
-                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "SHORT":
-                        short_entry = position_queue[0]
-                        short_qty = short_entry[0]
-                        short_price = short_entry[1]
-                        short_strategy_id = short_entry[3]
-                        short_strategy_name = short_entry[4]
-                        
-                        if short_qty <= remaining_qty:
-                            close_qty = short_qty
-                            position_queue.pop(0)
-                        else:
-                            close_qty = remaining_qty
-                            position_queue[0] = (short_qty - remaining_qty, short_price, "SHORT", short_strategy_id, short_strategy_name)
-                        
-                        # PnL for SHORT: entry_price - exit_price
-                        pnl = (short_price - entry_price) * close_qty
-                        completed_trades.append(TradeSummary(
-                            symbol=symbol,
-                            entry_price=short_price,
-                            exit_price=entry_price,
-                            quantity=close_qty,
-                            side="SHORT",
-                            realized_pnl=pnl,
-                            strategy_id=short_strategy_id,
-                            strategy_name=short_strategy_name,
-                        ))
-                        remaining_qty -= close_qty
-                    
-                    # If remaining quantity after closing SHORT, open LONG
-                    if remaining_qty > 0:
-                        position_queue.append((remaining_qty, entry_price, "LONG", strategy_id, strategy_name))
-                else:
-                    # Opening or adding to LONG position
-                    position_queue.append((quantity, entry_price, "LONG", strategy_id, strategy_name))
-            
-            elif side == "SELL":
-                if position_queue and position_queue[0][2] == "LONG":
-                    # Closing or reducing LONG position
-                    remaining_qty = quantity
-                    while remaining_qty > 0 and position_queue and position_queue[0][2] == "LONG":
-                        long_entry = position_queue[0]
-                        long_qty = long_entry[0]
-                        long_price = long_entry[1]
-                        long_strategy_id = long_entry[3]
-                        long_strategy_name = long_entry[4]
-                        
-                        if long_qty <= remaining_qty:
-                            close_qty = long_qty
-                            position_queue.pop(0)
-                        else:
-                            close_qty = remaining_qty
-                            position_queue[0] = (long_qty - remaining_qty, long_price, "LONG", long_strategy_id, long_strategy_name)
-                        
-                        # PnL for LONG: exit_price - entry_price
-                        pnl = (entry_price - long_price) * close_qty
-                        completed_trades.append(TradeSummary(
-                            symbol=symbol,
-                            entry_price=long_price,
-                            exit_price=entry_price,
-                            quantity=close_qty,
-                            side="LONG",
-                            realized_pnl=pnl,
-                            strategy_id=long_strategy_id,
-                            strategy_name=long_strategy_name,
-                        ))
-                        remaining_qty -= close_qty
-                    
-                    # If remaining quantity after closing LONG, open SHORT
-                    if remaining_qty > 0:
-                        position_queue.append((remaining_qty, entry_price, "SHORT", strategy_id, strategy_name))
-                else:
-                    # Opening or adding to SHORT position
-                    position_queue.append((quantity, entry_price, "SHORT", strategy_id, strategy_name))
+                logger.info(f"Retrieved {len(completed_trades)} completed trades from database for {symbol}")
+        except Exception as e:
+            logger.warning(f"Failed to get completed trades from database for {symbol}: {e}", exc_info=True)
+            # Fallback: completed_trades will be empty, which is fine - we'll just have no completed trades
     
     # Calculate realized PnL statistics (only if we processed trades)
     total_realized_pnl = sum(t.realized_pnl for t in completed_trades)
     winning_trades = len([t for t in completed_trades if t.realized_pnl > 0])
     losing_trades = len([t for t in completed_trades if t.realized_pnl < 0])
     win_rate = (winning_trades / len(completed_trades) * 100) if completed_trades else 0
-    
-    # Calculate total fees from completed trades in database (preferred method)
-    total_trade_fees = 0.0
-    total_funding_fees = 0.0
-    
-    try:
-        from app.api.routes.reports import _get_completed_trades_from_database
-        from app.models.db_models import Strategy as DBStrategy
-        
-        # Get all strategies for this symbol
-        symbol_strategies_for_fees = [s for s in symbol_strategies]
-        
-        # Apply account_id filter
-        if account_id:
-            symbol_strategies_for_fees = [s for s in symbol_strategies_for_fees if s.account_id == account_id]
-        
-        # Collect all completed trades with fees from database
-        all_completed_trades_with_fees = []
-        for strategy in symbol_strategies_for_fees:
-            try:
-                # Get strategy UUID from database
-                db_strategy = db_service.get_strategy(current_user.id, strategy.id)
-                if db_strategy:
-                    completed_trades_for_fees = _get_completed_trades_from_database(
-                        db_service=db_service,
-                        user_id=current_user.id,
-                        strategy_uuid=db_strategy.id,
-                        strategy_id=strategy.id,
-                        start_datetime=start_datetime,
-                        end_datetime=end_datetime
-                    )
-                    all_completed_trades_with_fees.extend(completed_trades_for_fees)
-            except Exception as e:
-                logger.debug(f"Could not get completed trades for fees for strategy {strategy.id}: {e}")
-        
-        # Calculate fees from completed trades (which have fee_paid and funding_fee)
-        if all_completed_trades_with_fees:
-            total_trade_fees = sum(trade.fee_paid for trade in all_completed_trades_with_fees)
-            total_funding_fees = sum(trade.funding_fee for trade in all_completed_trades_with_fees)
-    except Exception as e:
-        logger.debug(f"Could not calculate fees from completed trades: {e}")
-        # Fees will remain 0.0 if calculation fails
     
     # Get open positions from Binance - use account-specific client if filtering by account_id
     open_positions = []

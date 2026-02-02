@@ -678,7 +678,7 @@
 
             try {
                 const filters = getFilters();
-                const url = filters ? `/reports/?${filters}` : '/reports/';
+                const url = filters ? `/api/reports/?${filters}` : '/api/reports/';
 
                 const response = await authFetch(url, {
                     method: 'GET',
