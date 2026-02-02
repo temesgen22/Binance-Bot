@@ -714,6 +714,7 @@ def get_pnl_overview(
     runner: StrategyRunner = Depends(get_strategy_runner),
     client: BinanceClient = Depends(get_binance_client),
     client_manager: BinanceClientManager = Depends(get_client_manager),
+    db_service: DatabaseService = Depends(get_database_service),
 ) -> List[SymbolPnL]:
     """Get PnL overview for all symbols with trades.
     
@@ -772,14 +773,18 @@ def get_pnl_overview(
     pnl_list = []
     for symbol in sorted(symbols):
         try:
+            # ✅ FIX: Pass current_user and db_service when calling get_symbol_pnl directly
+            # These are required for database operations (completed_trades) and user filtering
             pnl = get_symbol_pnl(
                 symbol, 
                 account_id=account_id, 
                 start_date=start_date,
                 end_date=end_date,
+                current_user=current_user,  # ✅ Added: Required for database queries
                 runner=runner, 
                 client=client,
-                client_manager=client_manager
+                client_manager=client_manager,
+                db_service=db_service,  # ✅ Added: Required for completed_trades table access
             )
             pnl_list.append(pnl)
         except Exception as exc:

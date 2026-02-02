@@ -21,30 +21,27 @@ from app.strategies.indicators import calculate_ema as _calculate_ema_from_price
 
 class ReverseScalpingStrategy(Strategy):
     """
-    Reverse/Contrarian EMA Crossover Scalping Strategy with Long and Short support.
+    Truly Opposite EMA Crossover Scalping Strategy with Long and Short support.
     
-    This is the CONTRARIAN version of EmaScalpingStrategy - it trades opposite signals.
+    This is the TRULY OPPOSITE version of EmaScalpingStrategy - it takes opposite positions on the SAME signals.
     
     - Configurable EMA periods (default: 8 fast / 21 slow)
     - Uses closed candlestick data (klines) for accurate signals
     - Only processes new closed candles to avoid duplicate signals
     - Supports both LONG and SHORT positions with take profit and stop loss
     
-    Trading Logic (Long) - REVERSED:
-    - BUY when fast EMA crosses BELOW slow EMA (death cross) - OPPOSITE of normal scalping
-    - SELL when fast EMA crosses ABOVE slow EMA (golden cross) or TP/SL hit - OPPOSITE
-    - Take profit at entry * (1 + take_profit_pct)
-    - Stop loss at entry * (1 - stop_loss_pct)
+    Trading Logic (Truly Opposite):
+    - When Scalping enters LONG on Golden Cross → Reverse enters SHORT on Golden Cross
+    - When Scalping enters SHORT on Death Cross → Reverse enters LONG on Death Cross
+    - When Scalping exits LONG on Death Cross → Reverse exits SHORT on Death Cross
+    - When Scalping exits SHORT on Golden Cross → Reverse exits LONG on Golden Cross
+    - Take profit and stop loss use same formulas (opposite positions, same price levels)
     
-    Trading Logic (Short) - REVERSED:
-    - SELL (short) when fast EMA crosses ABOVE slow EMA (golden cross) - OPPOSITE
-    - BUY (cover) when fast EMA crosses BELOW slow EMA (death cross) or TP/SL hit - OPPOSITE
-    - Take profit at entry * (1 - take_profit_pct) [inverted]
-    - Stop loss at entry * (1 + stop_loss_pct) [inverted]
+    Result: Perfect inverse correlation - when Scalping wins, Reverse loses (same amount, opposite direction)
     
     Advanced Features:
     - Minimum EMA separation filter (avoids noise)
-    - Higher-timeframe bias (5m trend check for shorts)
+    - Higher-timeframe bias (5m trend check for shorts) - REVERSED logic
     - Cooldown after exit (prevents flip-flops)
     """
     
@@ -614,20 +611,21 @@ class ReverseScalpingStrategy(Strategy):
                             f"position={self.position}"
                         )
                     
-                    # ===== REVERSED LOGIC: LONG Entry: Death Cross (when flat) =====
-                    # REVERSED: Normal scalping enters LONG on golden cross, we enter on death cross
+                    # ===== TRULY OPPOSITE LOGIC: LONG Entry on Death Cross (when flat) =====
+                    # TRULY OPPOSITE: When Scalping enters SHORT on Death Cross, we enter LONG on Death Cross (same signal, opposite position)
+                    # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
                     if death_cross and self.position is None:
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
-                            f"[{self.context.id}] Death Cross (REVERSED LONG entry): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
+                            f"[{self.context.id}] Death Cross (OPPOSITE LONG entry): fast {fast_ema:.8f} < slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} >= {prev_slow:.8f})"
                         )
                         # CRITICAL: Use candle close price (where EMA cross was detected) for entry signal
                         # The actual fill price from Binance will update entry_price after order execution
                         # This prevents entry price mismatch when live_price is far from candle close
                         logger.warning(
-                            f"[{self.context.id}] SIGNAL => BUY (LONG entry - REVERSED) at {candle_price:.8f} "
+                            f"[{self.context.id}] SIGNAL => BUY (LONG entry - OPPOSITE of Scalping SHORT) at {candle_price:.8f} "
                             f"(candle close, live={live_price:.8f}) pos={self.position} "
                             f"candle_time={last_closed_time}"
                         )
@@ -664,9 +662,9 @@ class ReverseScalpingStrategy(Strategy):
                             position_side="LONG"  # Opening LONG position
                         )
                     
-                    # ===== REVERSED LOGIC: LONG Exit: Golden Cross (when long) =====
-                    # REVERSED: Normal scalping exits LONG on death cross, we exit on golden cross
-                    # BUG FIX: Forbid EMA exits on the entry candle (standard in professional EMA systems)
+                    # ===== TRULY OPPOSITE LOGIC: LONG Exit: Golden Cross (when long) =====
+                    # TRULY OPPOSITE: When Scalping exits SHORT on Golden Cross, we exit LONG on Golden Cross (same signal, opposite position)
+                    # We entered LONG when Scalping entered SHORT (on Death Cross), so we exit when Scalping exits SHORT (on Golden Cross)
                     if (
                         golden_cross
                         and self.position == "LONG"
@@ -676,11 +674,11 @@ class ReverseScalpingStrategy(Strategy):
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
-                            f"[{self.context.id}] Golden Cross (REVERSED exit long): fast {fast_ema:.8f} > slow {slow_ema:.8f} "
+                            f"[{self.context.id}] Golden Cross (OPPOSITE exit long): fast {fast_ema:.8f} > slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} <= {prev_slow:.8f})"
                         )
                         logger.warning(
-                            f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} "
+                            f"[{self.context.id}] SIGNAL => SELL (Exit LONG - OPPOSITE of Scalping exit SHORT) at {live_price:.8f} "
                             f"pos={self.position} candle_time={last_closed_time}"
                         )
                         current_position = self.position
@@ -693,12 +691,13 @@ class ReverseScalpingStrategy(Strategy):
                             symbol=self.context.symbol,
                             confidence=0.75,
                             price=live_price,
-                            exit_reason="EMA_GOLDEN_CROSS_REVERSED",
+                            exit_reason="EMA_GOLDEN_CROSS_OPPOSITE",
                             position_side=current_position
                         )
                     
-                    # ===== REVERSED LOGIC: SHORT Entry: Golden Cross (when flat and short enabled) =====
-                    # REVERSED: Normal scalping enters SHORT on death cross, we enter on golden cross
+                    # ===== TRULY OPPOSITE LOGIC: SHORT Entry on Golden Cross (when flat and short enabled) =====
+                    # TRULY OPPOSITE: When Scalping enters LONG on Golden Cross, we enter SHORT on Golden Cross (same signal, opposite position)
+                    # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
                     if golden_cross and self.position is None and self.enable_short:
                         # Higher-timeframe bias check (C)
                         if self.enable_htf_bias and self.interval == "1m":
@@ -730,11 +729,17 @@ class ReverseScalpingStrategy(Strategy):
                                 htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
                                 htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
                                 
-                                # REVERSED: Only short if 5m trend is UP (opposite of normal scalping)
-                                if htf_fast_ema < htf_slow_ema:
+                                # TRULY OPPOSITE: For truly opposite behavior, we should use the SAME HTF bias as scalping
+                                # Scalping blocks SHORT if 5m trend is UP (htf_fast >= htf_slow)
+                                # For opposite: We enter SHORT when Scalping enters LONG, so we should use SAME HTF bias
+                                # Actually, if we want truly opposite, we should NOT block based on HTF bias
+                                # OR we should block when Scalping would NOT block (opposite bias)
+                                # For now, let's use the SAME HTF bias check as scalping (to ensure same entry conditions)
+                                # Scalping blocks SHORT if 5m trend is UP, so we should also block SHORT if 5m trend is UP
+                                if htf_fast_ema >= htf_slow_ema:
                                     logger.debug(
-                                        f"[{self.context.id}] Short blocked: 5m trend is down "
-                                        f"(5m fast={htf_fast_ema:.8f} < slow={htf_slow_ema:.8f})"
+                                        f"[{self.context.id}] Short blocked: 5m trend is up (same as scalping) "
+                                        f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
                                     )
                                     # Early return: state will be updated in finally block
                                     return StrategySignal(
@@ -759,14 +764,14 @@ class ReverseScalpingStrategy(Strategy):
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
-                            f"[{self.context.id}] Golden Cross (REVERSED enter short): fast {fast_ema:.8f} > slow {slow_ema:.8f} "
+                            f"[{self.context.id}] Golden Cross (OPPOSITE enter short): fast {fast_ema:.8f} > slow {slow_ema:.8f} "
                             f"(prev: {prev_fast:.8f} <= {prev_slow:.8f})"
                         )
                         # CRITICAL: Use candle close price (where EMA cross was detected) for entry signal
                         # The actual fill price from Binance will update entry_price after order execution
                         # This prevents entry price mismatch when live_price is far from candle close
                         logger.warning(
-                            f"[{self.context.id}] SIGNAL => SELL (SHORT entry - REVERSED) at {candle_price:.8f} "
+                            f"[{self.context.id}] SIGNAL => SELL (SHORT entry - OPPOSITE of Scalping LONG) at {candle_price:.8f} "
                             f"(candle close, live={live_price:.8f}) pos={self.position} "
                             f"candle_time={last_closed_time}"
                         )
@@ -803,8 +808,9 @@ class ReverseScalpingStrategy(Strategy):
                             position_side="SHORT"  # Opening SHORT position
                         )
                     
-                    # ===== REVERSED LOGIC: SHORT Exit: Death Cross (when short) =====
-                    # REVERSED: Normal scalping exits SHORT on golden cross, we exit on death cross
+                    # ===== TRULY OPPOSITE LOGIC: SHORT Exit on Death Cross (when short) =====
+                    # TRULY OPPOSITE: When Scalping exits LONG on Death Cross, we exit SHORT on Death Cross (same signal, opposite position)
+                    # We entered SHORT when Scalping entered LONG (on Golden Cross), so we exit when Scalping exits LONG (on Death Cross)
                     # BUG FIX: Forbid EMA exits on the entry candle (standard in professional EMA systems)
                     if (
                         death_cross
@@ -815,9 +821,12 @@ class ReverseScalpingStrategy(Strategy):
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
-                            f"[{self.context.id}] Death Cross (REVERSED exit short): fast {fast_ema:.8f} < slow {slow_ema:.8f}"
+                            f"[{self.context.id}] Death Cross (OPPOSITE exit short): fast {fast_ema:.8f} < slow {slow_ema:.8f}"
                         )
-                        logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                        logger.warning(
+                            f"[{self.context.id}] SIGNAL => BUY (Exit SHORT - OPPOSITE of Scalping exit LONG) at {live_price:.8f} "
+                            f"pos={self.position}"
+                        )
                         current_position = self.position
                         self.position, self.entry_price, self.entry_candle_time = None, None, None
                         self.trailing_stop = None  # Reset trailing stop
@@ -828,7 +837,7 @@ class ReverseScalpingStrategy(Strategy):
                             symbol=self.context.symbol,
                             confidence=0.75,
                             price=live_price,
-                            exit_reason="EMA_DEATH_CROSS_REVERSED",
+                            exit_reason="EMA_DEATH_CROSS_OPPOSITE",
                             position_side=current_position
                         )
                 

@@ -315,7 +315,8 @@ def get_dashboard_overview(
                 current_user=current_user,
                 runner=runner,
                 client=client,
-                client_manager=client_manager
+                client_manager=client_manager,
+                db_service=db_service,  # ✅ Added: Required for completed_trades table access
             )
         except Exception as exc:
             logger.error(f"Failed to get symbol PnL: {exc}")
