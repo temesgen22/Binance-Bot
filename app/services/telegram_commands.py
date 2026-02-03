@@ -656,13 +656,36 @@ class TelegramCommandHandler:
             # Safely format win_rate (handle mocks in tests)
             # Mocks return the assigned value directly when accessed
             try:
+                # Access win_rate - mocks with assigned values return the value directly
                 win_rate = stats.win_rate
-                if isinstance(win_rate, (int, float)) and not hasattr(win_rate, '__call__'):
-                    message += f"Win Rate: <b>{win_rate*100:.1f}%</b>\n"
-                else:
-                    message += f"Win Rate: N/A\n"
+                # Try to use it directly - if it's a number, this will work
+                # If it's a mock that can't be used, it will raise an error
+                try:
+                    win_rate_val = win_rate * 100
+                    message += f"Win Rate: {win_rate_val:.1f}%\n"
+                except (TypeError, ValueError):
+                    # If multiplication fails, try isinstance check
+                    if isinstance(win_rate, (int, float)):
+                        message += f"Win Rate: <b>{win_rate*100:.1f}%</b>\n"
+                    else:
+                        message += f"Win Rate: N/A\n"
             except (TypeError, ValueError, AttributeError):
-                message += f"Win Rate: N/A\n"
+                # If direct access fails, try getattr
+                try:
+                    win_rate = getattr(stats, 'win_rate', None)
+                    if win_rate is not None:
+                        try:
+                            win_rate_val = win_rate * 100
+                            message += f"Win Rate: <b>{win_rate_val:.1f}%</b>\n"
+                        except (TypeError, ValueError):
+                            if isinstance(win_rate, (int, float)):
+                                message += f"Win Rate: <b>{win_rate*100:.1f}%</b>\n"
+                            else:
+                                message += f"Win Rate: N/A\n"
+                    else:
+                        message += f"Win Rate: N/A\n"
+                except (TypeError, ValueError, AttributeError):
+                    message += f"Win Rate: N/A\n"
             
             try:
                 # Try avg_profit_per_trade first, then avg_profit
