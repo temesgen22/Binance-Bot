@@ -93,6 +93,9 @@ class BinanceClient:
                 # Sync time with Binance server on initialization
                 # This helps prevent -1021 timestamp errors
                 self._sync_time_with_binance()
+        # Store testnet setting for WebSocket initialization
+        self.testnet = testnet
+        
         # Cache for symbol precision info
         self._precision_cache: Dict[str, int] = {}
         # Cache for minimum notional values
@@ -105,7 +108,7 @@ class BinanceClient:
         
         # Public market data client (no authentication required for market data)
         # This is more secure and faster than using authenticated API for klines/prices
-        self._public_client = PublicMarketDataClient()
+        self._public_client = PublicMarketDataClient(testnet=testnet)
         
         # Circuit breaker for Binance API calls
         # Protects against cascading failures when Binance API is down
