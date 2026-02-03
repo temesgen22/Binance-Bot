@@ -60,6 +60,7 @@ def make_runner_with_service():
         executor=executor,
         max_concurrent=2,
         redis_storage=DummyRedis(),
+        use_websocket=False,  # Disable WebSocket in tests
         strategy_service=strategy_service,
         user_id=user_id,
     ), strategy_service, mock_db_service, user_id
@@ -91,6 +92,7 @@ def make_runner():
         executor=executor,
         max_concurrent=2,
         redis_storage=DummyRedis(),
+        use_websocket=False,  # Disable WebSocket in tests
     )
 
 

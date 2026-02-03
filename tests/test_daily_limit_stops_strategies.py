@@ -188,6 +188,7 @@ def strategy_runner(test_db, test_user):
         strategy_service=strategy_service,
         user_id=test_user.id,
         redis_storage=redis_storage,
+        use_websocket=False,  # Disable WebSocket in tests
     )
     
     # Mock _get_account_client to return mock client

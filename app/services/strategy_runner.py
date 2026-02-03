@@ -53,6 +53,10 @@ class StrategyRunner:
         notification_service: Optional[NotificationService] = None,
         strategy_service: Optional["StrategyService"] = None,
         user_id: Optional["UUID"] = None,
+        use_websocket: Optional[bool] = None,
+        testnet: Optional[bool] = None,
+        trade_service: Optional["TradeService"] = None,
+        skip_strategy_load: bool = False,
     ) -> None:
         """Initialize StrategyRunner.
         
@@ -66,6 +70,9 @@ class StrategyRunner:
             notification_service: Notification service
             strategy_service: StrategyService for database persistence (optional, for multi-user mode)
             user_id: User ID for multi-user mode (required if strategy_service is provided)
+            use_websocket: Whether to use WebSocket for klines (optional, defaults to config)
+            testnet: Whether to use testnet (optional, inferred from client if not provided)
+            trade_service: TradeService for trade persistence (optional, will be created if not provided and strategy_service/user_id are available)
         """
         # Support both single client (backward compatibility) and client manager (multi-account)
         if client_manager:
@@ -106,7 +113,8 @@ class StrategyRunner:
         self.notifications = notification_service
         self.strategy_service = strategy_service
         self.user_id = user_id
-        self.trade_service: Optional["TradeService"] = None  # Will be set by dependency injection
+        # Use provided trade_service, or create one if not provided (for backward compatibility)
+        self.trade_service: Optional["TradeService"] = trade_service
         self._strategies: Dict[str, StrategySummary] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
@@ -127,6 +135,38 @@ class StrategyRunner:
         # Validate: if strategy_service is provided, user_id must be provided
         if strategy_service is not None and user_id is None:
             raise ValueError("user_id must be provided when strategy_service is provided")
+        
+        # Determine testnet from client or config
+        if testnet is None:
+            if client:
+                # Handle mock clients in tests - check if testnet attribute exists
+                testnet = getattr(client, 'testnet', True) if client else True
+            elif client_manager:
+                # Get testnet from default client
+                default_client = client_manager.get_default_client()
+                testnet = getattr(default_client, 'testnet', True) if default_client else True
+            else:
+                # Fallback to config
+                from app.core.config import get_settings
+                settings = get_settings()
+                testnet = settings.binance_testnet
+        
+        # Read use_websocket from config if not provided
+        if use_websocket is None:
+            from app.core.config import get_settings
+            settings = get_settings()
+            use_websocket = settings.use_websocket_klines
+        
+        # Initialize WebSocket manager
+        self.kline_manager: Optional["WebSocketKlineManager"] = None
+        if use_websocket:
+            try:
+                from app.core.websocket_kline_manager import WebSocketKlineManager
+                self.kline_manager = WebSocketKlineManager(testnet=testnet)
+                logger.info(f"WebSocket kline manager initialized (testnet={testnet})")
+            except Exception as e:
+                logger.warning(f"Failed to initialize WebSocket manager: {e}. Falling back to REST API.")
+                self.kline_manager = None
         
         # Initialize modules
         self.registry = StrategyRegistry()
@@ -150,8 +190,9 @@ class StrategyRunner:
             account_manager=self.account_manager,
         )
         
-        # Initialize trade service if strategy_service and user_id are available
-        if strategy_service and user_id and hasattr(strategy_service, 'db_service'):
+        # Initialize trade service if not provided and strategy_service/user_id are available
+        # This allows dependency injection (deps.py) to provide trade_service, avoiding wasteful creation
+        if self.trade_service is None and strategy_service and user_id and hasattr(strategy_service, 'db_service'):
             try:
                 from app.services.trade_service import TradeService
                 # Get the database session from strategy_service
@@ -162,10 +203,10 @@ class StrategyRunner:
             except Exception as e:
                 logger.warning(f"Failed to initialize TradeService: {e}. Trades will not be saved to database.")
                 self.trade_service = None
-        else:
-            self.trade_service = None
-            if strategy_service or user_id:
-                logger.warning("TradeService not initialized: strategy_service or user_id missing. Trades will not be saved to database.")
+        elif self.trade_service is None and (strategy_service or user_id):
+            # Only warn if we expected to create one but couldn't
+            if strategy_service and user_id:
+                logger.warning("TradeService not initialized: strategy_service missing db_service. Trades will not be saved to database.")
         
         # Initialize order manager
         # Note: Factories will be created when needed (lazy initialization)
@@ -214,10 +255,17 @@ class StrategyRunner:
         # Load strategies on startup
         if strategy_service and user_id:
             # Multi-user mode: load from database via StrategyService
-            self.state_manager.load_from_database()
+            # Skip if flag is set (strategies already loaded in another request)
+            # Note: We don't fall back to Redis here because Redis may contain strategies from
+            # other users or previous sessions. In multi-user mode, we should only load from database.
+            if not skip_strategy_load:
+                self.state_manager.load_from_database()
+            # If skip_strategy_load is True, strategies will remain empty until loaded by another request
+            # or copied from base_runner (which happens in deps.py)
         else:
             # Single-user mode: load from Redis (backward compatibility)
-            self.state_manager.load_from_redis()
+            if not skip_strategy_load:
+                self.state_manager.load_from_redis()
     
     def _get_account_client(self, account_id: str) -> BinanceClient:
         """Get client for an account (delegates to account_manager)."""
@@ -841,74 +889,154 @@ class StrategyRunner:
             interval_seconds=interval_seconds,
             metadata={},
         )
-        strategy = self.registry.build(summary.strategy_type, context, account_client)
+        # Pass kline_manager when building strategy
+        strategy = self.registry.build(
+            summary.strategy_type, 
+            context, 
+            account_client,
+            kline_manager=self.kline_manager
+        )
+        
+        # Subscribe to WebSocket stream (non-blocking - don't fail strategy start if this fails)
+        websocket_subscribed = False
+        websocket_interval = None
+        websocket_htf_subscribed = False
+        if self.kline_manager:
+            try:
+                interval = summary.params.get('kline_interval', '1m') if isinstance(summary.params, dict) else getattr(summary.params, 'kline_interval', '1m')
+                websocket_interval = interval
+                await self.kline_manager.subscribe(summary.symbol, interval)
+                websocket_subscribed = True
+                
+                # Subscribe to HTF interval if HTF bias is enabled
+                enable_htf_bias = summary.params.get('enable_htf_bias', False) if isinstance(summary.params, dict) else getattr(summary.params, 'enable_htf_bias', False)
+                if enable_htf_bias and interval == "1m":
+                    # Subscribe to 5m stream for HTF bias
+                    await self.kline_manager.subscribe(summary.symbol, "5m")
+                    websocket_htf_subscribed = True
+                    logger.info(f"Subscribed to HTF WebSocket stream: {summary.symbol} 5m")
+                
+                logger.info(f"Subscribed to WebSocket stream: {summary.symbol} {interval}")
+            except Exception as e:
+                # CRITICAL: Don't fail strategy start if WebSocket subscription fails
+                # Strategy will fall back to REST API automatically
+                logger.warning(f"Failed to subscribe to WebSocket: {e}. Strategy will use REST API fallback.")
+                # Continue - strategy start is not blocked
+        
         task = asyncio.create_task(self.executor.run_loop(strategy, summary, account_risk, account_executor))
         
         # CRITICAL: Atomically add task to dictionary and update status
         # This must be inside the lock to prevent race conditions
-        async with self._lock:
-            # Double-check limit after acquiring lock (another task might have started)
-            if len(self._tasks) >= self.max_concurrent:
-                # Cancel the task we just created since we can't run it
-                task.cancel()
-                raise MaxConcurrentStrategiesError(
-                    current=len(self._tasks),
-                    max_allowed=self.max_concurrent
-                )
-            
-            # Verify strategy is still not running (another task might have started it)
-            if strategy_id in self._tasks:
-                existing_task = self._tasks[strategy_id]
-                if not existing_task.done():
-                    # Cancel the task we just created
+        try:
+            async with self._lock:
+                # Double-check limit after acquiring lock (another task might have started)
+                if len(self._tasks) >= self.max_concurrent:
+                    # Cancel the task we just created since we can't run it
                     task.cancel()
-                    raise StrategyAlreadyRunningError(strategy_id)
+                    # Cleanup WebSocket subscription if we can't start
+                    if websocket_subscribed and self.kline_manager:
+                        try:
+                            await self.kline_manager.unsubscribe(summary.symbol, websocket_interval)
+                            if websocket_htf_subscribed:
+                                await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                        except Exception as cleanup_exc:
+                            logger.warning(f"Failed to cleanup WebSocket subscription: {cleanup_exc}")
+                    raise MaxConcurrentStrategiesError(
+                        current=len(self._tasks),
+                        max_allowed=self.max_concurrent
+                    )
+                
+                # Verify strategy is still not running (another task might have started it)
+                if strategy_id in self._tasks:
+                    existing_task = self._tasks[strategy_id]
+                    if not existing_task.done():
+                        # Cancel the task we just created
+                        task.cancel()
+                        # Cleanup WebSocket subscription if strategy already running
+                        if websocket_subscribed and self.kline_manager:
+                            try:
+                                await self.kline_manager.unsubscribe(summary.symbol, websocket_interval)
+                                if websocket_htf_subscribed:
+                                    await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                            except Exception as cleanup_exc:
+                                logger.warning(f"Failed to cleanup WebSocket subscription: {cleanup_exc}")
+                        raise StrategyAlreadyRunningError(strategy_id)
+                
+                # Atomically add task and update status
+                # CRITICAL FIX: Remove nested lock - we're already inside a lock block
+                # asyncio.Lock is not re-entrant, so nested acquisition would deadlock
+                self._tasks[strategy_id] = task
+                summary.status = StrategyState.running
             
-            # Atomically add task and update status
-            # CRITICAL FIX: Remove nested lock - we're already inside a lock block
-            # asyncio.Lock is not re-entrant, so nested acquisition would deadlock
-            self._tasks[strategy_id] = task
-            summary.status = StrategyState.running
-        
-        # CRITICAL FIX: Check if task failed immediately after creation
-        # Give it a tiny moment to start, then check if it's already done (failed)
-        await asyncio.sleep(0.1)  # 100ms to allow task to start
-        if task.done():
-            # Task completed immediately - check if it's an error
-            try:
-                # Get the exception if any
-                exception = task.exception()
-                if exception:
-                    # Only raise error if there's an actual exception
-                    logger.error(
-                        f"Strategy {strategy_id} task failed immediately after start: {exception}",
-                        exc_info=exception
-                    )
-                    # Clean up the dead task
-                    async with self._lock:
-                        self._tasks.pop(strategy_id, None)
-                        summary.status = StrategyState.error
-                        # Update database to reflect error status
-                        self.state_manager.update_strategy_in_db(
-                            strategy_id,
-                            save_to_redis=True,
-                            status=StrategyState.error.value
+            # CRITICAL FIX: Check if task failed immediately after creation
+            # Give it a tiny moment to start, then check if it's already done (failed)
+            await asyncio.sleep(0.1)  # 100ms to allow task to start
+            if task.done():
+                # Task completed immediately - check if it's an error
+                try:
+                    # Get the exception if any
+                    exception = task.exception()
+                    if exception:
+                        # Only raise error if there's an actual exception
+                        logger.error(
+                            f"Strategy {strategy_id} task failed immediately after start: {exception}",
+                            exc_info=exception
                         )
-                    
-                    raise RuntimeError(
-                        f"Strategy {strategy_id} task failed immediately after start. "
-                        f"Check logs for details."
-                    ) from exception
-                else:
-                    # Task completed without exception - might be a test mock or intentional completion
-                    # Log warning but don't raise error (tests often use mocks that complete immediately)
-                    logger.debug(
-                        f"Strategy {strategy_id} task completed immediately after start (no exception) - "
-                        f"this may be expected in test scenarios"
-                    )
-            except Exception as exc:
-                # If we can't check the exception, log and continue (don't fail the start)
-                logger.warning(f"Error checking task exception for {strategy_id}: {exc}")
+                        # Clean up the dead task
+                        async with self._lock:
+                            self._tasks.pop(strategy_id, None)
+                            summary.status = StrategyState.error
+                            # Update database to reflect error status
+                            self.state_manager.update_strategy_in_db(
+                                strategy_id,
+                                save_to_redis=True,
+                                status=StrategyState.error.value
+                            )
+                        
+                        # Cleanup WebSocket subscription if strategy start failed
+                        if websocket_subscribed and self.kline_manager:
+                            try:
+                                await self.kline_manager.unsubscribe(summary.symbol, websocket_interval)
+                                if websocket_htf_subscribed:
+                                    await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                            except Exception as cleanup_exc:
+                                logger.warning(f"Failed to cleanup WebSocket subscription: {cleanup_exc}")
+                        
+                        raise RuntimeError(
+                            f"Strategy {strategy_id} task failed immediately after start. "
+                            f"Check logs for details."
+                        ) from exception
+                    else:
+                        # Task completed without exception - might be a test mock or intentional completion
+                        # Log warning but don't raise error (tests often use mocks that complete immediately)
+                        logger.debug(
+                            f"Strategy {strategy_id} task completed immediately after start (no exception) - "
+                            f"this may be expected in test scenarios"
+                        )
+                except Exception as exc:
+                    # If we can't check the exception, log and continue (don't fail the start)
+                    logger.warning(f"Error checking task exception for {strategy_id}: {exc}")
+                    # Cleanup WebSocket subscription if we can't check task
+                    if websocket_subscribed and self.kline_manager:
+                        try:
+                            await self.kline_manager.unsubscribe(summary.symbol, websocket_interval)
+                            if websocket_htf_subscribed:
+                                await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                        except Exception as cleanup_exc:
+                            logger.warning(f"Failed to cleanup WebSocket subscription: {cleanup_exc}")
+        except (MaxConcurrentStrategiesError, StrategyAlreadyRunningError) as exc:
+            # These errors already have cleanup, just re-raise
+            raise
+        except Exception as exc:
+            # Cleanup WebSocket subscription if strategy start fails
+            if websocket_subscribed and self.kline_manager:
+                try:
+                    await self.kline_manager.unsubscribe(summary.symbol, websocket_interval)
+                    if websocket_htf_subscribed:
+                        await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                except Exception as cleanup_exc:
+                    logger.warning(f"Failed to cleanup WebSocket subscription: {cleanup_exc}")
+            raise  # Re-raise the original exception
         
         # Update database FIRST (source of truth), then Redis
         # This prevents data loss if database update fails
@@ -1055,6 +1183,22 @@ class StrategyRunner:
             if task:
                 task.cancel()
             summary.status = StrategyState.stopped
+        
+        # Unsubscribe from WebSocket stream
+        if self.kline_manager:
+            try:
+                interval = summary.params.get('kline_interval', '1m') if isinstance(summary.params, dict) else getattr(summary.params, 'kline_interval', '1m')
+                await self.kline_manager.unsubscribe(summary.symbol, interval)
+                
+                # Unsubscribe from HTF interval if HTF bias was enabled
+                enable_htf_bias = summary.params.get('enable_htf_bias', False) if isinstance(summary.params, dict) else getattr(summary.params, 'enable_htf_bias', False)
+                if enable_htf_bias and interval == "1m":
+                    await self.kline_manager.unsubscribe(summary.symbol, "5m")
+                    logger.info(f"Unsubscribed from HTF WebSocket stream: {summary.symbol} 5m")
+                
+                logger.info(f"Unsubscribed from WebSocket stream: {summary.symbol} {interval}")
+            except Exception as e:
+                logger.warning(f"Failed to unsubscribe from WebSocket: {e}")
         
         # Update database FIRST (source of truth), then Redis
         # This prevents data loss if database update fails

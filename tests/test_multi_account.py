@@ -66,6 +66,7 @@ class TestStrategyWithMultiAccount:
             risk=default_risk,
             executor=default_executor,
             max_concurrent=5,
+            use_websocket=False,  # Disable WebSocket in tests
         ), default_client, main_client
     
     def test_register_strategy_with_account_id(self):

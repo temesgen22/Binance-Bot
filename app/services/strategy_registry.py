@@ -1,6 +1,6 @@
 """Strategy registry for building strategy instances from types."""
 
-from typing import Dict, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 
 from loguru import logger
 
@@ -9,7 +9,7 @@ from app.models.strategy import StrategyType
 from app.strategies.base import Strategy, StrategyContext
 
 if TYPE_CHECKING:
-    pass
+    from app.core.websocket_kline_manager import WebSocketKlineManager
 
 
 class StrategyRegistry:
@@ -31,13 +31,20 @@ class StrategyRegistry:
             StrategyType.reverse_scalping.value: ReverseScalpingStrategy,
         }
 
-    def build(self, strategy_type: StrategyType, context: StrategyContext, client: BinanceClient) -> Strategy:
+    def build(
+        self, 
+        strategy_type: StrategyType, 
+        context: StrategyContext, 
+        client: BinanceClient,
+        kline_manager: Optional['WebSocketKlineManager'] = None
+    ) -> Strategy:
         """Build a strategy instance from type.
         
         Args:
             strategy_type: The type of strategy to build
             context: Strategy context with configuration
             client: Binance client for the strategy
+            kline_manager: Optional WebSocket kline manager for real-time data
             
         Returns:
             Strategy instance
@@ -54,7 +61,8 @@ class StrategyRegistry:
                 f"Available types: {', '.join(available)}"
             ) from exc
         try:
-            return implementation(context, client)
+            # Pass kline_manager to strategy constructor
+            return implementation(context, client, kline_manager=kline_manager)
         except Exception as exc:
             logger.exception(f"Failed to build strategy {strategy_type}: {exc}")
             raise ValueError(f"Failed to initialize strategy {strategy_type}: {exc}") from exc

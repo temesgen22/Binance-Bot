@@ -88,6 +88,7 @@ def strategy_runner(mock_client_manager):
         client_manager=mock_client_manager,
         max_concurrent=3,
         redis_storage=DummyRedis(),
+        use_websocket=False,  # Disable WebSocket in tests to avoid real connections
     )
 
 
@@ -406,6 +407,7 @@ class TestWrongAccountSafety:
             client_manager=mock_client_manager,
             max_concurrent=3,
             redis_storage=DummyRedis(),
+            use_websocket=False,  # Disable WebSocket in tests
         )
         
         # StrategyRunner sets _has_direct_client=True when client is provided AND client_manager is None
@@ -425,6 +427,7 @@ class TestWrongAccountSafety:
             client_manager=empty_manager,
             max_concurrent=3,
             redis_storage=DummyRedis(),
+            use_websocket=False,  # Disable WebSocket in tests
         )
         
         # When no client is available, it should raise RuntimeError

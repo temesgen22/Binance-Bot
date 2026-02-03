@@ -78,22 +78,14 @@ def get_auto_tuning_service(
     runner: StrategyRunner = Depends(get_strategy_runner),
 ) -> AutoTuningService:
     """Get AutoTuningService instance."""
-    from app.core.redis_storage import RedisStorage
-    from app.core.config import get_settings
-    
     # Get services from runner and database
     db_service = DatabaseService(db)
     
     # Always create a new StrategyService with AsyncSession to ensure async compatibility
     # Don't use runner.strategy_service as it might be sync
-    settings = get_settings()
-    redis_storage = None
-    if settings.redis_enabled:
-        redis_storage = RedisStorage(
-            redis_url=settings.redis_url,
-            enabled=settings.redis_enabled
-        )
-    strategy_service = StrategyService(db, redis_storage)
+    # Use shared Redis connection from runner to avoid creating multiple connections
+    shared_redis_storage = runner.redis if hasattr(runner, 'redis') else None
+    strategy_service = StrategyService(db, shared_redis_storage)
     
     # Create StrategyStatistics from runner
     strategy_statistics = StrategyStatistics(

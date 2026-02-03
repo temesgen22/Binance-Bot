@@ -7,10 +7,14 @@ from collections import deque
 
 from loguru import logger
 
+from typing import TYPE_CHECKING, Optional
 from app.core.my_binance_client import BinanceClient
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.trailing_stop import TrailingStopManager
 from app.strategies.indicators import calculate_ema as _calculate_ema_from_prices_shared
+
+if TYPE_CHECKING:
+    from app.core.websocket_kline_manager import WebSocketKlineManager
 
 
 # Shared functionality:
@@ -45,8 +49,13 @@ class ReverseScalpingStrategy(Strategy):
     - Cooldown after exit (prevents flip-flops)
     """
     
-    def __init__(self, context: StrategyContext, client: BinanceClient) -> None:
-        super().__init__(context, client)
+    def __init__(
+        self, 
+        context: StrategyContext, 
+        client: BinanceClient,
+        kline_manager: Optional['WebSocketKlineManager'] = None
+    ) -> None:
+        super().__init__(context, client, kline_manager=kline_manager)
         self.fast_period = int(context.params.get("ema_fast", 8))
         self.slow_period = int(context.params.get("ema_slow", 21))
         self.take_profit_pct = float(context.params.get("take_profit_pct", 0.004))
@@ -379,14 +388,32 @@ class ReverseScalpingStrategy(Strategy):
         """
         try:
             # Get enough klines to compute EMAs
-            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
             limit = max(self.slow_period + 10, 50)
-            klines = await asyncio.to_thread(
-                self.client.get_klines,
-                symbol=self.context.symbol,
-                interval=self.interval,
-                limit=limit
-            )
+            
+            # Try WebSocket first, fallback to REST API
+            if self.kline_manager:
+                try:
+                    klines = await self.kline_manager.get_klines(
+                        symbol=self.context.symbol,
+                        interval=self.interval,
+                        limit=limit
+                    )
+                except Exception as e:
+                    logger.warning(f"WebSocket klines failed, falling back to REST API: {e}")
+                    klines = await asyncio.to_thread(
+                        self.client.get_klines,
+                        symbol=self.context.symbol,
+                        interval=self.interval,
+                        limit=limit
+                    )
+            else:
+                # Fallback to REST API
+                klines = await asyncio.to_thread(
+                    self.client.get_klines,
+                    symbol=self.context.symbol,
+                    interval=self.interval,
+                    limit=limit
+                )
             
             if not klines or len(klines) < self.slow_period + 2:
                 # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
@@ -620,14 +647,30 @@ class ReverseScalpingStrategy(Strategy):
                         # When Scalping is blocked from SHORT (5m trend UP), we should also block LONG (same condition)
                         # This ensures both strategies enter/block at the same time
                         if self.enable_htf_bias and self.interval == "1m":
-                            # Check 5m trend
-                            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
-                            htf_klines = await asyncio.to_thread(
-                                self.client.get_klines,
-                                symbol=self.context.symbol,
-                                interval="5m",
-                                limit=self.slow_period + 5
-                            )
+                            # Check 5m trend - use WebSocket if available
+                            if self.kline_manager:
+                                try:
+                                    htf_klines = await self.kline_manager.get_klines(
+                                        symbol=self.context.symbol,
+                                        interval="5m",  # HTF interval
+                                        limit=self.slow_period + 5
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"WebSocket HTF klines failed, falling back to REST API: {e}")
+                                    htf_klines = await asyncio.to_thread(
+                                        self.client.get_klines,
+                                        symbol=self.context.symbol,
+                                        interval="5m",
+                                        limit=self.slow_period + 5
+                                    )
+                            else:
+                                # Fallback to REST API
+                                htf_klines = await asyncio.to_thread(
+                                    self.client.get_klines,
+                                    symbol=self.context.symbol,
+                                    interval="5m",
+                                    limit=self.slow_period + 5
+                                )
                             # BUG FIX: Fail-closed behavior - block long if HTF data unavailable when bias is enabled
                             # This prevents unwanted longs when HTF trend check cannot be performed
                             if not htf_klines or len(htf_klines) < self.slow_period + 1:
@@ -762,14 +805,30 @@ class ReverseScalpingStrategy(Strategy):
                     if golden_cross and self.position is None and self.enable_short:
                         # Higher-timeframe bias check (C)
                         if self.enable_htf_bias and self.interval == "1m":
-                            # Check 5m trend
-                            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
-                            htf_klines = await asyncio.to_thread(
-                                self.client.get_klines,
-                                symbol=self.context.symbol,
-                                interval="5m",
-                                limit=self.slow_period + 5
-                            )
+                            # Check 5m trend - use WebSocket if available
+                            if self.kline_manager:
+                                try:
+                                    htf_klines = await self.kline_manager.get_klines(
+                                        symbol=self.context.symbol,
+                                        interval="5m",  # HTF interval
+                                        limit=self.slow_period + 5
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"WebSocket HTF klines failed, falling back to REST API: {e}")
+                                    htf_klines = await asyncio.to_thread(
+                                        self.client.get_klines,
+                                        symbol=self.context.symbol,
+                                        interval="5m",
+                                        limit=self.slow_period + 5
+                                    )
+                            else:
+                                # Fallback to REST API
+                                htf_klines = await asyncio.to_thread(
+                                    self.client.get_klines,
+                                    symbol=self.context.symbol,
+                                    interval="5m",
+                                    limit=self.slow_period + 5
+                                )
                             # BUG FIX: Fail-closed behavior - block short if HTF data unavailable when bias is enabled
                             # This prevents unwanted shorts when HTF trend check cannot be performed
                             if not htf_klines or len(htf_klines) < self.slow_period + 1:

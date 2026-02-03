@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Optional, TYPE_CHECKING
 
 from loguru import logger
 
 from app.core.my_binance_client import BinanceClient
+
+if TYPE_CHECKING:
+    from app.core.websocket_kline_manager import WebSocketKlineManager
 
 
 SignalAction = Literal["BUY", "SELL", "HOLD", "CLOSE"]
@@ -36,9 +39,22 @@ class StrategyContext:
 
 
 class Strategy(ABC):
-    def __init__(self, context: StrategyContext, client: BinanceClient) -> None:
+    def __init__(
+        self, 
+        context: StrategyContext, 
+        client: BinanceClient,
+        kline_manager: Optional['WebSocketKlineManager'] = None
+    ) -> None:
+        """Initialize strategy.
+        
+        Args:
+            context: Strategy context with configuration
+            client: Binance client for trading operations
+            kline_manager: Optional WebSocket kline manager for real-time data
+        """
         self.context = context
         self.client = client
+        self.kline_manager = kline_manager  # Store kline_manager
         self._stopped = asyncio.Event()
 
     @staticmethod

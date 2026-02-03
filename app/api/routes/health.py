@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any
 import time
 
-from app.api.deps import get_binance_client, get_db_session_dependency
+from app.api.deps import get_binance_client, get_db_session_dependency, get_strategy_runner
 from app.core.my_binance_client import BinanceClient
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -404,5 +404,30 @@ def quick_health() -> Dict[str, str]:
     return {
         "status": "ok",
         "message": "Application is running"
+    }
+
+
+@router.get("/health/websocket/status")
+async def get_websocket_status(
+    runner = Depends(get_strategy_runner)
+) -> Dict[str, Any]:
+    """Get WebSocket connection status.
+    
+    Returns:
+        WebSocket status including enabled flag, connections, and testnet mode
+    """
+    from app.services.strategy_runner import StrategyRunner
+    
+    if not hasattr(runner, 'kline_manager') or not runner.kline_manager:
+        return {
+            "enabled": False,
+            "reason": "WebSocket not initialized"
+        }
+    
+    status = await runner.kline_manager.get_connection_status()
+    return {
+        "enabled": True,
+        "connections": status,
+        "testnet": runner.kline_manager.testnet
     }
 

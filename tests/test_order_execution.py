@@ -209,6 +209,7 @@ class TestStrategyRunnerOrderExecution:
             risk=risk_manager,
             executor=order_executor,
             max_concurrent=3,
+            use_websocket=False,  # Disable WebSocket in tests
         )
         
         signal = StrategySignal(

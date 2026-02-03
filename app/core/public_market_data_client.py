@@ -27,13 +27,19 @@ class PublicMarketDataClient:
     
     BASE_URL = "https://fapi.binance.com/fapi/v1"
     
-    def __init__(self, timeout: float = 10.0):
+    def __init__(self, timeout: float = 10.0, testnet: bool = False):
         """Initialize public market data client.
         
         Args:
             timeout: Request timeout in seconds
+            testnet: Whether to use testnet endpoints
         """
         self.timeout = timeout
+        # Set BASE_URL based on testnet flag
+        if testnet:
+            self.BASE_URL = "https://testnet.binancefuture.com/fapi/v1"
+        else:
+            self.BASE_URL = "https://fapi.binance.com/fapi/v1"
         self._exchange_info_cache: Optional[Dict] = None
     
     def _fetch_public_data(

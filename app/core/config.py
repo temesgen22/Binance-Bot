@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")
     
+    # WebSocket Configuration
+    use_websocket_klines: bool = Field(
+        default=True,
+        alias="USE_WEBSOCKET_KLINES",
+        description="Enable WebSocket for klines fetching (default: True)"
+    )
+    
     # PostgreSQL Database Configuration
     database_url: str = Field(
         default="postgresql://postgres:postgres@localhost:5432/binance_bot",

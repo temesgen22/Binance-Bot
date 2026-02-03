@@ -43,6 +43,7 @@ def make_runner(max_concurrent=5):
         executor=executor,
         max_concurrent=max_concurrent,
         redis_storage=DummyRedis(),
+        use_websocket=False,  # Disable WebSocket in tests to avoid real connections
     )
 
 

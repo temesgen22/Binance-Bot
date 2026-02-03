@@ -21,4 +21,5 @@ passlib[bcrypt]>=1.7.4
 cryptography>=42.0.0
 prometheus-client>=0.20.0
 python-dotenv>=1.0.0
+websockets>=12.0
 

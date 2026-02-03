@@ -28,6 +28,7 @@ from app.models.strategy import StrategySummary, StrategyState, StrategyType, St
 def mock_binance_client():
     """Create a mock BinanceClient."""
     client = MagicMock(spec=BinanceClient)
+    client.testnet = True  # Add testnet attribute for WebSocket initialization
     client.get_price = MagicMock(return_value=40000.0)
     client.get_klines = MagicMock(return_value=[])
     client.get_open_position = MagicMock(return_value=None)

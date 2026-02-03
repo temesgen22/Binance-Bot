@@ -331,7 +331,8 @@ class TestBinanceNativeTPSL:
             risk=risk_manager,
             executor=executor,
             max_concurrent=5,
-            redis_storage=None
+            redis_storage=None,
+            use_websocket=False,  # Disable WebSocket in tests
         )
         return runner
     

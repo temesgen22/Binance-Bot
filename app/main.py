@@ -192,6 +192,8 @@ def create_app() -> FastAPI:
         max_concurrent=settings.max_concurrent_strategies,
         redis_storage=redis_storage,
         notification_service=notification_service,
+        use_websocket=settings.use_websocket_klines,  # Enable WebSocket from config
+        testnet=settings.binance_testnet,  # Get testnet from config
     )
     
     # Initialize Telegram command handler if enabled
@@ -673,9 +675,9 @@ def create_app() -> FastAPI:
     app.include_router(accounts_router)
     app.include_router(test_accounts_router)  # Test accounts API
     app.include_router(trades_router)  # Must be before /trades GUI route
+    app.include_router(strategy_performance_router)  # Must be before strategies_router to avoid route conflict
     app.include_router(strategies_router)  # Must be before /strategies GUI route
     app.include_router(logs_router)
-    app.include_router(strategy_performance_router)
     app.include_router(reports_router)  # Must be before /reports GUI route
     app.include_router(market_analyzer_router)  # Market analyzer API
     app.include_router(backtesting_router)  # Backtesting API

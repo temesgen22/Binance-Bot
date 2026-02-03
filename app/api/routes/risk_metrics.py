@@ -1295,6 +1295,7 @@ async def get_realtime_risk_status(
     db: Session = Depends(get_db_session_dependency),
     client_manager = Depends(get_client_manager),
     account_service = Depends(get_account_service),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
 ) -> RealTimeRiskStatusResponse:
     """Get real-time risk status for an account or all accounts.
     
@@ -1702,23 +1703,122 @@ async def get_realtime_risk_status(
         risk_status = "normal"
         breach_reasons = []
         
+        # Check for breaches and warnings
         if risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100):
             risk_status = "breach"
             breach_reasons.append(("DRAWDOWN_LIMIT_BREACH", f"Drawdown limit exceeded: {current_drawdown_pct:.2f}% >= {risk_config.max_drawdown_pct * 100:.2f}%"))
+            
+            # Send breach notification
+            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    runner.notifications.notify_risk_breach(
+                        NotificationType.DRAWDOWN_LIMIT_BREACH,
+                        account_id=account_id_normalized or "default",
+                        current_value=current_drawdown_pct,
+                        limit_value=risk_config.max_drawdown_pct * 100,
+                        breach_level="account",
+                        action_taken="Trading blocked",
+                    )
+                )
         elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt):
             risk_status = "breach"
             breach_reasons.append(("DAILY_LOSS_LIMIT_BREACH", f"Daily loss limit exceeded: ${abs(daily_pnl_usdt):.2f} / ${risk_config.max_daily_loss_usdt:.2f}"))
+            
+            # Send breach notification
+            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    runner.notifications.notify_risk_breach(
+                        NotificationType.DAILY_LOSS_LIMIT_BREACH,
+                        account_id=account_id_normalized or "default",
+                        current_value=daily_pnl_usdt,
+                        limit_value=-abs(risk_config.max_daily_loss_usdt),
+                        breach_level="account",
+                        action_taken="All strategies blocked",
+                    )
+                )
         elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt):
             risk_status = "breach"
             breach_reasons.append(("WEEKLY_LOSS_LIMIT_BREACH", f"Weekly loss limit exceeded: ${abs(weekly_pnl_usdt):.2f} / ${risk_config.max_weekly_loss_usdt:.2f}"))
+            
+            # Send breach notification
+            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    runner.notifications.notify_risk_breach(
+                        NotificationType.WEEKLY_LOSS_LIMIT_BREACH,
+                        account_id=account_id_normalized or "default",
+                        current_value=weekly_pnl_usdt,
+                        limit_value=-abs(risk_config.max_weekly_loss_usdt),
+                        breach_level="account",
+                        action_taken="All strategies blocked",
+                    )
+                )
         elif risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt:
             risk_status = "breach"
             breach_reasons.append(("PORTFOLIO_EXPOSURE_LIMIT_BREACH", f"Portfolio exposure limit exceeded: ${total_exposure_usdt:.2f} >= ${risk_config.max_portfolio_exposure_usdt:.2f}"))
+            
+            # Send breach notification
+            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    runner.notifications.notify_risk_breach(
+                        NotificationType.EXPOSURE_LIMIT_BREACH,
+                        account_id=account_id_normalized or "default",
+                        current_value=total_exposure_usdt,
+                        limit_value=risk_config.max_portfolio_exposure_usdt,
+                        breach_level="account",
+                        action_taken="Trading blocked",
+                    )
+                )
         elif (risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100 * 0.8)) or \
              (risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt) * 0.8) or \
              (risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt) * 0.8) or \
              (risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt * 0.8):
             risk_status = "warning"
+            
+            # Send warning notifications (80% threshold)
+            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                from app.services.notifier import NotificationType
+                
+                # Check each limit type and send appropriate warning
+                if risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100 * 0.8):
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_warning(
+                            NotificationType.DRAWDOWN_LIMIT_WARNING,
+                            account_id=account_id_normalized or "default",
+                            current_value=current_drawdown_pct,
+                            limit_value=risk_config.max_drawdown_pct * 100,
+                        )
+                    )
+                elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt) * 0.8:
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_warning(
+                            NotificationType.DAILY_LOSS_LIMIT_WARNING,
+                            account_id=account_id_normalized or "default",
+                            current_value=abs(daily_pnl_usdt),
+                            limit_value=abs(risk_config.max_daily_loss_usdt),
+                        )
+                    )
+                elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt) * 0.8:
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_warning(
+                            NotificationType.WEEKLY_LOSS_LIMIT_WARNING,
+                            account_id=account_id_normalized or "default",
+                            current_value=abs(weekly_pnl_usdt),
+                            limit_value=abs(risk_config.max_weekly_loss_usdt),
+                        )
+                    )
+                elif risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt * 0.8:
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_warning(
+                            NotificationType.EXPOSURE_LIMIT_WARNING,
+                            account_id=account_id_normalized or "default",
+                            current_value=total_exposure_usdt,
+                            limit_value=risk_config.max_portfolio_exposure_usdt,
+                        )
+                    )
         
         # Get recent enforcement events (last 10) to check for duplicates
         account_uuid = None
@@ -2095,6 +2195,20 @@ async def get_strategy_risk_status(
                                 f"Account '{account_id}' breached daily loss limit: "
                                 f"${abs(account_daily_loss_usdt):.2f} >= ${max_daily_loss:.2f}"
                             )
+                            
+                            # Send breach notification
+                            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                                from app.services.notifier import NotificationType
+                                asyncio.create_task(
+                                    runner.notifications.notify_risk_breach(
+                                        NotificationType.DAILY_LOSS_LIMIT_BREACH,
+                                        account_id=account_id,
+                                        current_value=account_daily_loss_usdt,
+                                        limit_value=-abs(max_daily_loss),
+                                        breach_level="account",
+                                        action_taken="All strategies blocked",
+                                    )
+                                )
                 
                 # Check if account-level weekly loss exceeds limit
                 # CRITICAL: Use account_check_config (account_risk_config) limits, not risk_config
@@ -2111,6 +2225,20 @@ async def get_strategy_risk_status(
                                 f"Account '{account_id}' breached weekly loss limit: "
                                 f"${abs(account_weekly_loss_usdt):.2f} >= ${max_weekly_loss:.2f}"
                             )
+                            
+                            # Send breach notification
+                            if runner and hasattr(runner, 'notifications') and runner.notifications:
+                                from app.services.notifier import NotificationType
+                                asyncio.create_task(
+                                    runner.notifications.notify_risk_breach(
+                                        NotificationType.WEEKLY_LOSS_LIMIT_BREACH,
+                                        account_id=account_id,
+                                        current_value=account_weekly_loss_usdt,
+                                        limit_value=-abs(max_weekly_loss),
+                                        breach_level="account",
+                                        action_taken="All strategies blocked",
+                                    )
+                                )
                 
             except Exception as e:
                 logger.warning(f"Error checking account-level risk status for strategy {strategy_id}: {e}")
@@ -2631,6 +2759,39 @@ async def get_strategy_risk_status(
                     f"🛑 Strategy-level {strategy_limit_type} limit exceeded for strategy {strategy_id}. "
                     f"Stopping this strategy only."
                 )
+                
+                # Send breach notification
+                if runner and hasattr(runner, 'notifications') and runner.notifications and db_strategy:
+                    from app.services.notifier import NotificationType
+                    strategy_name = db_strategy.name or "Unknown"
+                    current_value = abs(daily_loss_usdt)
+                    limit_value = float(strategy_risk_config.max_daily_loss_usdt) if strategy_risk_config and strategy_risk_config.max_daily_loss_usdt else None
+                    
+                    # Try to get strategy summary
+                    summary = None
+                    if runner:
+                        try:
+                            strategies = runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id:
+                                    summary = s
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_breach(
+                            NotificationType.DAILY_LOSS_LIMIT_BREACH,
+                            account_id=account_id,
+                            current_value=-current_value,
+                            limit_value=-abs(limit_value) if limit_value else None,
+                            breach_level="strategy",
+                            strategy_id=strategy_id,
+                            strategy_name=strategy_name,
+                            action_taken="Strategy stopped",
+                            summary=summary,
+                        )
+                    )
             elif not weekly_loss_allowed and account_risk_status != "breach":
                 # Strategy-level weekly loss breach (not account-level)
                 strategy_level_breach_detected = True
@@ -2639,6 +2800,39 @@ async def get_strategy_risk_status(
                     f"🛑 Strategy-level {strategy_limit_type} limit exceeded for strategy {strategy_id}. "
                     f"Stopping this strategy only."
                 )
+                
+                # Send breach notification
+                if runner and hasattr(runner, 'notifications') and runner.notifications and db_strategy:
+                    from app.services.notifier import NotificationType
+                    strategy_name = db_strategy.name or "Unknown"
+                    current_value = abs(weekly_loss_usdt)
+                    limit_value = float(strategy_risk_config.max_weekly_loss_usdt) if strategy_risk_config and strategy_risk_config.max_weekly_loss_usdt else None
+                    
+                    # Try to get strategy summary
+                    summary = None
+                    if runner:
+                        try:
+                            strategies = runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id:
+                                    summary = s
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        runner.notifications.notify_risk_breach(
+                            NotificationType.WEEKLY_LOSS_LIMIT_BREACH,
+                            account_id=account_id,
+                            current_value=-current_value,
+                            limit_value=-abs(limit_value) if limit_value else None,
+                            breach_level="strategy",
+                            strategy_id=strategy_id,
+                            strategy_name=strategy_name,
+                            action_taken="Strategy stopped",
+                            summary=summary,
+                        )
+                    )
             
             # Stop the strategy if strategy-level limit is breached
             if strategy_level_breach_detected and runner and strategy_limit_type:

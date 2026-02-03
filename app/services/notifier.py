@@ -37,10 +37,16 @@ class NotificationType(str, Enum):
     ORDER_BLOCKED_BY_RISK = "ORDER_BLOCKED_BY_RISK"
     CIRCUIT_BREAKER_TRIGGERED = "CIRCUIT_BREAKER_TRIGGERED"
     ORDER_SIZE_REDUCED = "ORDER_SIZE_REDUCED"
+    # Risk warnings (approaching limits - 80% threshold)
     DAILY_LOSS_LIMIT_WARNING = "DAILY_LOSS_LIMIT_WARNING"
     WEEKLY_LOSS_LIMIT_WARNING = "WEEKLY_LOSS_LIMIT_WARNING"
     DRAWDOWN_LIMIT_WARNING = "DRAWDOWN_LIMIT_WARNING"
     EXPOSURE_LIMIT_WARNING = "EXPOSURE_LIMIT_WARNING"
+    # Risk breaches (limits exceeded)
+    DAILY_LOSS_LIMIT_BREACH = "DAILY_LOSS_LIMIT_BREACH"
+    WEEKLY_LOSS_LIMIT_BREACH = "WEEKLY_LOSS_LIMIT_BREACH"
+    DRAWDOWN_LIMIT_BREACH = "DRAWDOWN_LIMIT_BREACH"
+    EXPOSURE_LIMIT_BREACH = "EXPOSURE_LIMIT_BREACH"
 
 
 class TelegramNotifier:
@@ -272,12 +278,79 @@ class TelegramNotifier:
         ]:
             limit_name = notification_type.value.replace("_LIMIT_WARNING", "").replace("_", " ").title()
             message += f"\n⚠️ <b>{limit_name} Warning</b>\n"
+            message += "Approaching limit threshold (80%)\n\n"
+            
             if additional_info.get("current_value") is not None and additional_info.get("limit_value") is not None:
-                percentage = (additional_info['current_value'] / additional_info['limit_value']) * 100 if additional_info['limit_value'] != 0 else 0
-                message += f"Current: ${additional_info['current_value']:,.2f} ({percentage:.1f}%)\n"
-                message += f"Limit: ${additional_info['limit_value']:,.2f}\n"
+                current = abs(additional_info['current_value'])
+                limit = abs(additional_info['limit_value'])
+                percentage = (current / limit * 100) if limit != 0 else 0
+                remaining = limit - current
+                
+                if "LOSS" in notification_type.value:
+                    message += f"Current Loss: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: ${limit:,.2f}\n"
+                    message += f"Remaining: ${remaining:,.2f} before breach\n"
+                elif "DRAWDOWN" in notification_type.value:
+                    message += f"Current Drawdown: <b>{current:.2f}%</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: {limit:.2f}%\n"
+                    message += f"Remaining: {remaining:.2f}% before breach\n"
+                else:  # EXPOSURE
+                    message += f"Current Exposure: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: ${limit:,.2f}\n"
+                    message += f"Remaining: ${remaining:,.2f} before breach\n"
+            
             if additional_info.get("account_id"):
-                message += f"Account: {additional_info['account_id']}\n"
+                message += f"\nAccount: {additional_info['account_id']}\n"
+            if additional_info.get("strategy_id"):
+                message += f"Strategy: {additional_info.get('strategy_name', additional_info['strategy_id'][:8])}...\n"
+            
+            message += "\n⚠️ <b>Action Required:</b> Monitor closely. Limit may be breached soon."
+        
+        elif notification_type in [
+            NotificationType.DAILY_LOSS_LIMIT_BREACH,
+            NotificationType.WEEKLY_LOSS_LIMIT_BREACH,
+            NotificationType.DRAWDOWN_LIMIT_BREACH,
+            NotificationType.EXPOSURE_LIMIT_BREACH
+        ]:
+            limit_name = notification_type.value.replace("_LIMIT_BREACH", "").replace("_", " ").title()
+            message += f"\n🚨 <b>{limit_name} BREACHED</b>\n"
+            message += "Risk limit has been exceeded!\n\n"
+            
+            if additional_info.get("current_value") is not None and additional_info.get("limit_value") is not None:
+                current = abs(additional_info['current_value'])
+                limit = abs(additional_info['limit_value'])
+                exceeded_by = current - limit
+                percentage = (current / limit * 100) if limit != 0 else 0
+                
+                if "LOSS" in notification_type.value:
+                    message += f"Current Loss: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: ${limit:,.2f}\n"
+                    message += f"Exceeded by: <b>${exceeded_by:,.2f}</b>\n"
+                elif "DRAWDOWN" in notification_type.value:
+                    message += f"Current Drawdown: <b>{current:.2f}%</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: {limit:.2f}%\n"
+                    message += f"Exceeded by: <b>{exceeded_by:.2f}%</b>\n"
+                else:  # EXPOSURE
+                    message += f"Current Exposure: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                    message += f"Limit: ${limit:,.2f}\n"
+                    message += f"Exceeded by: <b>${exceeded_by:,.2f}</b>\n"
+            
+            if additional_info.get("account_id"):
+                message += f"\nAccount: <b>{additional_info['account_id']}</b>\n"
+            if additional_info.get("strategy_id"):
+                strategy_name = additional_info.get('strategy_name', 'Unknown')
+                message += f"Strategy: <b>{strategy_name}</b>\n"
+                message += f"Strategy ID: <code>{additional_info['strategy_id']}</code>\n"
+            
+            action_taken = additional_info.get("action_taken", "Trading blocked")
+            message += f"\n🛑 <b>Action Taken:</b> {action_taken}\n"
+            
+            if additional_info.get("breach_type"):
+                breach_type = additional_info['breach_type']
+                if breach_type == "(account)":
+                    message += "⚠️ <b>Account-level breach:</b> All strategies on this account are affected.\n"
+                elif breach_type == "(strategy)":
+                    message += "⚠️ <b>Strategy-level breach:</b> Only this strategy is affected.\n"
         
         # Add timestamp
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -911,5 +984,63 @@ class NotificationService:
         if self.telegram:
             await self.telegram.notify_circuit_breaker_triggered(
                 account_id, breaker_type, reason, strategies_affected, summary
+            )
+    
+    async def notify_risk_warning(
+        self,
+        warning_type: NotificationType,
+        account_id: str,
+        current_value: float,
+        limit_value: float,
+        strategy_id: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        summary: Optional[StrategySummary] = None,
+    ) -> None:
+        """Notify about risk warning (approaching limit).
+        
+        Args:
+            warning_type: Type of warning
+            account_id: Account ID
+            current_value: Current value
+            limit_value: Limit value
+            strategy_id: Optional strategy ID
+            strategy_name: Optional strategy name
+            summary: Optional strategy summary
+        """
+        if self.telegram:
+            await self.telegram.notify_risk_warning(
+                warning_type, account_id, current_value, limit_value,
+                strategy_id, strategy_name, summary
+            )
+    
+    async def notify_risk_breach(
+        self,
+        breach_type: NotificationType,
+        account_id: str,
+        current_value: float,
+        limit_value: float,
+        breach_level: str = "account",
+        strategy_id: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        action_taken: str = "Trading blocked",
+        summary: Optional[StrategySummary] = None,
+    ) -> None:
+        """Notify about risk breach (limit exceeded).
+        
+        Args:
+            breach_type: Type of breach
+            account_id: Account ID
+            current_value: Current value that exceeded limit
+            limit_value: Limit value
+            breach_level: "account" or "strategy"
+            strategy_id: Optional strategy ID
+            strategy_name: Optional strategy name
+            action_taken: Action taken
+            summary: Optional strategy summary
+        """
+        if self.telegram:
+            await self.telegram.notify_risk_breach(
+                breach_type, account_id, current_value, limit_value,
+                breach_level, strategy_id, strategy_name, action_taken, summary
             )
 

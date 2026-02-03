@@ -5,8 +5,12 @@ from typing import Optional, Literal, Tuple
 
 from loguru import logger
 
+from typing import TYPE_CHECKING, Optional
 from app.core.my_binance_client import BinanceClient
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
+
+if TYPE_CHECKING:
+    from app.core.websocket_kline_manager import WebSocketKlineManager
 from app.strategies.indicators import calculate_ema, calculate_rsi, calculate_atr
 
 
@@ -39,8 +43,13 @@ class RangeMeanReversionStrategy(Strategy):
     - SHORT Exit: TP at range_mid or range_low + buffer, SL above range_high
     """
     
-    def __init__(self, context: StrategyContext, client: BinanceClient) -> None:
-        super().__init__(context, client)
+    def __init__(
+        self, 
+        context: StrategyContext, 
+        client: BinanceClient,
+        kline_manager: Optional['WebSocketKlineManager'] = None
+    ) -> None:
+        super().__init__(context, client, kline_manager=kline_manager)
         
         # Range detection parameters
         self.lookback_period = int(context.params.get("lookback_period", 150))
@@ -325,14 +334,32 @@ class RangeMeanReversionStrategy(Strategy):
         """
         try:
             # Get enough klines for range detection
-            # CRITICAL FIX: Wrap synchronous get_klines() in to_thread to prevent blocking event loop
             limit = max(self.lookback_period + 50, 200)
-            klines = await asyncio.to_thread(
-                self.client.get_klines,
-                symbol=self.context.symbol,
-                interval=self.interval,
-                limit=limit
-            )
+            
+            # Try WebSocket first, fallback to REST API
+            if self.kline_manager:
+                try:
+                    klines = await self.kline_manager.get_klines(
+                        symbol=self.context.symbol,
+                        interval=self.interval,
+                        limit=limit
+                    )
+                except Exception as e:
+                    logger.warning(f"WebSocket klines failed, falling back to REST API: {e}")
+                    klines = await asyncio.to_thread(
+                        self.client.get_klines,
+                        symbol=self.context.symbol,
+                        interval=self.interval,
+                        limit=limit
+                    )
+            else:
+                # Fallback to REST API
+                klines = await asyncio.to_thread(
+                    self.client.get_klines,
+                    symbol=self.context.symbol,
+                    interval=self.interval,
+                    limit=limit
+                )
             
             if not klines or len(klines) < self.lookback_period + 10:
                 # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop

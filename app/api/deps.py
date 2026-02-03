@@ -195,51 +195,118 @@ def get_strategy_runner(
     
     If user is authenticated, returns a StrategyRunner with StrategyService.
     Otherwise, returns the default StrategyRunner (backward compatibility).
+    
+    Enhanced runners are cached per request to avoid repeated database queries and object creation.
     """
     base_runner = request.app.state.strategy_runner
     
     # If user is authenticated, enhance runner with StrategyService
     if current_user:
+        # Cache enhanced runner per request to avoid repeated database queries and object creation
+        cache_key = f"enhanced_runner_{current_user.id}"
+        if hasattr(request.state, cache_key):
+            return getattr(request.state, cache_key)
+        
         from app.services.strategy_service import StrategyService
-        from app.core.redis_storage import RedisStorage
-        from app.core.config import get_settings
-        
-        settings = get_settings()
-        redis_storage = None
-        if settings.redis_enabled:
-            redis_storage = RedisStorage(
-                redis_url=settings.redis_url,
-                enabled=settings.redis_enabled
-            )
-        
-        strategy_service = StrategyService(db, redis_storage)
-        
-        # Create TradeService for trade persistence
         from app.services.trade_service import TradeService
-        trade_service = TradeService(db, redis_storage)
         
-        # Create enhanced runner with StrategyService and TradeService
-        # Note: We create a new runner instance with StrategyService, but share the same client_manager
-        # This allows per-user strategy management while sharing execution resources
-        enhanced_runner = StrategyRunner(
-            client_manager=base_runner.client_manager,
-            client=base_runner.client,
-            max_concurrent=base_runner.max_concurrent,
-            redis_storage=base_runner.redis,
-            notification_service=base_runner.notifications,
-            strategy_service=strategy_service,
-            user_id=current_user.id
-        )
-        # Inject TradeService
-        enhanced_runner.trade_service = trade_service
+        # Cache StrategyService and TradeService per request to avoid repeated creation
+        if not hasattr(request.state, 'strategy_service'):
+            # Use shared Redis connection from base_runner to avoid creating multiple connections
+            # This ensures all services (StrategyService, TradeService, StrategyRunner) use the same Redis connection
+            shared_redis_storage = base_runner.redis
+            request.state.strategy_service = StrategyService(db, shared_redis_storage)
+            request.state.trade_service = TradeService(db, shared_redis_storage)
+        
+        strategy_service = request.state.strategy_service
+        trade_service = request.state.trade_service
+        
+        # Check if strategies are already loaded or being loaded for this user (app-level cache)
+        # This prevents multiple database loads when parallel requests come in
+        app_state = request.app.state
+        user_strategies_key = f"user_strategies_{current_user.id}"
+        user_strategies_loading_key = f"user_strategies_loading_{current_user.id}"
+        user_strategies_loaded = getattr(app_state, user_strategies_key, False)
+        user_strategies_loading = getattr(app_state, user_strategies_loading_key, False)
+        
+        # Skip loading if already loaded or currently loading
+        skip_load = user_strategies_loaded or user_strategies_loading
+        
+        # Get testnet value from base runner's kline_manager (if available) or from client
+        testnet_value = True  # Default
+        if base_runner.kline_manager:
+            testnet_value = base_runner.kline_manager.testnet
+        elif base_runner.client:
+            testnet_value = getattr(base_runner.client, 'testnet', True)
+        elif base_runner.client_manager:
+            # Try to get from default account config
+            default_client = base_runner.client_manager.get_default_client()
+            if default_client:
+                testnet_value = getattr(default_client, 'testnet', True)
+        
+        # Determine if we should enable WebSocket initialization
+        # If base_runner has kline_manager, we'll reuse it (avoid wasteful creation)
+        # If base_runner doesn't have kline_manager, let enhanced_runner create one
+        should_enable_websocket = base_runner.kline_manager is None
+        
+        # Create enhanced runner
+        # If base_runner has kline_manager, disable WebSocket initialization to avoid wasteful creation
+        # that would be immediately discarded when we assign base_runner.kline_manager
+        # Create enhanced runner with TradeService passed directly to avoid wasteful creation in __init__
+        # Set loading flag to prevent other parallel requests from loading
+        # Use double-check pattern to reduce race conditions
+        if not skip_load:
+            # Check again after getting the flag (double-check pattern to reduce race conditions)
+            current_loading = getattr(app_state, user_strategies_loading_key, False)
+            if not current_loading:
+                setattr(app_state, user_strategies_loading_key, True)
+            else:
+                # Another request is already loading, skip this one
+                skip_load = True
+        
+        try:
+            # Create enhanced runner - skip loading if already loaded or currently loading
+            enhanced_runner = StrategyRunner(
+                client_manager=base_runner.client_manager,
+                client=base_runner.client,
+                max_concurrent=base_runner.max_concurrent,
+                redis_storage=base_runner.redis,
+                notification_service=base_runner.notifications,
+                strategy_service=strategy_service,
+                user_id=current_user.id,
+                use_websocket=should_enable_websocket,  # Only enable if base_runner doesn't have kline_manager
+                testnet=testnet_value,  # Get testnet from kline_manager or client
+                trade_service=trade_service,  # Pass TradeService directly to avoid wasteful creation in __init__
+                skip_strategy_load=skip_load,  # Skip if already loaded or currently loading
+            )
+            
+            # Mark strategies as loaded for this user (app-level cache)
+            # This prevents other parallel requests from loading again
+            # IMPORTANT: Set flag even if we skipped loading, to prevent repeated attempts
+            if not user_strategies_loaded:
+                # Set flag if strategies were loaded OR if we skipped loading (to prevent retries)
+                if enhanced_runner._strategies or skip_load:
+                    setattr(app_state, user_strategies_key, True)
+        finally:
+            # Clear loading flag only if we actually attempted to load
+            if not skip_load:
+                setattr(app_state, user_strategies_loading_key, False)
+        # Share kline_manager (singleton pattern)
+        # If base_runner has one, use it. Otherwise, if enhanced_runner created one, share it back to base_runner
+        if base_runner.kline_manager:
+            enhanced_runner.kline_manager = base_runner.kline_manager
+        elif enhanced_runner.kline_manager:
+            # Enhanced runner created a kline_manager, share it with base_runner for singleton pattern
+            base_runner.kline_manager = enhanced_runner.kline_manager
         
         # Share tasks with base runner (tasks run in the same event loop)
         # This ensures tasks started by per-user runners are visible to all runners
         enhanced_runner._tasks = base_runner._tasks
         enhanced_runner._trades = base_runner._trades
         
+        # Note: Strategies are loaded from database in StrategyRunner.__init__ via load_from_database()
+        # The load_from_database() method now skips loading if strategies already exist (optimization)
         # Copy base runner's strategies for backward compatibility, but user's strategies take precedence
-        # (user strategies are loaded from database in StrategyRunner.__init__)
         for strategy_id, summary in base_runner._strategies.items():
             if strategy_id not in enhanced_runner._strategies:
                 enhanced_runner._strategies[strategy_id] = summary
@@ -258,6 +325,8 @@ def get_strategy_runner(
             # Store a flag on the runner itself to trigger restoration on first access
             enhanced_runner._needs_restore = True
         
+        # Cache enhanced runner per request to avoid repeated database queries
+        setattr(request.state, cache_key, enhanced_runner)
         return enhanced_runner
     
     # No user authenticated: return base runner (backward compatibility)

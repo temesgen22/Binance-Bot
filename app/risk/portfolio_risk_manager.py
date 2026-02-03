@@ -56,6 +56,7 @@ class PortfolioRiskManager:
         user_id: Optional[UUID] = None,
         strategy_runner: Optional[any] = None,
         trade_service: Optional[any] = None,
+        notification_service: Optional[any] = None,
     ):
         """Initialize portfolio risk manager.
         
@@ -66,6 +67,7 @@ class PortfolioRiskManager:
             user_id: User UUID
             strategy_runner: StrategyRunner instance for getting strategies
             trade_service: TradeService for querying trades
+            notification_service: Notification service for risk alerts
         """
         self.account_id = account_id
         self.config = config
@@ -73,6 +75,9 @@ class PortfolioRiskManager:
         self.user_id = user_id
         self.strategy_runner = strategy_runner
         self.trade_service = trade_service
+        self.notification_service = notification_service or (
+            getattr(strategy_runner, 'notifications', None) if strategy_runner else None
+        )
         
         # CRITICAL FIX #1: Per-account locks to prevent race conditions
         self.account_locks: Dict[str, asyncio.Lock] = {}
@@ -81,6 +86,10 @@ class PortfolioRiskManager:
         # CRITICAL FIX #2: Exposure reservation tracking
         self._reservations: Dict[str, Dict[str, ExposureReservation]] = {}
         # Format: {account_id: {strategy_id: ExposureReservation}}
+        
+        # Track notified warnings to prevent spam (80% threshold)
+        # Format: {account_id: {warning_type: last_notified_value}}
+        self._warning_notified: Dict[str, Dict[str, float]] = {}
     
     def _get_account_lock(self, account_id: str) -> asyncio.Lock:
         """Get or create lock for account (thread-safe).
@@ -199,12 +208,58 @@ class PortfolioRiskManager:
         if max_exposure is None:
             return True, "No exposure limit set"
         
+        total_exposure = current_exposure + order_exposure
+        
         # Check if would exceed
-        if current_exposure + order_exposure > max_exposure:
+        if total_exposure > max_exposure:
+            # Send breach notification
+            if self.notification_service:
+                from app.services.notifier import NotificationType
+                strategy_id_str = summary.id
+                asyncio.create_task(
+                    self.notification_service.notify_risk_breach(
+                        NotificationType.EXPOSURE_LIMIT_BREACH,
+                        account_id=account_id,
+                        current_value=total_exposure,
+                        limit_value=max_exposure,
+                        breach_level="account",
+                        strategy_id=strategy_id_str,
+                        strategy_name=summary.name,
+                        action_taken="Order blocked",
+                        summary=summary,
+                    )
+                )
+            
             return False, (
                 f"Would exceed exposure limit: "
-                f"{current_exposure + order_exposure:.2f} > {max_exposure:.2f} USDT"
+                f"{total_exposure:.2f} > {max_exposure:.2f} USDT"
             )
+        
+        # Check for warning (80% threshold) - only notify once per threshold
+        warning_threshold = max_exposure * 0.8
+        if current_exposure >= warning_threshold and self.notification_service:
+            warning_key = f"exposure_{account_id}"
+            last_notified = self._warning_notified.get(account_id, {}).get(warning_key, 0.0)
+            
+            # Only notify if exposure increased
+            if current_exposure > last_notified:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    self.notification_service.notify_risk_warning(
+                        NotificationType.EXPOSURE_LIMIT_WARNING,
+                        account_id=account_id,
+                        current_value=current_exposure,
+                        limit_value=max_exposure,
+                        strategy_id=summary.id,
+                        strategy_name=summary.name,
+                        summary=summary,
+                    )
+                )
+                
+                # Track notification
+                if account_id not in self._warning_notified:
+                    self._warning_notified[account_id] = {}
+                self._warning_notified[account_id][warning_key] = current_exposure
         
         return True, "OK"
     
@@ -443,11 +498,88 @@ class PortfolioRiskManager:
             if max_daily_loss is None:
                 return True, "No limit set"
             
+            # Check for breach
             if realized_pnl < -abs(max_daily_loss):
+                # Send breach notification
+                if self.notification_service:
+                    from app.services.notifier import NotificationType
+                    breach_level = "strategy" if breach_type == "(strategy)" else "account"
+                    strategy_id_str = str(strategy_uuid) if strategy_uuid else None
+                    strategy_name = None
+                    summary = None
+                    
+                    # Try to get strategy summary for better notification
+                    if strategy_uuid and self.strategy_runner:
+                        try:
+                            strategies = self.strategy_runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id_str:
+                                    summary = s
+                                    strategy_name = s.name
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        self.notification_service.notify_risk_breach(
+                            NotificationType.DAILY_LOSS_LIMIT_BREACH,
+                            account_id=account_id,
+                            current_value=realized_pnl,
+                            limit_value=-abs(max_daily_loss),
+                            breach_level=breach_level,
+                            strategy_id=strategy_id_str,
+                            strategy_name=strategy_name,
+                            action_taken="Trading blocked" if breach_level == "account" else "Strategy stopped",
+                            summary=summary,
+                        )
+                    )
+                
                 return False, (
                     f"Daily loss limit exceeded {breach_type}: "
                     f"{realized_pnl:.2f} < {max_daily_loss:.2f} USDT"
                 )
+            
+            # Check for warning (80% threshold) - only notify once per threshold
+            warning_threshold = -abs(max_daily_loss) * 0.8
+            if realized_pnl <= warning_threshold and self.notification_service:
+                warning_key = f"daily_loss_{account_id}_{strategy_uuid or 'account'}"
+                last_notified = self._warning_notified.get(account_id, {}).get(warning_key, float('inf'))
+                
+                # Only notify if we haven't notified for this threshold or if loss increased
+                if abs(realized_pnl) > abs(last_notified):
+                    from app.services.notifier import NotificationType
+                    strategy_id_str = str(strategy_uuid) if strategy_uuid else None
+                    strategy_name = None
+                    summary = None
+                    
+                    # Try to get strategy summary for better notification
+                    if strategy_uuid and self.strategy_runner:
+                        try:
+                            strategies = self.strategy_runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id_str:
+                                    summary = s
+                                    strategy_name = s.name
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        self.notification_service.notify_risk_warning(
+                            NotificationType.DAILY_LOSS_LIMIT_WARNING,
+                            account_id=account_id,
+                            current_value=abs(realized_pnl),
+                            limit_value=abs(max_daily_loss),
+                            strategy_id=strategy_id_str,
+                            strategy_name=strategy_name,
+                            summary=summary,
+                        )
+                    )
+                    
+                    # Track notification
+                    if account_id not in self._warning_notified:
+                        self._warning_notified[account_id] = {}
+                    self._warning_notified[account_id][warning_key] = realized_pnl
             
             return True, "OK"
     
@@ -552,11 +684,88 @@ class PortfolioRiskManager:
             if max_weekly_loss is None:
                 return True, "No limit set"
             
+            # Check for breach
             if realized_pnl < -abs(max_weekly_loss):
+                # Send breach notification
+                if self.notification_service:
+                    from app.services.notifier import NotificationType
+                    breach_level = "strategy" if breach_type == "(strategy)" else "account"
+                    strategy_id_str = str(strategy_uuid) if strategy_uuid else None
+                    strategy_name = None
+                    summary = None
+                    
+                    # Try to get strategy summary for better notification
+                    if strategy_uuid and self.strategy_runner:
+                        try:
+                            strategies = self.strategy_runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id_str:
+                                    summary = s
+                                    strategy_name = s.name
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        self.notification_service.notify_risk_breach(
+                            NotificationType.WEEKLY_LOSS_LIMIT_BREACH,
+                            account_id=account_id,
+                            current_value=realized_pnl,
+                            limit_value=-abs(max_weekly_loss),
+                            breach_level=breach_level,
+                            strategy_id=strategy_id_str,
+                            strategy_name=strategy_name,
+                            action_taken="Trading blocked" if breach_level == "account" else "Strategy stopped",
+                            summary=summary,
+                        )
+                    )
+                
                 return False, (
                     f"Weekly loss limit exceeded {breach_type}: "
                     f"{realized_pnl:.2f} < {max_weekly_loss:.2f} USDT"
                 )
+            
+            # Check for warning (80% threshold) - only notify once per threshold
+            warning_threshold = -abs(max_weekly_loss) * 0.8
+            if realized_pnl <= warning_threshold and self.notification_service:
+                warning_key = f"weekly_loss_{account_id}_{strategy_uuid or 'account'}"
+                last_notified = self._warning_notified.get(account_id, {}).get(warning_key, float('inf'))
+                
+                # Only notify if we haven't notified for this threshold or if loss increased
+                if abs(realized_pnl) > abs(last_notified):
+                    from app.services.notifier import NotificationType
+                    strategy_id_str = str(strategy_uuid) if strategy_uuid else None
+                    strategy_name = None
+                    summary = None
+                    
+                    # Try to get strategy summary for better notification
+                    if strategy_uuid and self.strategy_runner:
+                        try:
+                            strategies = self.strategy_runner.list_strategies()
+                            for s in strategies:
+                                if s.id == strategy_id_str:
+                                    summary = s
+                                    strategy_name = s.name
+                                    break
+                        except:
+                            pass
+                    
+                    asyncio.create_task(
+                        self.notification_service.notify_risk_warning(
+                            NotificationType.WEEKLY_LOSS_LIMIT_WARNING,
+                            account_id=account_id,
+                            current_value=abs(realized_pnl),
+                            limit_value=abs(max_weekly_loss),
+                            strategy_id=strategy_id_str,
+                            strategy_name=strategy_name,
+                            summary=summary,
+                        )
+                    )
+                    
+                    # Track notification
+                    if account_id not in self._warning_notified:
+                        self._warning_notified[account_id] = {}
+                    self._warning_notified[account_id][warning_key] = realized_pnl
             
             return True, "OK"
     
@@ -591,11 +800,50 @@ class PortfolioRiskManager:
         drawdown_pct = (peak_balance - current_balance) / peak_balance
         
         max_drawdown = float(config.max_drawdown_pct)
+        
+        # Check for breach
         if drawdown_pct > max_drawdown:
+            # Send breach notification
+            if self.notification_service:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    self.notification_service.notify_risk_breach(
+                        NotificationType.DRAWDOWN_LIMIT_BREACH,
+                        account_id=account_id,
+                        current_value=drawdown_pct * 100,  # Convert to percentage
+                        limit_value=max_drawdown * 100,  # Convert to percentage
+                        breach_level="account",
+                        action_taken="Trading blocked",
+                    )
+                )
+            
             return False, (
                 f"Drawdown limit exceeded: "
                 f"{drawdown_pct:.2%} > {max_drawdown:.2%}"
             )
+        
+        # Check for warning (80% threshold) - only notify once per threshold
+        warning_threshold = max_drawdown * 0.8
+        if drawdown_pct >= warning_threshold and self.notification_service:
+            warning_key = f"drawdown_{account_id}"
+            last_notified = self._warning_notified.get(account_id, {}).get(warning_key, 0.0)
+            
+            # Only notify if drawdown increased
+            if drawdown_pct > last_notified:
+                from app.services.notifier import NotificationType
+                asyncio.create_task(
+                    self.notification_service.notify_risk_warning(
+                        NotificationType.DRAWDOWN_LIMIT_WARNING,
+                        account_id=account_id,
+                        current_value=drawdown_pct * 100,  # Convert to percentage
+                        limit_value=max_drawdown * 100,  # Convert to percentage
+                    )
+                )
+                
+                # Track notification
+                if account_id not in self._warning_notified:
+                    self._warning_notified[account_id] = {}
+                self._warning_notified[account_id][warning_key] = drawdown_pct
         
         return True, "OK"
     

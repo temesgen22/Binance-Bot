@@ -229,9 +229,19 @@ class StrategyPersistence:
                 self.save_to_redis(strategy_id, summary)
             return False
     
-    def load_from_database(self) -> None:
-        """Load all strategies from database via StrategyService (multi-user mode)."""
+    def load_from_database(self, force_reload: bool = False) -> None:
+        """Load all strategies from database via StrategyService (multi-user mode).
+        
+        Args:
+            force_reload: If True, reload even if strategies are already loaded. 
+                         If False, skip if strategies already exist (optimization).
+        """
         if not self.strategy_service or not self.user_id:
+            return
+        
+        # Optimization: Skip loading if strategies are already loaded (unless force_reload)
+        if not force_reload and self._strategies:
+            logger.debug(f"Strategies already loaded for user {self.user_id}, skipping database load")
             return
         
         try:
