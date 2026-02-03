@@ -53,6 +53,8 @@ class WebSocketKlineManager:
         self.connections: Dict[str, WebSocketConnection] = {}
         self.buffers: Dict[str, KlineBuffer] = {}
         self.subscription_counts: Dict[str, int] = {}
+        # Event-based notification for new candles (key: symbol_interval)
+        self.new_candle_events: Dict[str, asyncio.Event] = {}
         self._lock = asyncio.Lock()
         # Pass testnet parameter to PublicMarketDataClient
         self._public_client = PublicMarketDataClient(testnet=testnet, timeout=10.0)
@@ -81,6 +83,9 @@ class WebSocketKlineManager:
             
             # Create buffer
             self.buffers[key] = KlineBuffer(max_size=1000)
+            
+            # Create event for new candle notifications
+            self.new_candle_events[key] = asyncio.Event()
             
             # Create connection
             connection = WebSocketConnection(
@@ -132,6 +137,10 @@ class WebSocketKlineManager:
                 if key in self.buffers:
                     await self.buffers[key].clear()
                     del self.buffers[key]
+                
+                # Clean up event
+                if key in self.new_candle_events:
+                    del self.new_candle_events[key]
                 
                 del self.subscription_counts[key]
                 
@@ -202,6 +211,27 @@ class WebSocketKlineManager:
             if key in self.buffers:
                 await self.buffers[key].add_kline(data)
                 logger.debug(f"Kline update received: {key}")
+                
+                # Notify strategies when a new closed candle arrives
+                # Check if this is a closed candle (x=True means candle is closed)
+                kline_data = data.get("k", {})
+                is_closed = kline_data.get("x", False)
+                if is_closed and key in self.new_candle_events:
+                    # CRITICAL: Ensure all waiting strategies are notified of the new candle
+                    # Strategy: Set event (notify waiters), then clear (reset for next candle)
+                    # This ensures:
+                    # 1. All current waiters are notified (event.set() wakes them up)
+                    # 2. Event is cleared for the next candle (so wait_for_new_candle() will block until next candle)
+                    # 
+                    # Note: If event is already set, setting it again is idempotent (no-op)
+                    # This handles the case where a new candle arrives while previous one's event is still set
+                    self.new_candle_events[key].set()  # Notify all current waiters
+                    # Clear immediately - this is safe because:
+                    # - All waiters that were waiting have been notified (they're now running)
+                    # - New waiters will wait on the cleared event until next candle arrives
+                    # - If a new candle arrives very quickly, the event will be set again (handled above)
+                    self.new_candle_events[key].clear()
+                    logger.debug(f"New closed candle event set for {key} (notified waiters, cleared for next candle)")
         
         return on_kline_update
     
@@ -267,6 +297,36 @@ class WebSocketKlineManager:
         key = f"{symbol.upper()}_{interval}"
         return key in self.connections
     
+    async def wait_for_new_candle(self, symbol: str, interval: str, timeout: Optional[float] = None) -> bool:
+        """Wait for a new closed candle to arrive.
+        
+        This method allows multiple strategies to wait on the same event.
+        When a new candle arrives, all waiting strategies will be notified simultaneously.
+        
+        Args:
+            symbol: Trading symbol
+            interval: Kline interval
+            timeout: Maximum time to wait (None = wait indefinitely)
+            
+        Returns:
+            True if new candle arrived, False if timeout
+        """
+        key = f"{symbol.upper()}_{interval}"
+        
+        # Ensure subscribed
+        await self.subscribe(symbol, interval)
+        
+        if key not in self.new_candle_events:
+            return False
+        
+        try:
+            # Wait for event to be set (all strategies waiting on this event will be notified)
+            await asyncio.wait_for(self.new_candle_events[key].wait(), timeout=timeout)
+            # Event is cleared by the on_kline_update handler when next candle arrives
+            return True
+        except asyncio.TimeoutError:
+            return False
+    
     async def get_connection_status(self) -> Dict[str, Dict]:
         """Get status of all connections.
         
@@ -291,6 +351,7 @@ class WebSocketKlineManager:
             self.connections.clear()
             self.buffers.clear()
             self.subscription_counts.clear()
+            self.new_candle_events.clear()
             
             logger.info("WebSocketKlineManager shut down")
 

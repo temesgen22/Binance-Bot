@@ -263,8 +263,8 @@ class StrategyExecutor:
                 # HOLD signals don't need order execution, risk checks, or klines fetching
                 if signal.action == "HOLD":
                     # HOLD is expected behavior, not a skip - no need to track in meta
-                    # Just continue to next iteration
-                    await asyncio.sleep(strategy.context.interval_seconds)
+                    # Wait for new candle event or timeout (for TP/SL checks)
+                    await self._wait_for_next_evaluation(strategy, summary)
                     continue
                 
                 # CRITICAL: Pass account-specific risk and executor to ensure orders go to correct account
@@ -322,7 +322,8 @@ class StrategyExecutor:
                         f"Strategy loop will continue."
                     )
                 
-                await asyncio.sleep(strategy.context.interval_seconds)
+                # Wait for new candle event or timeout (for TP/SL checks)
+                await self._wait_for_next_evaluation(strategy, summary)
         except asyncio.CancelledError:
             # Get final PnL before sending notification
             final_pnl = None
@@ -1333,5 +1334,51 @@ class StrategyExecutor:
                 logger.debug(f"[{summary.id}] Fallback position update timed out (non-critical)")
             except Exception as exc:
                 logger.debug(f"[{summary.id}] Failed to update position info after order execution: {exc}")
+    
+    async def _wait_for_next_evaluation(
+        self,
+        strategy: Strategy,
+        summary: StrategySummary,
+    ) -> None:
+        """Wait for next evaluation trigger (new candle event or timeout).
+        
+        This synchronizes strategies so they all evaluate simultaneously when a new candle arrives,
+        while still allowing periodic evaluation for TP/SL checks even if no new candle arrives.
+        
+        Args:
+            strategy: Strategy instance
+            summary: Strategy summary
+        """
+        # Try to wait for new candle event if kline_manager is available
+        if strategy.kline_manager:
+            try:
+                # Get kline interval from strategy params
+                kline_interval = strategy.context.params.get("kline_interval", "1m")
+                
+                # Wait for new candle event with timeout (interval_seconds)
+                # This ensures strategies evaluate simultaneously when new candle arrives,
+                # but still evaluate periodically for TP/SL checks even if no new candle
+                new_candle_arrived = await strategy.kline_manager.wait_for_new_candle(
+                    symbol=summary.symbol,
+                    interval=kline_interval,
+                    timeout=strategy.context.interval_seconds
+                )
+                
+                if new_candle_arrived:
+                    logger.debug(
+                        f"[{summary.id}] New candle event triggered evaluation for {summary.symbol} {kline_interval}"
+                    )
+                else:
+                    # Timeout - no new candle, but still evaluate for TP/SL checks
+                    logger.debug(
+                        f"[{summary.id}] Evaluation timeout (no new candle) - checking TP/SL for {summary.symbol}"
+                    )
+            except Exception as e:
+                # Fallback to sleep if event waiting fails
+                logger.debug(f"[{summary.id}] Event waiting failed, using sleep fallback: {e}")
+                await asyncio.sleep(strategy.context.interval_seconds)
+        else:
+            # No kline_manager - fallback to sleep
+            await asyncio.sleep(strategy.context.interval_seconds)
 
 
