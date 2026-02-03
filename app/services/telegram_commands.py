@@ -366,11 +366,11 @@ class TelegramCommandHandler:
             
             # Strategy Section
             message += "📈 <b>Strategies:</b>\n"
-            message += f"   🟢 Running: <b>{len(running)}</b>\n"
-            message += f"   🔴 Stopped: <b>{len(stopped)}</b>\n"
+            message += f"   🟢 Running: {len(running)}\n"
+            message += f"   🔴 Stopped: {len(stopped)}\n"
             if len(error) > 0:
-                message += f"   ❌ Error: <b>{len(error)}</b>\n"
-            message += f"   📋 Total: <b>{len(strategies)}</b>\n"
+                message += f"   ❌ Error: {len(error)}\n"
+            message += f"   📋 Total: {len(strategies)}\n"
             message += "\n"
             
             # Performance Section
@@ -654,17 +654,11 @@ class TelegramCommandHandler:
             except (TypeError, ValueError, AttributeError):
                 message += f"Completed: N/A\n"
             # Safely format win_rate (handle mocks in tests)
+            # Mocks return the assigned value directly when accessed
             try:
-                win_rate = getattr(stats, 'win_rate', None)
-                # Try to use the value directly - if it's a number, it will work
-                if win_rate is not None:
-                    try:
-                        # Try to format it - if it's a number, this will work
-                        win_rate_val = float(win_rate) if not isinstance(win_rate, (int, float)) else win_rate
-                        message += f"Win Rate: <b>{win_rate_val*100:.1f}%</b>\n"
-                    except (TypeError, ValueError, AttributeError):
-                        # If it's a mock that can't be converted, skip it
-                        message += f"Win Rate: N/A\n"
+                win_rate = stats.win_rate
+                if isinstance(win_rate, (int, float)) and not hasattr(win_rate, '__call__'):
+                    message += f"Win Rate: <b>{win_rate*100:.1f}%</b>\n"
                 else:
                     message += f"Win Rate: N/A\n"
             except (TypeError, ValueError, AttributeError):
