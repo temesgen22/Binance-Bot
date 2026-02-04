@@ -138,11 +138,71 @@ def get_strategy_performance(
                 # Calculate stats from completed trades (TradeReport objects)
                 from app.models.strategy import StrategyStats
                 
-                total_pnl = sum(trade.pnl_usd for trade in completed_trades_list)
-                winning_trades = len([t for t in completed_trades_list if t.pnl_usd > 0])
-                losing_trades = len([t for t in completed_trades_list if t.pnl_usd < 0])
+                # DEBUG: Log PnL values for troubleshooting win rate issues
+                pnl_values = [trade.pnl_usd for trade in completed_trades_list]
+                logger.info(
+                    f"[{strategy.id}] 🔍 Win rate calculation DEBUG: {len(completed_trades_list)} completed trades"
+                )
+                for idx, trade in enumerate(completed_trades_list):
+                    logger.info(
+                        f"[{strategy.id}]   Trade {idx+1}: pnl_usd={trade.pnl_usd}, "
+                        f"type={type(trade.pnl_usd)}, "
+                        f"pnl_usd > 0 = {trade.pnl_usd > 0 if trade.pnl_usd is not None else 'None'}, "
+                        f"float(pnl_usd) = {float(trade.pnl_usd) if trade.pnl_usd is not None else 'None'}"
+                    )
+                
+                # Calculate stats with robust type handling
+                total_pnl = 0.0
+                winning_trades = 0
+                losing_trades = 0
+                
+                for trade in completed_trades_list:
+                    # Ensure pnl_usd is a valid float
+                    try:
+                        pnl_value = float(trade.pnl_usd) if trade.pnl_usd is not None else 0.0
+                        total_pnl += pnl_value
+                        
+                        # Log each trade's classification
+                        if pnl_value > 0:
+                            winning_trades += 1
+                            logger.debug(f"[{strategy.id}] ✅ Trade {getattr(trade, 'trade_id', 'unknown')}: WIN (pnl={pnl_value:.4f})")
+                        elif pnl_value < 0:
+                            losing_trades += 1
+                            logger.debug(f"[{strategy.id}] ❌ Trade {getattr(trade, 'trade_id', 'unknown')}: LOSS (pnl={pnl_value:.4f})")
+                        else:
+                            logger.debug(f"[{strategy.id}] ⚪ Trade {getattr(trade, 'trade_id', 'unknown')}: BREAK-EVEN (pnl={pnl_value:.4f})")
+                        # pnl_value == 0 is break-even (counts in total but not as win or loss)
+                    except (TypeError, ValueError) as e:
+                        logger.warning(
+                            f"[{strategy.id}] ⚠️ Invalid pnl_usd value for trade {getattr(trade, 'trade_id', 'unknown')}: "
+                            f"{trade.pnl_usd} (type: {type(trade.pnl_usd)}). Error: {e}. Skipping in win/loss count."
+                        )
+                        # Try to include in total_pnl if it's a number
+                        try:
+                            total_pnl += float(trade.pnl_usd) if trade.pnl_usd is not None else 0.0
+                        except:
+                            pass
+                
                 completed_count = len(completed_trades_list)
                 win_rate = (winning_trades / completed_count * 100) if completed_count > 0 else 0.0
+                
+                # Log final calculation
+                logger.info(
+                    f"[{strategy.id}] 📊 Win rate calculation result: "
+                    f"Total PnL={total_pnl:.4f}, "
+                    f"Wins={winning_trades}, Losses={losing_trades}, "
+                    f"Completed={completed_count}, "
+                    f"Win Rate={win_rate:.2f}%"
+                )
+                
+                # WARNING: If total PnL is positive but win rate is 0%, log a warning
+                if total_pnl > 0 and win_rate == 0.0 and completed_count > 0:
+                    logger.warning(
+                        f"[{strategy.id}] ⚠️ INCONSISTENCY DETECTED: "
+                        f"Total PnL={total_pnl:.4f} (positive) but Win Rate={win_rate:.2f}% (zero). "
+                        f"This suggests trades have mixed PnL (some positive, some negative) or data issue. "
+                        f"PnL breakdown: {pnl_values}"
+                    )
                 avg_profit_per_trade = total_pnl / completed_count if completed_count > 0 else 0.0
                 largest_win = max((t.pnl_usd for t in completed_trades_list), default=0.0)
                 largest_loss = min((t.pnl_usd for t in completed_trades_list), default=0.0)

@@ -159,6 +159,12 @@ function switchTab(tabName) {
         case 'trades':
             loadTrades();
             break;
+        case 'comparison':
+            // Small delay to ensure DOM is ready
+            setTimeout(() => {
+                loadStrategyComparison();
+            }, 100);
+            break;
     }
 }
 
@@ -1412,5 +1418,512 @@ function resetFilters() {
     
     // Reload current tab
     switchTab(currentTab);
+}
+
+// ============================================================================
+// Strategy Comparison Functions
+// ============================================================================
+
+let comparisonData = null;
+let currentSortColumn = null;
+let currentSortDirection = 'asc';
+
+// Load Strategy Comparison Tab
+async function loadStrategyComparison() {
+    console.log('loadStrategyComparison() called');
+    
+    const select = document.getElementById('strategy-select');
+    if (!select) {
+        console.error('Strategy select element not found in DOM. Looking for #strategy-select');
+        // Try to find it with a delay (in case DOM isn't ready)
+        setTimeout(() => {
+            const retrySelect = document.getElementById('strategy-select');
+            if (retrySelect) {
+                console.log('Found strategy-select on retry');
+                loadStrategyComparison();
+            } else {
+                console.error('Strategy select element still not found after retry');
+            }
+        }, 100);
+        return;
+    }
+    
+    console.log('Strategy select element found, loading strategies...');
+    
+    // Show loading state
+    select.innerHTML = '<option value="" disabled>Loading strategies...</option>';
+    
+    try {
+        console.log('Fetching from /api/strategies/performance');
+        // Load available strategies
+        const response = await authFetch('/api/strategies/performance');
+        console.log('Response status:', response.status, response.statusText);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Failed to load strategies:', response.status, errorText);
+            throw new Error(`Failed to load strategies: ${response.status} ${errorText}`);
+        }
+        
+        const contentType = response.headers.get('content-type') || '';
+        console.log('Response content-type:', contentType);
+        
+        if (!contentType.includes('application/json')) {
+            const text = await response.text();
+            console.error('Non-JSON response:', text.substring(0, 200));
+            throw new Error(`Expected JSON but received ${contentType}`);
+        }
+        
+        const data = await response.json();
+        console.log('Strategies data received:', data);
+        console.log('Data keys:', Object.keys(data));
+        console.log('data.strategies:', data.strategies);
+        
+        // Handle different response structures
+        const strategies = data.strategies || data || [];
+        console.log('Strategies to populate:', strategies.length, strategies);
+        
+        if (!Array.isArray(strategies)) {
+            console.error('Invalid strategies data format:', strategies, typeof strategies);
+            throw new Error('Invalid response format: strategies is not an array');
+        }
+        
+        if (strategies.length === 0) {
+            console.warn('No strategies found in response');
+            select.innerHTML = '<option value="" disabled>No strategies available</option>';
+            return;
+        }
+        
+        console.log('Calling populateStrategySelector with', strategies.length, 'strategies');
+        populateStrategySelector(strategies);
+        
+        // Set up event listeners (only once)
+        const compareBtn = document.getElementById('compare-btn');
+        const clearBtn = document.getElementById('clear-comparison-btn');
+        const viewMode = document.getElementById('view-mode');
+        
+        if (compareBtn && !compareBtn.hasAttribute('data-listener-attached')) {
+            compareBtn.addEventListener('click', runComparison);
+            compareBtn.setAttribute('data-listener-attached', 'true');
+        }
+        
+        if (clearBtn && !clearBtn.hasAttribute('data-listener-attached')) {
+            clearBtn.addEventListener('click', clearComparison);
+            clearBtn.setAttribute('data-listener-attached', 'true');
+        }
+        
+        if (viewMode && !viewMode.hasAttribute('data-listener-attached')) {
+            viewMode.addEventListener('change', (e) => switchComparisonView(e.target.value));
+            viewMode.setAttribute('data-listener-attached', 'true');
+        }
+    } catch (error) {
+        console.error('Error loading strategies:', error);
+        const resultsDiv = document.getElementById('comparison-results');
+        if (resultsDiv) {
+            resultsDiv.innerHTML = `<div class="error">Failed to load strategies for comparison: ${error.message}</div>`;
+        }
+        // Also show error in the selector itself
+        const select = document.getElementById('strategy-select');
+        if (select) {
+            select.innerHTML = '';
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = `Error: ${error.message}`;
+            option.disabled = true;
+            select.appendChild(option);
+        }
+    }
+}
+
+// Populate Strategy Selector
+function populateStrategySelector(strategies) {
+    console.log('populateStrategySelector() called with', strategies);
+    
+    const select = document.getElementById('strategy-select');
+    if (!select) {
+        console.error('Strategy select element not found in populateStrategySelector');
+        return;
+    }
+    
+    if (!Array.isArray(strategies)) {
+        console.error('populateStrategySelector: strategies is not an array', strategies, typeof strategies);
+        select.innerHTML = '<option value="" disabled>Error: Invalid data format</option>';
+        return;
+    }
+    
+    select.innerHTML = ''; // Clear existing options
+    
+    if (strategies.length === 0) {
+        console.warn('No strategies to populate');
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No strategies available';
+        option.disabled = true;
+        select.appendChild(option);
+        return;
+    }
+    
+    console.log('Populating', strategies.length, 'strategies');
+    let populatedCount = 0;
+    
+    strategies.forEach((strategy, index) => {
+        try {
+            console.log(`Strategy ${index}:`, strategy);
+            const option = document.createElement('option');
+            option.value = strategy.strategy_id || strategy.id || `strategy_${index}`;
+            const name = strategy.strategy_name || strategy.name || 'Unknown';
+            const symbol = strategy.symbol || '';
+            const type = strategy.strategy_type || strategy.type || '';
+            option.textContent = `${name} (${symbol}) - ${type}`;
+            select.appendChild(option);
+            populatedCount++;
+        } catch (error) {
+            console.error(`Error adding strategy ${index}:`, error, strategy);
+        }
+    });
+    
+    console.log(`Successfully populated ${populatedCount} out of ${strategies.length} strategies in selector`);
+    
+    if (populatedCount === 0) {
+        select.innerHTML = '<option value="" disabled>Error: Could not populate strategies</option>';
+    }
+}
+
+// Run Comparison
+async function runComparison() {
+    const select = document.getElementById('strategy-select');
+    if (!select) return;
+    
+    const selectedIds = Array.from(select.selectedOptions)
+        .map(opt => opt.value);
+    
+    if (selectedIds.length < 1) {
+        const resultsDiv = document.getElementById('comparison-results');
+        if (resultsDiv) {
+            resultsDiv.innerHTML = '<div class="error">Please select at least one strategy to compare</div>';
+        }
+        return;
+    }
+    
+    if (selectedIds.length > 10) {
+        const resultsDiv = document.getElementById('comparison-results');
+        if (resultsDiv) {
+            resultsDiv.innerHTML = '<div class="error">Maximum 10 strategies can be compared at once</div>';
+        }
+        return;
+    }
+    
+    const startDate = document.getElementById('comparison-start-date')?.value || '';
+    const endDate = document.getElementById('comparison-end-date')?.value || '';
+    
+    try {
+        const params = new URLSearchParams({
+            strategy_ids: selectedIds.join(',')
+        });
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        
+        const response = await authFetch(`/api/dashboard/strategy-comparison?${params}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: 'Failed to compare strategies' }));
+            throw new Error(errorData.detail || 'Failed to compare strategies');
+        }
+        
+        const data = await response.json();
+        comparisonData = data;
+        
+        const viewMode = document.getElementById('view-mode')?.value || 'table';
+        switchComparisonView(viewMode, data);
+    } catch (error) {
+        console.error('Error running comparison:', error);
+        const resultsDiv = document.getElementById('comparison-results');
+        if (resultsDiv) {
+            resultsDiv.innerHTML = `<div class="error">Failed to compare strategies: ${error.message}</div>`;
+        }
+    }
+}
+
+// Switch Comparison View
+function switchComparisonView(mode, data = null) {
+    const dataToUse = data || comparisonData;
+    if (!dataToUse) {
+        return;
+    }
+    
+    // Hide all views
+    document.querySelectorAll('.comparison-view').forEach(view => {
+        view.style.display = 'none';
+    });
+    
+    switch(mode) {
+        case 'table':
+            renderComparisonTable(dataToUse);
+            break;
+        case 'cards':
+            renderComparisonCards(dataToUse);
+            break;
+        case 'chart':
+            renderComparisonCharts(dataToUse);
+            break;
+        case 'params':
+            renderParameterComparison(dataToUse);
+            break;
+    }
+}
+
+// Render Comparison Table
+function renderComparisonTable(data) {
+    const resultsDiv = document.getElementById('comparison-results');
+    if (!resultsDiv) return;
+    
+    if (!data.strategies || data.strategies.length === 0) {
+        resultsDiv.innerHTML = '<div class="empty-state">No strategies to compare</div>';
+        return;
+    }
+    
+    // Get all metrics to display
+    const metrics = [
+        { key: 'strategy_name', label: 'Strategy Name', format: 'text' },
+        { key: 'symbol', label: 'Symbol', format: 'text' },
+        { key: 'strategy_type', label: 'Type', format: 'text' },
+        { key: 'total_pnl', label: 'Total PnL', format: 'currency' },
+        { key: 'total_realized_pnl', label: 'Realized PnL', format: 'currency' },
+        { key: 'total_unrealized_pnl', label: 'Unrealized PnL', format: 'currency' },
+        { key: 'win_rate', label: 'Win Rate', format: 'percent' },
+        { key: 'completed_trades', label: 'Trades', format: 'number' },
+        { key: 'winning_trades', label: 'Wins', format: 'number' },
+        { key: 'losing_trades', label: 'Losses', format: 'number' },
+        { key: 'avg_profit_per_trade', label: 'Avg Profit/Trade', format: 'currency' },
+    ];
+    
+    // Add additional metrics if available in comparison_metrics
+    if (data.comparison_metrics) {
+        if (data.comparison_metrics.profit_factor) {
+            metrics.push({ key: 'profit_factor', label: 'Profit Factor', format: 'number' });
+        }
+        if (data.comparison_metrics.risk_reward) {
+            metrics.push({ key: 'risk_reward', label: 'Risk/Reward', format: 'number' });
+        }
+        if (data.comparison_metrics.trades_per_day) {
+            metrics.push({ key: 'trades_per_day', label: 'Trades/Day', format: 'number' });
+        }
+    }
+    
+    metrics.push(
+        { key: 'leverage', label: 'Leverage', format: 'number' },
+        { key: 'risk_per_trade', label: 'Risk %', format: 'percent' }
+    );
+    
+    // Build table
+    let html = '<div id="comparison-table-view" class="comparison-view">';
+    html += '<table id="comparison-table" class="comparison-table">';
+    html += '<thead><tr>';
+    
+    metrics.forEach(metric => {
+        html += `<th onclick="sortComparisonTable('${metric.key}')" title="Click to sort" style="cursor: pointer;">${metric.label} <span class="sort-indicator"></span></th>`;
+    });
+    
+    html += '</tr></thead><tbody>';
+    
+    data.strategies.forEach(strategy => {
+        html += '<tr>';
+        metrics.forEach(metric => {
+            let value = strategy[metric.key];
+            let cellClass = '';
+            
+            // Format value
+            if (value === null || value === undefined) {
+                value = 'N/A';
+            } else if (metric.format === 'currency') {
+                value = `$${parseFloat(value).toFixed(2)}`;
+            } else if (metric.format === 'percent') {
+                value = `${parseFloat(value).toFixed(2)}%`;
+            } else if (metric.format === 'number') {
+                value = parseFloat(value).toFixed(2);
+            } else if (metric.format === 'text') {
+                value = String(value);
+            }
+            
+            // Highlight best/worst if comparison metrics available
+            if (data.comparison_metrics && data.comparison_metrics[metric.key]) {
+                const metricData = data.comparison_metrics[metric.key];
+                if (metricData.best_strategy_id === strategy.strategy_id) {
+                    cellClass = 'value-best';
+                } else if (metricData.worst_strategy_id === strategy.strategy_id) {
+                    cellClass = 'value-worst';
+                }
+            }
+            
+            html += `<td class="${cellClass}">${value}</td>`;
+        });
+        html += '</tr>';
+    });
+    
+    html += '</tbody></table>';
+    html += '</div>';
+    
+    resultsDiv.innerHTML = html;
+    
+    // Update sort indicator
+    updateSortIndicator();
+}
+
+// Sort Comparison Table
+function sortComparisonTable(column) {
+    if (!comparisonData || !comparisonData.strategies) return;
+    
+    const direction = (currentSortColumn === column && currentSortDirection === 'asc') ? 'desc' : 'asc';
+    currentSortColumn = column;
+    currentSortDirection = direction;
+    
+    comparisonData.strategies.sort((a, b) => {
+        let aVal = a[column];
+        let bVal = b[column];
+        
+        if (aVal === null || aVal === undefined) aVal = -Infinity;
+        if (bVal === null || bVal === undefined) bVal = -Infinity;
+        
+        if (direction === 'asc') {
+            return aVal > bVal ? 1 : (aVal < bVal ? -1 : 0);
+        } else {
+            return aVal < bVal ? 1 : (aVal > bVal ? -1 : 0);
+        }
+    });
+    
+    renderComparisonTable(comparisonData);
+}
+
+// Update Sort Indicator
+function updateSortIndicator() {
+    if (!currentSortColumn) return;
+    
+    document.querySelectorAll('.sort-indicator').forEach(ind => {
+        ind.textContent = '';
+    });
+    
+    const headers = document.querySelectorAll('#comparison-table th');
+    const metrics = [
+        'strategy_name', 'symbol', 'strategy_type', 'total_pnl', 'total_realized_pnl',
+        'total_unrealized_pnl', 'win_rate', 'completed_trades', 'winning_trades',
+        'losing_trades', 'avg_profit_per_trade', 'profit_factor', 'risk_reward',
+        'trades_per_day', 'leverage', 'risk_per_trade'
+    ];
+    
+    headers.forEach((header, index) => {
+        if (index < metrics.length && metrics[index] === currentSortColumn) {
+            const indicator = header.querySelector('.sort-indicator');
+            if (indicator) {
+                indicator.textContent = currentSortDirection === 'asc' ? ' ↑' : ' ↓';
+            }
+        }
+    });
+}
+
+// Render Comparison Cards (Placeholder - Phase 3)
+function renderComparisonCards(data) {
+    const resultsDiv = document.getElementById('comparison-results');
+    if (!resultsDiv) return;
+    
+    resultsDiv.innerHTML = '<div class="empty-state">Cards view coming in Phase 3</div>';
+}
+
+// Render Comparison Charts (Placeholder - Phase 3)
+function renderComparisonCharts(data) {
+    const resultsDiv = document.getElementById('comparison-results');
+    if (!resultsDiv) return;
+    
+    resultsDiv.innerHTML = '<div class="empty-state">Charts view coming in Phase 3</div>';
+}
+
+// Render Parameter Comparison
+function renderParameterComparison(data) {
+    const resultsDiv = document.getElementById('comparison-results');
+    if (!resultsDiv) return;
+    
+    if (!data.strategies || data.strategies.length === 0) {
+        resultsDiv.innerHTML = '<div class="empty-state">No strategies to compare</div>';
+        return;
+    }
+    
+    // Get all unique parameters
+    const allParams = new Set();
+    data.strategies.forEach(s => {
+        if (s.params) {
+            Object.keys(s.params).forEach(key => allParams.add(key));
+        }
+    });
+    
+    // Build parameter comparison table
+    let html = '<div id="comparison-params-view" class="comparison-view">';
+    html += '<table id="params-comparison-table" class="params-table">';
+    html += '<thead><tr><th>Parameter</th>';
+    data.strategies.forEach(s => {
+        html += `<th>${s.strategy_name}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    
+    // Group parameters
+    const paramGroups = {
+        'Basic': ['strategy_type', 'symbol', 'leverage', 'risk_per_trade', 'fixed_amount'],
+        'EMA': ['ema_fast', 'ema_slow', 'min_ema_separation'],
+        'Risk': ['take_profit_pct', 'stop_loss_pct', 'trailing_stop_enabled', 'trailing_stop_activation_pct'],
+        'Trading': ['kline_interval', 'enable_short', 'enable_htf_bias', 'cooldown_candles', 'enable_ema_cross_exit'],
+        'Other': Array.from(allParams).filter(p => !['strategy_type', 'symbol', 'leverage', 'risk_per_trade', 'fixed_amount', 
+            'ema_fast', 'ema_slow', 'min_ema_separation', 'take_profit_pct', 'stop_loss_pct', 
+            'trailing_stop_enabled', 'trailing_stop_activation_pct', 'kline_interval', 'enable_short', 
+            'enable_htf_bias', 'cooldown_candles', 'enable_ema_cross_exit'].includes(p))
+    };
+    
+    Object.entries(paramGroups).forEach(([groupName, params]) => {
+        if (params.length === 0) return;
+        
+        html += `<tr><td colspan="${data.strategies.length + 1}" style="background: #f8f9fa; font-weight: bold;">${groupName}</td></tr>`;
+        
+        params.forEach(param => {
+            if (!allParams.has(param)) return;
+            
+            html += `<tr>`;
+            html += `<td><strong>${param.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</strong></td>`;
+            
+            const values = data.strategies.map(s => s.params?.[param] ?? 'N/A');
+            const uniqueValues = new Set(values.filter(v => v !== 'N/A'));
+            const isDifferent = uniqueValues.size > 1;
+            
+            values.forEach((value, idx) => {
+                let displayValue = value;
+                if (typeof value === 'boolean') {
+                    displayValue = value ? 'Yes' : 'No';
+                } else if (typeof value === 'number') {
+                    displayValue = value.toFixed(4);
+                }
+                
+                const cellClass = isDifferent ? 'param-different' : '';
+                html += `<td class="${cellClass}">${displayValue}</td>`;
+            });
+            
+            html += `</tr>`;
+        });
+    });
+    
+    html += '</tbody></table>';
+    html += '</div>';
+    
+    resultsDiv.innerHTML = html;
+}
+
+// Clear Comparison
+function clearComparison() {
+    const select = document.getElementById('strategy-select');
+    const startDate = document.getElementById('comparison-start-date');
+    const endDate = document.getElementById('comparison-end-date');
+    const resultsDiv = document.getElementById('comparison-results');
+    
+    if (select) select.selectedIndex = -1;
+    if (startDate) startDate.value = '';
+    if (endDate) endDate.value = '';
+    if (resultsDiv) {
+        resultsDiv.innerHTML = '<div class="empty-state">Select strategies and click "Compare" to see comparison</div>';
+    }
+    comparisonData = null;
 }
 
