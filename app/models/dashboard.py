@@ -65,34 +65,31 @@ class DashboardOverview(BaseModel):
 
 
 class DateRange(BaseModel):
-    """Date range for filtering comparison data."""
-    start: Optional[datetime] = Field(default=None, description="Start date/time")
-    end: Optional[datetime] = Field(default=None, description="End date/time")
+    """Date range for filtering."""
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
 
 
 class ComparisonMetric(BaseModel):
-    """Individual metric comparison across strategies."""
-    name: str = Field(description="Metric name (e.g., 'total_pnl', 'win_rate')")
-    unit: str = Field(description="Metric unit (e.g., 'USD', '%', 'count')")
-    values: Dict[str, float] = Field(description="Strategy ID to metric value mapping")
-    best_strategy_id: Optional[str] = Field(default=None, description="Strategy ID with best value")
-    worst_strategy_id: Optional[str] = Field(default=None, description="Strategy ID with worst value")
-    average: float = Field(description="Average value across all strategies")
-    median: float = Field(description="Median value across all strategies")
+    """Comparison metric with best/worst strategy IDs."""
+    best_strategy_id: Optional[str] = None
+    worst_strategy_id: Optional[str] = None
+    best_value: Optional[float] = None
+    worst_value: Optional[float] = None
 
 
 class ComparisonSummary(BaseModel):
-    """Summary statistics for strategy comparison."""
-    total_strategies: int = Field(description="Number of strategies being compared")
-    best_overall_strategy: Optional[str] = Field(default=None, description="Best strategy by total PnL (strategy_id)")
-    most_consistent_strategy: Optional[str] = Field(default=None, description="Most consistent strategy by win rate (strategy_id)")
-    most_active_strategy: Optional[str] = Field(default=None, description="Most active strategy by trade count (strategy_id)")
-    riskiest_strategy: Optional[str] = Field(default=None, description="Riskiest strategy by leverage/risk (strategy_id)")
+    """Summary of comparison metrics."""
+    profit_factor: Optional[ComparisonMetric] = None
+    risk_reward: Optional[ComparisonMetric] = None
+    trades_per_day: Optional[ComparisonMetric] = None
+    fee_impact: Optional[ComparisonMetric] = None
+    uptime_percent: Optional[ComparisonMetric] = None
 
 
 class StrategyComparisonResponse(BaseModel):
-    """Response model for strategy comparison endpoint."""
-    strategies: List[StrategyPerformance] = Field(description="List of strategies with performance metrics")
-    comparison_metrics: Dict[str, ComparisonMetric] = Field(description="Comparison metrics keyed by metric name")
-    date_range: Optional[DateRange] = Field(default=None, description="Date range used for comparison")
-    summary: ComparisonSummary = Field(description="Summary statistics for the comparison")
+    """Response for strategy comparison endpoint."""
+    strategies: List[StrategyPerformance] = Field(default_factory=list)
+    comparison_metrics: Optional[ComparisonSummary] = None
+    date_range: Optional[DateRange] = None
+

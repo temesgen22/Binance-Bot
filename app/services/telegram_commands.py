@@ -937,7 +937,7 @@ class TelegramCommandHandler:
                 StrategyState.running: "🟢",
                 StrategyState.stopped: "🔴",
                 StrategyState.error: "❌",
-                }.get(status, "⚪")
+            }.get(status, "⚪")
         except (TypeError, ValueError):
             status_emoji = "⚪"
         

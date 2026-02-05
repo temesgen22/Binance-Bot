@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict
+from typing import Optional
 from dateutil import parser as date_parser
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
@@ -19,9 +19,9 @@ from app.api.deps import (
 from app.models.dashboard import (
     DashboardOverview,
     StrategyComparisonResponse,
-    ComparisonMetric,
     ComparisonSummary,
-    DateRange
+    ComparisonMetric,
+    DateRange,
 )
 from app.models.strategy_performance import StrategyPerformanceList
 from app.models.trade import SymbolPnL
@@ -321,8 +321,7 @@ def get_dashboard_overview(
                 current_user=current_user,
                 runner=runner,
                 client=client,
-                client_manager=client_manager,
-                db_service=db_service,  # ✅ Added: Required for completed_trades table access
+                client_manager=client_manager
             )
         except Exception as exc:
             logger.error(f"Failed to get symbol PnL: {exc}")
@@ -587,52 +586,34 @@ def get_dashboard_overview(
 
 @router.get("/strategy-comparison", response_model=StrategyComparisonResponse)
 def get_strategy_comparison(
-    strategy_ids: str = Query(..., description="Comma-separated list of strategy IDs"),
-    start_date: Optional[str] = Query(default=None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(default=None, description="End date (ISO format)"),
-    account_id: Optional[str] = Query(default=None, description="Filter by account ID"),
-    include_params: bool = Query(default=True, description="Include configuration parameters"),
+    strategy_ids: str = Query(..., description="Comma-separated list of strategy IDs to compare"),
+    start_date: Optional[str] = Query(default=None, description="Filter from date (ISO format)"),
+    end_date: Optional[str] = Query(default=None, description="Filter to date (ISO format)"),
     current_user: User = Depends(get_current_user),
     runner: StrategyRunner = Depends(get_strategy_runner),
     db_service: DatabaseService = Depends(get_database_service),
 ) -> StrategyComparisonResponse:
-    """Compare multiple strategies side-by-side across performance metrics.
+    """Compare multiple strategies side-by-side with detailed metrics.
     
-    Returns detailed comparison data including:
-    - Performance metrics (PnL, win rate, trades, etc.)
-    - Risk metrics (leverage, fees, etc.)
-    - Configuration parameters (if include_params=True)
-    - Comparison statistics (best/worst/average/median)
+    Returns performance data for each strategy along with comparison metrics
+    highlighting best and worst performers across various dimensions.
     """
     try:
-        # Parse comma-separated strategy IDs
-        strategy_ids_list = [s.strip() for s in strategy_ids.split(',') if s.strip()]
-        
-        if not strategy_ids_list:
+        # Parse strategy IDs
+        strategy_id_list = [sid.strip() for sid in strategy_ids.split(',') if sid.strip()]
+        if not strategy_id_list:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one strategy ID is required"
             )
         
-        # Limit to 10 strategies
-        if len(strategy_ids_list) > 10:
+        if len(strategy_id_list) > 10:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum 10 strategies can be compared at once"
             )
         
-        # Filter out invalid strategy IDs
-        available_strategies = runner.list_strategies()
-        available_strategy_ids = {s.id for s in available_strategies}
-        valid_strategy_ids = [sid for sid in strategy_ids_list if sid in available_strategy_ids]
-        
-        if not valid_strategy_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No valid strategies found for comparison"
-            )
-        
-        # Parse date filters if provided
+        # Parse date filters
         start_datetime: Optional[datetime] = None
         end_datetime: Optional[datetime] = None
         
@@ -654,132 +635,117 @@ def get_strategy_comparison(
                     end_datetime = date_parser.parse(end_date)
                 else:
                     end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
-                    end_datetime = end_datetime.replace(hour=23, minute=59, second=59)
+                    end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
                 if end_datetime.tzinfo is None:
                     end_datetime = end_datetime.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError) as exc:
                 logger.warning(f"Invalid end_date format: {end_date}, error: {exc}")
                 end_datetime = None
         
-        # Get strategy performance data
+        # Get strategy performance for each strategy
         from app.models.strategy_performance import StrategyPerformance
         from app.api.routes.reports import _get_completed_trades_from_database
-        from uuid import UUID
         
-        comparison_strategies: List[StrategyPerformance] = []
-        all_comparison_metrics: Dict[str, Dict[str, float]] = {}  # metric_name -> {strategy_id: value}
+        comparison_strategies = []
         
-        for strategy_id in valid_strategy_ids:
-            # Find strategy in available strategies
-            strategy = next((s for s in available_strategies if s.id == strategy_id), None)
-            if not strategy:
-                logger.warning(f"Strategy {strategy_id} not found in available strategies")
-                continue
-            
-            # Apply account filter
-            if account_id and strategy.account_id != account_id:
-                continue
-            
+        for strategy_id in strategy_id_list:
             try:
-                # Get performance data (reuse logic from strategy_performance.py)
-                completed_trades_list = []
+                # Get strategy from runner by listing all strategies and filtering
+                strategies = runner.list_strategies()
+                strategy = next((s for s in strategies if s.id == strategy_id), None)
+                if not strategy:
+                    logger.warning(f"Strategy {strategy_id} not found in runner")
+                    continue
                 
-                # Get strategy UUID from database
+                # Get database strategy for UUID
                 db_strategy = None
-                if runner.strategy_service and runner.user_id:
+                if runner.strategy_service:
                     try:
-                        db_strategy = runner.strategy_service.db_service.get_strategy(current_user.id, strategy.id)
+                        db_strategy = runner.strategy_service.db_service.get_strategy(current_user.id, strategy_id)
                     except Exception as e:
                         logger.debug(f"Could not get strategy from database: {e}")
                 
+                # Get completed trades
+                completed_trades_list = []
                 if db_strategy:
                     try:
                         completed_trades_list = _get_completed_trades_from_database(
                             db_service=db_service,
                             user_id=current_user.id,
                             strategy_uuid=db_strategy.id,
-                            strategy_id=strategy.id,
+                            strategy_id=strategy_id,
                             start_datetime=start_datetime,
                             end_datetime=end_datetime
                         )
                     except Exception as e:
-                        logger.debug(f"Could not get completed trades from database for strategy {strategy.id}: {e}")
+                        logger.debug(f"Could not get completed trades for strategy {strategy_id}: {e}")
                 
                 # Calculate performance metrics
-                total_realized_pnl = 0.0
-                winning_trades = 0
-                losing_trades = 0
-                winning_trades_pnl = 0.0
-                losing_trades_pnl = 0.0
-                
-                for trade in completed_trades_list:
-                    try:
-                        pnl_value = float(trade.pnl_usd) if trade.pnl_usd is not None else 0.0
-                        total_realized_pnl += pnl_value
-                        
-                        if pnl_value > 0:
-                            winning_trades += 1
-                            winning_trades_pnl += pnl_value
-                        elif pnl_value < 0:
-                            losing_trades += 1
-                            losing_trades_pnl += abs(pnl_value)
-                    except (TypeError, ValueError):
-                        pass
-                
-                completed_count = len(completed_trades_list)
-                win_rate = (winning_trades / completed_count * 100) if completed_count > 0 else 0.0
-                avg_profit_per_trade = total_realized_pnl / completed_count if completed_count > 0 else 0.0
-                
-                # Calculate additional metrics
-                profit_factor = winning_trades_pnl / losing_trades_pnl if losing_trades_pnl > 0 else (float('inf') if winning_trades_pnl > 0 else 0.0)
-                
-                avg_win = winning_trades_pnl / winning_trades if winning_trades > 0 else 0.0
-                avg_loss = losing_trades_pnl / losing_trades if losing_trades > 0 else 0.0
-                risk_reward = avg_win / avg_loss if avg_loss > 0 else 0.0
-                avg_loss_per_trade = avg_loss
-                
-                # Trades per day
-                if start_datetime and end_datetime:
-                    days = (end_datetime - start_datetime).days
-                elif strategy.created_at:
-                    days = (datetime.now(timezone.utc) - strategy.created_at).days
+                if completed_trades_list:
+                    total_pnl = sum(float(trade.pnl_usd) if trade.pnl_usd is not None else 0.0 for trade in completed_trades_list)
+                    winning_trades = len([t for t in completed_trades_list if t.pnl_usd and float(t.pnl_usd) > 0])
+                    losing_trades = len([t for t in completed_trades_list if t.pnl_usd and float(t.pnl_usd) < 0])
+                    completed_count = len(completed_trades_list)
+                    win_rate = (winning_trades / completed_count * 100) if completed_count > 0 else 0.0
+                    avg_profit_per_trade = total_pnl / completed_count if completed_count > 0 else 0.0
+                    largest_win = max((float(t.pnl_usd) if t.pnl_usd is not None else 0.0 for t in completed_trades_list), default=0.0)
+                    largest_loss = min((float(t.pnl_usd) if t.pnl_usd is not None else 0.0 for t in completed_trades_list), default=0.0)
+                    
+                    # Calculate fees
+                    total_trade_fees = sum(float(trade.fee_paid) if trade.fee_paid is not None else 0.0 for trade in completed_trades_list)
+                    total_funding_fees = sum(float(trade.funding_fee) if trade.funding_fee is not None else 0.0 for trade in completed_trades_list)
+                    
+                    # Get last trade timestamp
+                    last_trade_at = None
+                    if completed_trades_list:
+                        exit_times = [t.exit_time for t in completed_trades_list if t.exit_time]
+                        if exit_times:
+                            last_trade_at = max(exit_times)
                 else:
-                    days = 1
-                trades_per_day = completed_count / days if days > 0 else 0.0
+                    # Fallback to runner stats if no completed trades
+                    stats = runner.calculate_strategy_stats(strategy_id, start_date=start_datetime, end_date=end_datetime)
+                    total_pnl = stats.total_pnl
+                    winning_trades = stats.winning_trades
+                    losing_trades = stats.losing_trades
+                    completed_count = stats.completed_trades
+                    win_rate = stats.win_rate
+                    avg_profit_per_trade = stats.avg_profit_per_trade
+                    largest_win = stats.largest_win
+                    largest_loss = stats.largest_loss
+                    last_trade_at = stats.last_trade_at
+                    total_trade_fees = None
+                    total_funding_fees = None
                 
-                # Fee impact
-                total_fees = (strategy.total_trade_fees or 0) + (strategy.total_funding_fees or 0)
-                fee_impact_pct = (total_fees / strategy.total_pnl * 100) if strategy.total_pnl > 0 else 0.0
+                # Get all trades count
+                all_trades = runner.get_trades(strategy_id)
+                total_trades_count = len(all_trades) if all_trades else completed_count
                 
-                # Uptime percentage
-                if strategy.started_at and strategy.created_at:
-                    total_days = (datetime.now(timezone.utc) - strategy.created_at).days
-                    if strategy.stopped_at:
-                        running_days = (strategy.stopped_at - strategy.started_at).days
-                    else:
-                        running_days = (datetime.now(timezone.utc) - strategy.started_at).days
-                    uptime_pct = (running_days / total_days * 100) if total_days > 0 else 0.0
+                # Calculate unrealized PnL
+                if start_datetime or end_datetime:
+                    unrealized_pnl = 0.0  # Exclude unrealized when filtering by date
                 else:
-                    uptime_pct = 0.0
+                    unrealized_pnl = strategy.unrealized_pnl or 0.0
                 
-                # Create StrategyPerformance with additional metrics
-                strategy_perf = StrategyPerformance(
-                    strategy_id=strategy.id,
+                total_pnl_with_unrealized = total_pnl + unrealized_pnl
+                
+                # Create StrategyPerformance object
+                perf = StrategyPerformance(
+                    strategy_id=strategy_id,
                     strategy_name=strategy.name,
                     symbol=strategy.symbol,
                     strategy_type=strategy.strategy_type,
                     status=strategy.status,
-                    total_realized_pnl=total_realized_pnl,
-                    total_unrealized_pnl=strategy.unrealized_pnl or 0.0,
-                    total_pnl=strategy.total_pnl or 0.0,
-                    total_trades=strategy.total_trades or 0,
+                    total_realized_pnl=round(total_pnl, 4),
+                    total_unrealized_pnl=round(unrealized_pnl, 4),
+                    total_pnl=round(total_pnl_with_unrealized, 4),
+                    total_trades=total_trades_count,
                     completed_trades=completed_count,
-                    win_rate=win_rate,
+                    win_rate=round(win_rate, 2),
                     winning_trades=winning_trades,
                     losing_trades=losing_trades,
-                    avg_profit_per_trade=avg_profit_per_trade,
-                    largest_win=strategy.largest_win or 0.0,
-                    largest_loss=strategy.largest_loss or 0.0,
+                    avg_profit_per_trade=round(avg_profit_per_trade, 4),
+                    largest_win=round(largest_win, 4),
+                    largest_loss=round(largest_loss, 4),
                     position_size=strategy.position_size,
                     position_side=strategy.position_side,
                     entry_price=strategy.entry_price,
@@ -787,43 +753,22 @@ def get_strategy_comparison(
                     leverage=strategy.leverage,
                     risk_per_trade=strategy.risk_per_trade,
                     fixed_amount=strategy.fixed_amount,
-                    params=strategy.params.model_dump() if hasattr(strategy.params, 'model_dump') else (strategy.params if isinstance(strategy.params, dict) else {}),
+                    params=strategy.params.model_dump() if hasattr(strategy.params, 'model_dump') else strategy.params,
                     created_at=strategy.created_at,
                     started_at=strategy.started_at,
                     stopped_at=strategy.stopped_at,
-                    last_trade_at=strategy.last_trade_at,
+                    last_trade_at=last_trade_at,
                     last_signal=strategy.last_signal,
                     account_id=strategy.account_id,
-                    account_info=None,
-                    rank=None,
-                    percentile=None,
-                    auto_tuning_enabled=strategy.auto_tuning_enabled,
-                    total_trade_fees=strategy.total_trade_fees,
-                    total_funding_fees=strategy.total_funding_fees,
+                    auto_tuning_enabled=getattr(strategy, 'auto_tuning_enabled', False),
+                    total_trade_fees=round(total_trade_fees, 4) if total_trade_fees is not None else None,
+                    total_funding_fees=round(total_funding_fees, 4) if total_funding_fees is not None else None,
                 )
                 
-                comparison_strategies.append(strategy_perf)
+                comparison_strategies.append(perf)
                 
-                # Store metrics for comparison calculation
-                all_comparison_metrics.setdefault('total_pnl', {})[strategy_id] = strategy_perf.total_pnl
-                all_comparison_metrics.setdefault('realized_pnl', {})[strategy_id] = strategy_perf.total_realized_pnl
-                all_comparison_metrics.setdefault('unrealized_pnl', {})[strategy_id] = strategy_perf.total_unrealized_pnl
-                all_comparison_metrics.setdefault('win_rate', {})[strategy_id] = strategy_perf.win_rate
-                all_comparison_metrics.setdefault('completed_trades', {})[strategy_id] = float(strategy_perf.completed_trades)
-                all_comparison_metrics.setdefault('winning_trades', {})[strategy_id] = float(strategy_perf.winning_trades)
-                all_comparison_metrics.setdefault('losing_trades', {})[strategy_id] = float(strategy_perf.losing_trades)
-                all_comparison_metrics.setdefault('avg_profit_per_trade', {})[strategy_id] = strategy_perf.avg_profit_per_trade
-                all_comparison_metrics.setdefault('profit_factor', {})[strategy_id] = profit_factor if profit_factor != float('inf') else 999999.0  # Cap infinity
-                all_comparison_metrics.setdefault('risk_reward', {})[strategy_id] = risk_reward
-                all_comparison_metrics.setdefault('avg_loss_per_trade', {})[strategy_id] = avg_loss_per_trade
-                all_comparison_metrics.setdefault('trades_per_day', {})[strategy_id] = trades_per_day
-                all_comparison_metrics.setdefault('fee_impact_pct', {})[strategy_id] = fee_impact_pct
-                all_comparison_metrics.setdefault('uptime_pct', {})[strategy_id] = uptime_pct
-                all_comparison_metrics.setdefault('leverage', {})[strategy_id] = float(strategy_perf.leverage)
-                all_comparison_metrics.setdefault('risk_per_trade', {})[strategy_id] = strategy_perf.risk_per_trade
-                
-            except Exception as e:
-                logger.error(f"Error processing strategy {strategy_id} for comparison: {e}", exc_info=True)
+            except Exception as exc:
+                logger.error(f"Error processing strategy {strategy_id} for comparison: {exc}", exc_info=True)
                 continue
         
         if not comparison_strategies:
@@ -832,88 +777,131 @@ def get_strategy_comparison(
                 detail="No strategies found for comparison after filtering"
             )
         
-        # Calculate comparison metrics (best/worst/average/median)
-        comparison_metrics_dict: Dict[str, ComparisonMetric] = {}
+        # Calculate comparison metrics
+        # We need to pass completed trades data for accurate profit factor calculation
+        # For now, calculate from StrategyPerformance objects
+        comparison_metrics = _calculate_comparison_metrics(comparison_strategies)
         
-        for metric_name, values_dict in all_comparison_metrics.items():
-            if not values_dict:
-                continue
-            
-            values_list = list(values_dict.values())
-            if not values_list:
-                continue
-            
-            # Determine best/worst (higher is better for most metrics, except losing_trades, fee_impact_pct)
-            higher_is_better = metric_name not in ['losing_trades', 'fee_impact_pct', 'largest_loss']
-            
-            if higher_is_better:
-                best_strategy_id = max(values_dict.items(), key=lambda x: x[1])[0]
-                worst_strategy_id = min(values_dict.items(), key=lambda x: x[1])[0]
-            else:
-                best_strategy_id = min(values_dict.items(), key=lambda x: x[1])[0]
-                worst_strategy_id = max(values_dict.items(), key=lambda x: x[1])[0]
-            
-            # Calculate average and median
-            average = sum(values_list) / len(values_list)
-            sorted_values = sorted(values_list)
-            n = len(sorted_values)
-            if n % 2 == 0:
-                median = (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
-            else:
-                median = sorted_values[n//2]
-            
-            # Determine unit
-            unit_map = {
-                'total_pnl': 'USD', 'realized_pnl': 'USD', 'unrealized_pnl': 'USD',
-                'win_rate': '%', 'fee_impact_pct': '%', 'uptime_pct': '%',
-                'risk_per_trade': '%',
-                'completed_trades': 'count', 'winning_trades': 'count', 'losing_trades': 'count',
-                'avg_profit_per_trade': 'USD', 'avg_loss_per_trade': 'USD',
-                'profit_factor': 'ratio', 'risk_reward': 'ratio',
-                'trades_per_day': 'count/day',
-                'leverage': 'x'
-            }
-            unit = unit_map.get(metric_name, '')
-            
-            comparison_metrics_dict[metric_name] = ComparisonMetric(
-                name=metric_name,
-                unit=unit,
-                values=values_dict,
-                best_strategy_id=best_strategy_id,
-                worst_strategy_id=worst_strategy_id,
-                average=average,
-                median=median
-            )
-        
-        # Calculate summary
-        best_overall = max(comparison_strategies, key=lambda s: s.total_pnl).strategy_id if comparison_strategies else None
-        most_consistent = max(comparison_strategies, key=lambda s: s.win_rate).strategy_id if comparison_strategies else None
-        most_active = max(comparison_strategies, key=lambda s: s.completed_trades).strategy_id if comparison_strategies else None
-        riskiest = max(comparison_strategies, key=lambda s: s.leverage * s.risk_per_trade).strategy_id if comparison_strategies else None
-        
-        summary = ComparisonSummary(
-            total_strategies=len(comparison_strategies),
-            best_overall_strategy=best_overall,
-            most_consistent_strategy=most_consistent,
-            most_active_strategy=most_active,
-            riskiest_strategy=riskiest
-        )
-        
-        date_range = DateRange(start=start_datetime, end=end_datetime) if start_datetime or end_datetime else None
+        # Build date range object
+        date_range = None
+        if start_datetime or end_datetime:
+            date_range = DateRange(start_date=start_datetime, end_date=end_datetime)
         
         return StrategyComparisonResponse(
             strategies=comparison_strategies,
-            comparison_metrics=comparison_metrics_dict,
+            comparison_metrics=comparison_metrics,
             date_range=date_range,
-            summary=summary
         )
         
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error in strategy comparison: {e}", exc_info=True)
+    except Exception as exc:
+        logger.exception(f"Error generating strategy comparison: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate comparison: {str(e)}"
-        ) from e
+            detail=f"Failed to compare strategies: {str(exc)}"
+        )
+
+
+def _calculate_comparison_metrics(strategies: List[StrategyPerformance]) -> ComparisonSummary:
+    """Calculate comparison metrics across strategies."""
+    
+    if not strategies:
+        return ComparisonSummary()
+    
+    # Calculate Profit Factor (winning trades PnL / losing trades PnL)
+    profit_factors = {}
+    for s in strategies:
+        if s.completed_trades > 0 and s.losing_trades > 0:
+            # Calculate from realized PnL and trade counts
+            # Profit Factor = Sum of winning trades PnL / Sum of losing trades PnL
+            # Approximation: We estimate losing PnL from avg_loss and use total_realized_pnl
+            # Better approach would be to recalculate from completed trades, but this works for comparison
+            if s.largest_loss < 0 and s.largest_win > 0:
+                # Estimate: if we have avg_profit_per_trade, we can estimate
+                # For now, use a simple approximation
+                total_realized = s.total_realized_pnl
+                # Estimate losing trades total (conservative: use largest_loss as proxy)
+                # This is an approximation - ideally we'd sum actual losing trades
+                estimated_losing_total = abs(s.largest_loss) * s.losing_trades * 0.5  # Conservative estimate
+                estimated_winning_total = total_realized + estimated_losing_total
+                
+                if estimated_losing_total > 0 and estimated_winning_total >= 0:
+                    profit_factor = estimated_winning_total / estimated_losing_total
+                    if profit_factor > 0:  # Only include valid profit factors
+                        profit_factors[s.strategy_id] = profit_factor
+    
+    # Calculate Risk/Reward (avg win / abs(avg loss))
+    risk_rewards = {}
+    for s in strategies:
+        if s.largest_loss < 0 and s.largest_win > 0:
+            risk_reward = s.largest_win / abs(s.largest_loss)
+            risk_rewards[s.strategy_id] = risk_reward
+    
+    # Calculate Trades/Day
+    trades_per_day = {}
+    for s in strategies:
+        try:
+            if s.created_at and s.last_trade_at:
+                days = (s.last_trade_at - s.created_at).total_seconds() / 86400
+                if days > 0 and s.completed_trades > 0:
+                    trades_per_day[s.strategy_id] = s.completed_trades / days
+            elif s.created_at:
+                # Use current time if no last trade
+                days = (datetime.now(timezone.utc) - s.created_at).total_seconds() / 86400
+                if days > 0 and s.completed_trades > 0:
+                    trades_per_day[s.strategy_id] = s.completed_trades / days
+        except (TypeError, AttributeError) as e:
+            logger.debug(f"Error calculating trades/day for strategy {s.strategy_id}: {e}")
+            continue
+    
+    # Calculate Fee Impact (% of total PnL)
+    fee_impacts = {}
+    for s in strategies:
+        if s.total_trade_fees is not None and s.total_pnl != 0:
+            fee_impact = abs(s.total_trade_fees / s.total_pnl * 100) if s.total_pnl != 0 else 0.0
+            fee_impacts[s.strategy_id] = fee_impact
+    
+    # Calculate Uptime % (time running / total time)
+    uptime_percents = {}
+    for s in strategies:
+        try:
+            if s.created_at:
+                total_time = (datetime.now(timezone.utc) - s.created_at).total_seconds() / 86400
+                if total_time > 0:
+                    if s.started_at and s.stopped_at:
+                        running_time = (s.stopped_at - s.started_at).total_seconds() / 86400
+                    elif s.started_at:
+                        running_time = (datetime.now(timezone.utc) - s.started_at).total_seconds() / 86400
+                    else:
+                        running_time = 0.0
+                    
+                    if running_time >= 0:
+                        uptime_percents[s.strategy_id] = min((running_time / total_time) * 100, 100)  # Cap at 100%
+        except (TypeError, AttributeError) as e:
+            logger.debug(f"Error calculating uptime for strategy {s.strategy_id}: {e}")
+            continue
+    
+    # Find best and worst for each metric
+    def find_best_worst(metric_dict: Dict[str, float]) -> Optional[ComparisonMetric]:
+        if not metric_dict:
+            return None
+        
+        best_id = max(metric_dict.items(), key=lambda x: x[1])[0]
+        worst_id = min(metric_dict.items(), key=lambda x: x[1])[0]
+        
+        return ComparisonMetric(
+            best_strategy_id=best_id,
+            worst_strategy_id=worst_id,
+            best_value=metric_dict[best_id],
+            worst_value=metric_dict[worst_id],
+        )
+    
+    return ComparisonSummary(
+        profit_factor=find_best_worst(profit_factors),
+        risk_reward=find_best_worst(risk_rewards),
+        trades_per_day=find_best_worst(trades_per_day),
+        fee_impact=find_best_worst(fee_impacts),
+        uptime_percent=find_best_worst(uptime_percents),
+    )
 

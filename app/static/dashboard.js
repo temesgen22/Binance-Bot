@@ -160,10 +160,7 @@ function switchTab(tabName) {
             loadTrades();
             break;
         case 'comparison':
-            // Small delay to ensure DOM is ready
-            setTimeout(() => {
-                loadStrategyComparison();
-            }, 100);
+            loadStrategyComparison();
             break;
     }
 }
@@ -1435,16 +1432,6 @@ async function loadStrategyComparison() {
     const select = document.getElementById('strategy-select');
     if (!select) {
         console.error('Strategy select element not found in DOM. Looking for #strategy-select');
-        // Try to find it with a delay (in case DOM isn't ready)
-        setTimeout(() => {
-            const retrySelect = document.getElementById('strategy-select');
-            if (retrySelect) {
-                console.log('Found strategy-select on retry');
-                loadStrategyComparison();
-            } else {
-                console.error('Strategy select element still not found after retry');
-            }
-        }, 100);
         return;
     }
     
@@ -1623,6 +1610,11 @@ async function runComparison() {
         if (startDate) params.append('start_date', startDate);
         if (endDate) params.append('end_date', endDate);
         
+        const resultsDiv = document.getElementById('comparison-results');
+        if (resultsDiv) {
+            resultsDiv.innerHTML = '<div class="loading">Comparing strategies...</div>';
+        }
+        
         const response = await authFetch(`/api/dashboard/strategy-comparison?${params}`);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ detail: 'Failed to compare strategies' }));
@@ -1681,6 +1673,29 @@ function renderComparisonTable(data) {
         return;
     }
     
+    // Add summary statistics
+    const totalPnL = data.strategies.reduce((sum, s) => sum + parseFloat(s.total_pnl || 0), 0);
+    const totalTrades = data.strategies.reduce((sum, s) => sum + (s.completed_trades || 0), 0);
+    const totalWins = data.strategies.reduce((sum, s) => sum + (s.winning_trades || 0), 0);
+    const totalLosses = data.strategies.reduce((sum, s) => sum + (s.losing_trades || 0), 0);
+    const totalTradeFees = data.strategies.reduce((sum, s) => sum + parseFloat(s.total_trade_fees || 0), 0);
+    const totalFundingFees = data.strategies.reduce((sum, s) => sum + parseFloat(s.total_funding_fees || 0), 0);
+    const avgWinRate = data.strategies.length > 0 
+        ? data.strategies.reduce((sum, s) => sum + parseFloat(s.win_rate || 0), 0) / data.strategies.length 
+        : 0;
+    
+    let html = '<div id="comparison-table-view" class="comparison-view">';
+    
+    // Summary Section
+    html += '<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">';
+    html += `<div><div style="font-size: 0.9em; opacity: 0.9;">Total PnL</div><div style="font-size: 1.8em; font-weight: bold;">$${totalPnL.toFixed(2)}</div></div>`;
+    html += `<div><div style="font-size: 0.9em; opacity: 0.9;">Total Trades</div><div style="font-size: 1.8em; font-weight: bold;">${totalTrades}</div></div>`;
+    html += `<div><div style="font-size: 0.9em; opacity: 0.9;">Win Rate</div><div style="font-size: 1.8em; font-weight: bold;">${avgWinRate.toFixed(1)}%</div></div>`;
+    html += `<div><div style="font-size: 0.9em; opacity: 0.9;">Wins / Losses</div><div style="font-size: 1.8em; font-weight: bold;">${totalWins} / ${totalLosses}</div></div>`;
+    html += `<div><div style="font-size: 0.9em; opacity: 0.9;">Total Fees</div><div style="font-size: 1.8em; font-weight: bold;">$${(totalTradeFees + totalFundingFees).toFixed(2)}</div></div>`;
+    html += `<div style="display: flex; align-items: center; gap: 10px;"><button onclick="exportComparisonData()" style="padding: 10px 20px; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 4px; cursor: pointer; font-weight: 600;">📥 Export</button></div>`;
+    html += '</div>';
+    
     // Get all metrics to display
     const metrics = [
         { key: 'strategy_name', label: 'Strategy Name', format: 'text' },
@@ -1694,29 +1709,14 @@ function renderComparisonTable(data) {
         { key: 'winning_trades', label: 'Wins', format: 'number' },
         { key: 'losing_trades', label: 'Losses', format: 'number' },
         { key: 'avg_profit_per_trade', label: 'Avg Profit/Trade', format: 'currency' },
-    ];
-    
-    // Add additional metrics if available in comparison_metrics
-    if (data.comparison_metrics) {
-        if (data.comparison_metrics.profit_factor) {
-            metrics.push({ key: 'profit_factor', label: 'Profit Factor', format: 'number' });
-        }
-        if (data.comparison_metrics.risk_reward) {
-            metrics.push({ key: 'risk_reward', label: 'Risk/Reward', format: 'number' });
-        }
-        if (data.comparison_metrics.trades_per_day) {
-            metrics.push({ key: 'trades_per_day', label: 'Trades/Day', format: 'number' });
-        }
-    }
-    
-    metrics.push(
+        { key: 'total_trade_fees', label: 'Trade Fees', format: 'currency' },
+        { key: 'total_funding_fees', label: 'Funding Fees', format: 'currency' },
         { key: 'leverage', label: 'Leverage', format: 'number' },
         { key: 'risk_per_trade', label: 'Risk %', format: 'percent' }
-    );
+    ];
     
     // Build table
-    let html = '<div id="comparison-table-view" class="comparison-view">';
-    html += '<table id="comparison-table" class="comparison-table">';
+    html += '<table id="comparison-table" class="data-table" style="width: 100%;">';
     html += '<thead><tr>';
     
     metrics.forEach(metric => {
@@ -1745,12 +1745,15 @@ function renderComparisonTable(data) {
             }
             
             // Highlight best/worst if comparison metrics available
-            if (data.comparison_metrics && data.comparison_metrics[metric.key]) {
-                const metricData = data.comparison_metrics[metric.key];
-                if (metricData.best_strategy_id === strategy.strategy_id) {
-                    cellClass = 'value-best';
-                } else if (metricData.worst_strategy_id === strategy.strategy_id) {
-                    cellClass = 'value-worst';
+            if (data.comparison_metrics) {
+                const metricKey = metric.key;
+                if (data.comparison_metrics[metricKey]) {
+                    const metricData = data.comparison_metrics[metricKey];
+                    if (metricData.best_strategy_id === strategy.strategy_id) {
+                        cellClass = 'value-best';
+                    } else if (metricData.worst_strategy_id === strategy.strategy_id) {
+                        cellClass = 'value-worst';
+                    }
                 }
             }
             
@@ -1802,15 +1805,9 @@ function updateSortIndicator() {
     });
     
     const headers = document.querySelectorAll('#comparison-table th');
-    const metrics = [
-        'strategy_name', 'symbol', 'strategy_type', 'total_pnl', 'total_realized_pnl',
-        'total_unrealized_pnl', 'win_rate', 'completed_trades', 'winning_trades',
-        'losing_trades', 'avg_profit_per_trade', 'profit_factor', 'risk_reward',
-        'trades_per_day', 'leverage', 'risk_per_trade'
-    ];
-    
     headers.forEach((header, index) => {
-        if (index < metrics.length && metrics[index] === currentSortColumn) {
+        const onclick = header.getAttribute('onclick');
+        if (onclick && onclick.includes(`'${currentSortColumn}'`)) {
             const indicator = header.querySelector('.sort-indicator');
             if (indicator) {
                 indicator.textContent = currentSortDirection === 'asc' ? ' ↑' : ' ↓';
@@ -1819,20 +1816,457 @@ function updateSortIndicator() {
     });
 }
 
-// Render Comparison Cards (Placeholder - Phase 3)
+// Render Comparison Cards
 function renderComparisonCards(data) {
     const resultsDiv = document.getElementById('comparison-results');
     if (!resultsDiv) return;
     
-    resultsDiv.innerHTML = '<div class="empty-state">Cards view coming in Phase 3</div>';
+    if (!data.strategies || data.strategies.length === 0) {
+        resultsDiv.innerHTML = '<div class="empty-state">No strategies to compare</div>';
+        return;
+    }
+    
+    let html = '<div id="comparison-cards-view" class="comparison-view">';
+    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-top: 20px;">';
+    
+    data.strategies.forEach(strategy => {
+        const pnlColor = strategy.total_pnl >= 0 ? '#28a745' : '#dc3545';
+        const pnlIcon = strategy.total_pnl >= 0 ? '📈' : '📉';
+        const winRateColor = strategy.win_rate >= 50 ? '#28a745' : strategy.win_rate >= 30 ? '#ffc107' : '#dc3545';
+        
+        html += `<div class="comparison-card" style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); border-left: 4px solid ${pnlColor};">`;
+        
+        // Header
+        html += `<div style="border-bottom: 1px solid #e9ecef; padding-bottom: 15px; margin-bottom: 15px;">`;
+        html += `<h3 style="margin: 0 0 5px 0; color: #333;">${strategy.strategy_name}</h3>`;
+        html += `<div style="color: #666; font-size: 0.9em;">${strategy.symbol} • ${strategy.strategy_type}</div>`;
+        html += `</div>`;
+        
+        // Key Metrics Grid
+        html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">`;
+        
+        // Total PnL
+        html += `<div>`;
+        html += `<div style="color: #666; font-size: 0.85em; margin-bottom: 5px;">Total PnL</div>`;
+        html += `<div style="font-size: 1.5em; font-weight: bold; color: ${pnlColor};">${pnlIcon} $${parseFloat(strategy.total_pnl).toFixed(2)}</div>`;
+        html += `</div>`;
+        
+        // Win Rate
+        html += `<div>`;
+        html += `<div style="color: #666; font-size: 0.85em; margin-bottom: 5px;">Win Rate</div>`;
+        html += `<div style="font-size: 1.5em; font-weight: bold; color: ${winRateColor};">${parseFloat(strategy.win_rate).toFixed(1)}%</div>`;
+        html += `</div>`;
+        
+        // Realized PnL
+        html += `<div>`;
+        html += `<div style="color: #666; font-size: 0.85em; margin-bottom: 5px;">Realized PnL</div>`;
+        html += `<div style="font-size: 1.2em; font-weight: 600; color: ${strategy.total_realized_pnl >= 0 ? '#28a745' : '#dc3545'};">$${parseFloat(strategy.total_realized_pnl).toFixed(2)}</div>`;
+        html += `</div>`;
+        
+        // Completed Trades
+        html += `<div>`;
+        html += `<div style="color: #666; font-size: 0.85em; margin-bottom: 5px;">Trades</div>`;
+        html += `<div style="font-size: 1.2em; font-weight: 600;">${strategy.completed_trades}</div>`;
+        html += `</div>`;
+        
+        html += `</div>`;
+        
+        // Trade Breakdown
+        html += `<div style="background: #f8f9fa; border-radius: 4px; padding: 12px; margin-bottom: 15px;">`;
+        html += `<div style="display: flex; justify-content: space-between; font-size: 0.9em;">`;
+        html += `<span style="color: #28a745;">✅ Wins: <strong>${strategy.winning_trades}</strong></span>`;
+        html += `<span style="color: #dc3545;">❌ Losses: <strong>${strategy.losing_trades}</strong></span>`;
+        html += `</div>`;
+        html += `</div>`;
+        
+        // Additional Metrics
+        html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em; color: #666;">`;
+        html += `<div>Avg Profit/Trade: <strong style="color: #333;">$${parseFloat(strategy.avg_profit_per_trade || 0).toFixed(2)}</strong></div>`;
+        html += `<div>Leverage: <strong style="color: #333;">${strategy.leverage}x</strong></div>`;
+        html += `<div>Risk/Trade: <strong style="color: #333;">${parseFloat(strategy.risk_per_trade || 0).toFixed(2)}%</strong></div>`;
+        if (strategy.total_unrealized_pnl !== null && strategy.total_unrealized_pnl !== undefined) {
+            html += `<div>Unrealized: <strong style="color: ${strategy.total_unrealized_pnl >= 0 ? '#28a745' : '#dc3545'};">$${parseFloat(strategy.total_unrealized_pnl).toFixed(2)}</strong></div>`;
+        }
+        html += `</div>`;
+        
+        // Fees Section
+        if (strategy.total_trade_fees !== null && strategy.total_trade_fees !== undefined) {
+            html += `<div style="background: #f8f9fa; border-radius: 4px; padding: 12px; margin-top: 15px; border-top: 1px solid #e9ecef;">`;
+            html += `<div style="display: flex; justify-content: space-between; font-size: 0.9em;">`;
+            html += `<span>💰 Trade Fees: <strong>$${parseFloat(strategy.total_trade_fees).toFixed(2)}</strong></span>`;
+            if (strategy.total_funding_fees !== null && strategy.total_funding_fees !== undefined) {
+                html += `<span>💸 Funding Fees: <strong>$${parseFloat(strategy.total_funding_fees).toFixed(2)}</strong></span>`;
+            }
+            html += `</div>`;
+            // Calculate fee impact
+            if (strategy.total_pnl !== null && strategy.total_pnl !== 0) {
+                const totalFees = (strategy.total_trade_fees || 0) + (strategy.total_funding_fees || 0);
+                const feeImpact = (totalFees / Math.abs(strategy.total_pnl)) * 100;
+                html += `<div style="margin-top: 8px; font-size: 0.85em; color: #666;">Fee Impact: <strong>${feeImpact.toFixed(2)}%</strong> of PnL</div>`;
+            }
+            html += `</div>`;
+        }
+        
+        // Status Badge
+        const statusColors = {
+            'running': '#28a745',
+            'stopped': '#6c757d',
+            'error': '#dc3545'
+        };
+        const statusEmojis = {
+            'running': '🟢',
+            'stopped': '🔴',
+            'error': '❌'
+        };
+        const status = strategy.status?.value || strategy.status || 'stopped';
+        html += `<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e9ecef;">`;
+        html += `<span style="background: ${statusColors[status] || '#6c757d'}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 600;">${statusEmojis[status] || '⚪'} ${status.toUpperCase()}</span>`;
+        html += `</div>`;
+        
+        html += `</div>`;
+    });
+    
+    html += '</div>';
+    html += '</div>';
+    
+    resultsDiv.innerHTML = html;
 }
 
-// Render Comparison Charts (Placeholder - Phase 3)
+// Render Comparison Charts
 function renderComparisonCharts(data) {
     const resultsDiv = document.getElementById('comparison-results');
     if (!resultsDiv) return;
     
-    resultsDiv.innerHTML = '<div class="empty-state">Charts view coming in Phase 3</div>';
+    if (!data.strategies || data.strategies.length === 0) {
+        resultsDiv.innerHTML = '<div class="empty-state">No strategies to compare</div>';
+        return;
+    }
+    
+    let html = '<div id="comparison-charts-view" class="comparison-view">';
+    
+    // PnL Comparison Chart
+    html += '<div class="chart-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); margin-bottom: 20px;">';
+    html += '<h3 style="margin-top: 0;">Total PnL Comparison</h3>';
+    html += '<canvas id="pnl-comparison-chart" style="max-height: 400px;"></canvas>';
+    html += '</div>';
+    
+    // Win Rate Comparison Chart
+    html += '<div class="chart-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); margin-bottom: 20px;">';
+    html += '<h3 style="margin-top: 0;">Win Rate Comparison</h3>';
+    html += '<canvas id="winrate-comparison-chart" style="max-height: 400px;"></canvas>';
+    html += '</div>';
+    
+    // Trades Comparison Chart
+    html += '<div class="chart-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); margin-bottom: 20px;">';
+    html += '<h3 style="margin-top: 0;">Trades Count Comparison</h3>';
+    html += '<canvas id="trades-comparison-chart" style="max-height: 400px;"></canvas>';
+    html += '</div>';
+    
+    // Performance Metrics Radar Chart
+    html += '<div class="chart-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);">';
+    html += '<h3 style="margin-top: 0;">Performance Metrics Comparison</h3>';
+    html += '<canvas id="metrics-comparison-chart" style="max-height: 400px;"></canvas>';
+    html += '</div>';
+    
+    html += '</div>';
+    
+    resultsDiv.innerHTML = html;
+    
+    // Render charts using Chart.js (if available) or create simple bar charts
+    setTimeout(() => {
+        renderComparisonChartsData(data);
+    }, 100);
+}
+
+// Render Chart Data
+function renderComparisonChartsData(data) {
+    // Check if Chart.js is available
+    if (typeof Chart === 'undefined') {
+        // Fallback: Create simple HTML bar charts
+        renderSimpleBarCharts(data);
+        return;
+    }
+    
+    const strategies = data.strategies || [];
+    if (strategies.length === 0) {
+        console.warn('No strategies data for charts');
+        return;
+    }
+    const strategyNames = strategies.map(s => s.strategy_name || 'Unknown');
+    const colors = [
+        'rgba(102, 126, 234, 0.8)',
+        'rgba(118, 75, 162, 0.8)',
+        'rgba(40, 167, 69, 0.8)',
+        'rgba(255, 193, 7, 0.8)',
+        'rgba(220, 53, 69, 0.8)',
+        'rgba(23, 162, 184, 0.8)',
+        'rgba(108, 117, 125, 0.8)',
+        'rgba(255, 87, 34, 0.8)',
+        'rgba(156, 39, 176, 0.8)',
+        'rgba(0, 150, 136, 0.8)'
+    ];
+    
+    // PnL Comparison Bar Chart
+    const pnlCtx = document.getElementById('pnl-comparison-chart');
+    if (pnlCtx) {
+        try {
+            new Chart(pnlCtx, {
+            type: 'bar',
+            data: {
+                labels: strategyNames,
+                datasets: [{
+                    label: 'Total PnL ($)',
+                    data: strategies.map(s => parseFloat(s.total_pnl || 0)),
+                    backgroundColor: strategies.map((s, i) => 
+                        parseFloat(s.total_pnl || 0) >= 0 ? colors[i % colors.length] : 'rgba(220, 53, 69, 0.8)'
+                    ),
+                    borderColor: strategies.map((s, i) => 
+                        parseFloat(s.total_pnl || 0) >= 0 ? 'rgba(102, 126, 234, 1)' : 'rgba(220, 53, 69, 1)'
+                    ),
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toFixed(2);
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Total PnL: $' + context.parsed.y.toFixed(2);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering PnL chart:', error);
+            renderSimpleBarCharts(data);
+        }
+    }
+    
+    // Win Rate Comparison Bar Chart
+    const winrateCtx = document.getElementById('winrate-comparison-chart');
+    if (winrateCtx) {
+        try {
+            new Chart(winrateCtx, {
+            type: 'bar',
+            data: {
+                labels: strategyNames,
+                datasets: [{
+                    label: 'Win Rate (%)',
+                    data: strategies.map(s => parseFloat(s.win_rate || 0)),
+                    backgroundColor: strategies.map((s, i) => {
+                        const wr = parseFloat(s.win_rate);
+                        if (wr >= 50) return 'rgba(40, 167, 69, 0.8)';
+                        if (wr >= 30) return 'rgba(255, 193, 7, 0.8)';
+                        return 'rgba(220, 53, 69, 0.8)';
+                    }),
+                    borderColor: strategies.map((s, i) => colors[i % colors.length]),
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value + '%';
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Win Rate: ' + context.parsed.y.toFixed(2) + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering Win Rate chart:', error);
+        }
+    }
+    
+    // Trades Count Comparison Bar Chart
+    const tradesCtx = document.getElementById('trades-comparison-chart');
+    if (tradesCtx) {
+        try {
+            new Chart(tradesCtx, {
+            type: 'bar',
+            data: {
+                labels: strategyNames,
+                datasets: [{
+                    label: 'Completed Trades',
+                    data: strategies.map(s => s.completed_trades || 0),
+                    backgroundColor: colors.slice(0, strategies.length),
+                    borderColor: colors.slice(0, strategies.length).map(c => c.replace('0.8', '1')),
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Trades: ' + context.parsed.y;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering Trades chart:', error);
+        }
+    }
+    
+    // Performance Metrics Comparison (Multiple metrics)
+    const metricsCtx = document.getElementById('metrics-comparison-chart');
+    if (metricsCtx) {
+        try {
+            // Normalize metrics for comparison (0-100 scale)
+            const maxPnL = Math.max(...strategies.map(s => Math.abs(parseFloat(s.total_pnl || 0))), 1);
+            const maxTrades = Math.max(...strategies.map(s => s.completed_trades || 0), 1);
+            const maxAvgProfit = Math.max(...strategies.map(s => Math.abs(parseFloat(s.avg_profit_per_trade || 0))), 1);
+            
+            new Chart(metricsCtx, {
+            type: 'radar',
+            data: {
+                labels: ['PnL Score', 'Win Rate', 'Trades Volume', 'Avg Profit'],
+                datasets: strategies.map((s, i) => ({
+                    label: s.strategy_name,
+                    data: [
+                        (Math.abs(parseFloat(s.total_pnl)) / maxPnL) * 100,
+                        parseFloat(s.win_rate),
+                        (s.completed_trades / maxTrades) * 100,
+                        (Math.abs(parseFloat(s.avg_profit_per_trade)) / maxAvgProfit) * 100
+                    ],
+                    backgroundColor: colors[i % colors.length].replace('0.8', '0.2'),
+                    borderColor: colors[i % colors.length],
+                    borderWidth: 2,
+                    pointBackgroundColor: colors[i % colors.length],
+                    pointBorderColor: '#fff',
+                    pointHoverBackgroundColor: '#fff',
+                    pointHoverBorderColor: colors[i % colors.length]
+                }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    r: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            stepSize: 20
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = context.parsed.r.toFixed(1);
+                                return label + ': ' + value;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering Metrics chart:', error);
+        }
+    }
+}
+
+// Fallback: Simple HTML Bar Charts
+function renderSimpleBarCharts(data) {
+    const strategies = data.strategies;
+    
+    // PnL Chart
+    const pnlChart = document.getElementById('pnl-comparison-chart');
+    if (pnlChart && pnlChart.parentElement) {
+        let html = '<div style="display: flex; align-items: flex-end; height: 300px; gap: 10px; padding: 20px;">';
+        const pnlValues = strategies.map(s => Math.abs(parseFloat(s.total_pnl || 0)));
+        const maxPnL = Math.max(...pnlValues, 1);
+        strategies.forEach(s => {
+            const pnl = parseFloat(s.total_pnl || 0);
+            const height = maxPnL > 0 ? (Math.abs(pnl) / maxPnL) * 100 : 0;
+            const color = pnl >= 0 ? '#28a745' : '#dc3545';
+            const name = s.strategy_name || 'Unknown';
+            html += `<div style="flex: 1; display: flex; flex-direction: column; align-items: center;">`;
+            html += `<div style="background: ${color}; width: 100%; height: ${height}%; min-height: 20px; border-radius: 4px 4px 0 0; position: relative;">`;
+            html += `<div style="position: absolute; top: -25px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 0.85em; font-weight: 600;">$${pnl.toFixed(2)}</div>`;
+            html += `</div>`;
+            html += `<div style="margin-top: 10px; font-size: 0.8em; text-align: center; color: #666; writing-mode: vertical-rl; text-orientation: mixed;">${name}</div>`;
+            html += `</div>`;
+        });
+        html += '</div>';
+        pnlChart.parentElement.innerHTML = '<h3 style="margin-top: 0;">Total PnL Comparison</h3>' + html;
+    }
+    
+    // Similar for other charts...
+    const winrateChart = document.getElementById('winrate-comparison-chart');
+    if (winrateChart && winrateChart.parentElement) {
+        let html = '<div style="display: flex; align-items: flex-end; height: 300px; gap: 10px; padding: 20px;">';
+        strategies.forEach(s => {
+            const height = Math.min(Math.max(parseFloat(s.win_rate || 0), 0), 100); // Clamp between 0-100
+            const color = height >= 50 ? '#28a745' : height >= 30 ? '#ffc107' : '#dc3545';
+            const name = s.strategy_name || 'Unknown';
+            html += `<div style="flex: 1; display: flex; flex-direction: column; align-items: center;">`;
+            html += `<div style="background: ${color}; width: 100%; height: ${height}%; min-height: 20px; border-radius: 4px 4px 0 0; position: relative;">`;
+            html += `<div style="position: absolute; top: -25px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 0.85em; font-weight: 600;">${height.toFixed(1)}%</div>`;
+            html += `</div>`;
+            html += `<div style="margin-top: 10px; font-size: 0.8em; text-align: center; color: #666; writing-mode: vertical-rl; text-orientation: mixed;">${name}</div>`;
+            html += `</div>`;
+        });
+        html += '</div>';
+        winrateChart.parentElement.innerHTML = '<h3 style="margin-top: 0;">Win Rate Comparison</h3>' + html;
+    }
 }
 
 // Render Parameter Comparison
@@ -1855,7 +2289,7 @@ function renderParameterComparison(data) {
     
     // Build parameter comparison table
     let html = '<div id="comparison-params-view" class="comparison-view">';
-    html += '<table id="params-comparison-table" class="params-table">';
+    html += '<table id="params-comparison-table" class="data-table" style="width: 100%;">';
     html += '<thead><tr><th>Parameter</th>';
     data.strategies.forEach(s => {
         html += `<th>${s.strategy_name}</th>`;
@@ -1918,12 +2352,65 @@ function clearComparison() {
     const endDate = document.getElementById('comparison-end-date');
     const resultsDiv = document.getElementById('comparison-results');
     
-    if (select) select.selectedIndex = -1;
+    if (select) {
+        Array.from(select.options).forEach(opt => opt.selected = false);
+    }
     if (startDate) startDate.value = '';
     if (endDate) endDate.value = '';
     if (resultsDiv) {
         resultsDiv.innerHTML = '<div class="empty-state">Select strategies and click "Compare" to see comparison</div>';
     }
     comparisonData = null;
+}
+
+// Export Comparison Data
+function exportComparisonData() {
+    if (!comparisonData || !comparisonData.strategies) {
+        alert('No comparison data to export');
+        return;
+    }
+    
+    // Convert to CSV
+    const strategies = comparisonData.strategies;
+    const headers = [
+        'Strategy Name', 'Symbol', 'Type', 'Total PnL', 'Realized PnL', 
+        'Unrealized PnL', 'Win Rate', 'Completed Trades', 'Winning Trades', 
+        'Losing Trades', 'Avg Profit/Trade', 'Trade Fees', 'Funding Fees', 
+        'Leverage', 'Risk %'
+    ];
+    
+    let csv = headers.join(',') + '\n';
+    
+    strategies.forEach(s => {
+        const row = [
+            `"${(s.strategy_name || 'Unknown').replace(/"/g, '""')}"`, // Escape quotes in CSV
+            s.symbol || 'N/A',
+            s.strategy_type || 'N/A',
+            s.total_pnl !== null && s.total_pnl !== undefined ? s.total_pnl : 0,
+            s.total_realized_pnl !== null && s.total_realized_pnl !== undefined ? s.total_realized_pnl : 0,
+            s.total_unrealized_pnl !== null && s.total_unrealized_pnl !== undefined ? s.total_unrealized_pnl : 0,
+            s.win_rate !== null && s.win_rate !== undefined ? s.win_rate : 0,
+            s.completed_trades || 0,
+            s.winning_trades || 0,
+            s.losing_trades || 0,
+            s.avg_profit_per_trade !== null && s.avg_profit_per_trade !== undefined ? s.avg_profit_per_trade : 0,
+            s.total_trade_fees !== null && s.total_trade_fees !== undefined ? s.total_trade_fees : 0,
+            s.total_funding_fees !== null && s.total_funding_fees !== undefined ? s.total_funding_fees : 0,
+            s.leverage || 0,
+            s.risk_per_trade !== null && s.risk_per_trade !== undefined ? s.risk_per_trade : 0
+        ];
+        csv += row.join(',') + '\n';
+    });
+    
+    // Create download link
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `strategy-comparison-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 }
 

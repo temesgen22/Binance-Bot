@@ -247,117 +247,45 @@
             width: 100%;
         }
 
-        /* Strategy Comparison Styles */
-        .comparison-controls {
-            display: flex;
-            gap: 20px;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        /* Comparison View Styles */
+        .comparison-view {
+            display: block;
         }
 
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
+        .comparison-card {
+            transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        .control-group label {
-            font-weight: 600;
-            color: #333;
-        }
-
-        .comparison-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .comparison-table th {
-            background: #f8f9fa;
-            padding: 12px;
-            text-align: left;
-            cursor: pointer;
-            user-select: none;
-            font-weight: 600;
-            border-bottom: 2px solid #e9ecef;
-        }
-
-        .comparison-table th:hover {
-            background: #e9ecef;
-        }
-
-        .comparison-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .comparison-table tr:hover {
-            background: #f8f9fa;
+        .comparison-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
         }
 
         .value-best {
-            background: #d4edda;
-            font-weight: bold;
+            background-color: #d4edda !important;
+            font-weight: 600;
         }
 
         .value-worst {
-            background: #f8d7da;
-            font-weight: bold;
-        }
-
-        .cards-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-
-        .strategy-card {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            border-left: 4px solid #667eea;
-        }
-
-        .strategy-card.positive {
-            border-left-color: #28a745;
-        }
-
-        .strategy-card.negative {
-            border-left-color: #dc3545;
-        }
-
-        .params-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .params-table th {
-            background: #f8f9fa;
-            padding: 12px;
-            text-align: left;
+            background-color: #f8d7da !important;
             font-weight: 600;
-            border-bottom: 2px solid #e9ecef;
         }
 
-        .params-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #e9ecef;
+        .param-different {
+            background-color: #fff3cd !important;
         }
 
-        .params-table .param-different {
-            background: #fff3cd;
+        #comparison-table th {
+            user-select: none;
+        }
+
+        #comparison-table th:hover {
+            background-color: #f8f9fa;
+        }
+
+        .sort-indicator {
+            margin-left: 5px;
+            color: #667eea;
         }
 
         /* Responsive */
@@ -376,6 +304,15 @@
 
             .data-table {
                 font-size: 0.9em;
+            }
+
+            .comparison-controls > div {
+                flex-direction: column !important;
+            }
+
+            .comparison-controls > div > div {
+                width: 100% !important;
+                min-width: 100% !important;
             }
         }
     </style>
@@ -489,40 +426,45 @@
                 </div>
             </div>
 
-            <!-- Strategy Comparison Tab -->
+            <!-- Comparison Tab -->
             <div id="comparison-tab" class="tab-pane">
-                <!-- Comparison Controls -->
-                <div class="comparison-controls">
-                    <div class="control-group">
-                        <label for="strategy-select">Select Strategies:</label>
-                        <select id="strategy-select" multiple size="5" style="min-width: 300px;">
-                            <!-- Populated dynamically -->
-                        </select>
-                        <small>Hold Ctrl/Cmd to select multiple</small>
+                <div id="comparison-content">
+                    <div class="comparison-controls" style="margin-bottom: 20px; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);">
+                        <h3 style="margin-top: 0;">Strategy Comparison</h3>
+                        <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: end;">
+                            <div style="flex: 1; min-width: 300px;">
+                                <label for="strategy-select" style="display: block; margin-bottom: 8px; font-weight: 600;">Select Strategies:</label>
+                                <select id="strategy-select" multiple size="5" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                                    <option value="" disabled>Loading strategies...</option>
+                                </select>
+                                <small style="color: #666; display: block; margin-top: 5px;">Hold Ctrl/Cmd to select multiple strategies</small>
+                            </div>
+                            <div>
+                                <label for="comparison-start-date" style="display: block; margin-bottom: 8px; font-weight: 600;">Start Date:</label>
+                                <input type="date" id="comparison-start-date" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div>
+                                <label for="comparison-end-date" style="display: block; margin-bottom: 8px; font-weight: 600;">End Date:</label>
+                                <input type="date" id="comparison-end-date" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div>
+                                <label for="view-mode" style="display: block; margin-bottom: 8px; font-weight: 600;">View:</label>
+                                <select id="view-mode" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="table">Table</option>
+                                    <option value="cards">Cards</option>
+                                    <option value="chart">Chart</option>
+                                    <option value="params">Parameters</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; gap: 10px;">
+                                <button id="compare-btn" onclick="runComparison()" style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600;">Compare</button>
+                                <button id="clear-comparison-btn" onclick="clearComparison()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600;">Clear</button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="control-group">
-                        <label for="view-mode">View Mode:</label>
-                        <select id="view-mode">
-                            <option value="table">Table</option>
-                            <option value="cards">Cards</option>
-                            <option value="chart">Charts</option>
-                            <option value="params">Parameters</option>
-                        </select>
+                    <div id="comparison-results">
+                        <div class="empty-state">Select strategies and click "Compare" to see comparison</div>
                     </div>
-                    <div class="control-group">
-                        <label>Date Range:</label>
-                        <input type="date" id="comparison-start-date">
-                        <input type="date" id="comparison-end-date">
-                    </div>
-                    <div class="control-group">
-                        <button id="compare-btn" class="btn btn-primary">Compare</button>
-                        <button id="clear-comparison-btn" class="btn btn-secondary" style="margin-top: 5px;">Clear</button>
-                    </div>
-                </div>
-
-                <!-- Comparison Results -->
-                <div id="comparison-results">
-                    <div class="empty-state">Select strategies and click "Compare" to see comparison</div>
                 </div>
             </div>
         </div>
@@ -530,6 +472,8 @@
 
     <!-- TradingView Lightweight Charts -->
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- Chart.js for Comparison Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/static/dashboard.js"></script>
 </body>
 </html>

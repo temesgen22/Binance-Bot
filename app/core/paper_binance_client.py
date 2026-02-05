@@ -878,45 +878,4 @@ class PaperBinanceClient:
         Paper trading doesn't need time synchronization.
         """
         return 0
-    
-    def close_position(self, symbol: str) -> Optional[OrderResponse]:
-        """Close an open position for a symbol.
-        
-        This method is called when a strategy stops to close any open positions.
-        It works the same way as BinanceClient.close_position() but uses virtual positions.
-        
-        Args:
-            symbol: Trading symbol (e.g., 'BTCUSDT')
-            
-        Returns:
-            OrderResponse if position was closed, None if no position exists
-        """
-        position = self.get_open_position(symbol)
-        if not position:
-            logger.info(f"No open position found for {symbol} in paper trading")
-            return None
-        
-        position_amt = float(position["positionAmt"])
-        # Determine side: if positionAmt is positive (LONG), we need to SELL to close
-        # if negative (SHORT), we need to BUY to close
-        side = "SELL" if position_amt > 0 else "BUY"
-        quantity = abs(position_amt)
-        
-        logger.info(
-            f"Closing paper trading position for {symbol}: {position_amt} @ {position['entryPrice']} "
-            f"(Unrealized PnL: {float(position.get('unRealizedProfit', 0)):.2f} USDT)"
-        )
-        
-        try:
-            # Place a market order with reduce_only=True to close the position
-            return self.place_order(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                order_type="MARKET",
-                reduce_only=True,  # Important: only reduce position, don't open new one
-            )
-        except Exception as exc:
-            logger.error(f"Error closing paper trading position for {symbol}: {exc}")
-            raise
 

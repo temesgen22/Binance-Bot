@@ -182,14 +182,6 @@ def _get_completed_trades_from_database(
         # Convert to TradeReport
         trade_reports = []
         for ct in completed_trades:
-            # Safety check: Ensure pnl_usd is not None (should be nullable=False in DB, but check anyway)
-            pnl_usd_value = float(ct.pnl_usd) if ct.pnl_usd is not None else 0.0
-            if ct.pnl_usd is None:
-                logger.warning(
-                    f"Completed trade {ct.id} for strategy {strategy_id} has NULL pnl_usd. "
-                    f"This will cause win rate calculation issues. Setting to 0.0."
-                )
-            
             trade_report = TradeReport(
                 trade_id=str(ct.entry_order_id),  # Use entry_order_id as trade_id
                 strategy_id=strategy_id,
@@ -201,10 +193,10 @@ def _get_completed_trades_from_database(
                 exit_price=float(ct.exit_price),
                 quantity=float(ct.quantity),
                 leverage=ct.leverage or 1,
-                fee_paid=float(ct.fee_paid) if ct.fee_paid is not None else 0.0,
-                funding_fee=float(ct.funding_fee) if ct.funding_fee is not None else 0.0,
-                pnl_usd=pnl_usd_value,
-                pnl_pct=float(ct.pnl_pct) if ct.pnl_pct is not None else 0.0,
+                fee_paid=float(ct.fee_paid),
+                funding_fee=float(ct.funding_fee),
+                pnl_usd=float(ct.pnl_usd),
+                pnl_pct=float(ct.pnl_pct),
                 exit_reason=ct.exit_reason,
                 initial_margin=float(ct.initial_margin) if ct.initial_margin else None,
                 margin_type=ct.margin_type,

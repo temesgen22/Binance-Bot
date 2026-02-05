@@ -92,15 +92,7 @@ class BinanceClient:
                 )
                 # Sync time with Binance server on initialization
                 # This helps prevent -1021 timestamp errors
-                # Wrap in try-except to handle temporary API unavailability (e.g., 502 Bad Gateway)
-                try:
-                    self._sync_time_with_binance()
-                except Exception as sync_error:
-                    # If time sync fails (e.g., Binance API unavailable), log and continue
-                    # Time sync will be retried on first API call that needs it
-                    logger.debug(
-                        f"Time sync failed during initialization (this is OK if Binance API is temporarily unavailable): {sync_error}"
-                    )
+                self._sync_time_with_binance()
         # Store testnet setting for WebSocket initialization
         self.testnet = testnet
         

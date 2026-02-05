@@ -597,78 +597,16 @@ class StrategyOrderManager:
                 details=error_details
             ) from underlying_error
         
-        # ✅ CRITICAL: Always query Binance for position (never use database for closing decisions)
-        # This prevents using stale database state that could cause positions to be left open
-        # However, if Binance check fails or returns no position, fall back to summary position state
-        # for closing decisions (to handle cases where Binance API is temporarily unavailable)
-        current_position = None
-        current_side = None
-        current_size = 0
-        binance_check_succeeded = False
+        # Get current position from Binance to ensure accurate size for closing
+        current_position = await asyncio.to_thread(account_client.get_open_position, summary.symbol)
+        current_side = summary.position_side
+        current_size = float(summary.position_size or 0)
         
-        # Retry Binance position check (3 attempts) to handle transient failures
-        for attempt in range(3):
-            try:
-                current_position = await asyncio.to_thread(
-                    account_client.get_open_position, 
-                    summary.symbol
-                )
-                binance_check_succeeded = True
-                if current_position:
-                    position_amt = float(current_position["positionAmt"])
-                    current_size = abs(position_amt)
-                    current_side = "LONG" if position_amt > 0 else "SHORT"
-                break  # Success (even if no position)
-            except Exception as e:
-                if attempt < 2:
-                    logger.warning(
-                        f"[{summary.id}] Binance position check failed (attempt {attempt+1}/3): {e}. Retrying..."
-                    )
-                    await asyncio.sleep(1)  # Brief delay before retry
-                else:
-                    logger.warning(
-                        f"[{summary.id}] ⚠️ Binance position check failed after 3 attempts: {e}. "
-                        f"Falling back to summary position state for closing decisions."
-                    )
-                    # Don't return None - fall back to summary state for closing decisions
-        
-        # ✅ FALLBACK: If Binance check failed or returned no position, use summary position state
-        # for closing decisions. This ensures we can still close positions even if Binance API
-        # is temporarily unavailable or out of sync.
-        if not binance_check_succeeded or (binance_check_succeeded and (not current_position or current_size == 0)):
-            # Check if summary has a position and we're trying to close it
-            summary_position_size = float(summary.position_size or 0)
-            summary_position_side = summary.position_side
-            
-            # Only use summary state if it indicates a position exists and we're closing
-            is_closing_by_action = (
-                (summary_position_side == "LONG" and summary_position_size > 0 and signal.action == "SELL") or
-                (summary_position_side == "SHORT" and summary_position_size > 0 and signal.action == "BUY")
-            )
-            
-            if is_closing_by_action:
-                # Use summary position state for closing
-                current_size = summary_position_size
-                current_side = summary_position_side
-                logger.debug(
-                    f"[{summary.id}] Using summary position state for closing: {current_side} {current_size} "
-                    f"(Binance check: {'failed' if not binance_check_succeeded else 'no position'})"
-                )
-            elif binance_check_succeeded and (not current_position or current_size == 0):
-                # Binance check succeeded but no position - check if we should skip exit orders
-                if signal.exit_reason and signal.exit_reason != "UNKNOWN":
-                    # Exit signal but no position on Binance - already closed, skip order
-                    logger.info(
-                        f"[{summary.id}] Exit signal generated but no position found on Binance for {summary.symbol}. "
-                        f"Position may already be closed. Skipping order."
-                    )
-                    return None
-                # Entry signal with no position - proceed normally (expected for new positions)
-                current_side = None
-                current_size = 0
-                logger.debug(
-                    f"[{summary.id}] No position on Binance (expected for entry orders). Proceeding with entry order."
-                )
+        # If Binance has a position, use that size (more accurate than our tracking)
+        if current_position and abs(float(current_position["positionAmt"])) > 0:
+            position_amt = float(current_position["positionAmt"])
+            current_size = abs(position_amt)
+            current_side = "LONG" if position_amt > 0 else "SHORT"
         
         is_closing_long = current_side == "LONG" and current_size > 0 and signal.action == "SELL"
         is_closing_short = current_side == "SHORT" and current_size > 0 and signal.action == "BUY"
@@ -740,20 +678,10 @@ class StrategyOrderManager:
         if reduce_only_override:
             try:
                 # Re-check position state from Binance right before executing reduce_only order
-                # Handle both PaperBinanceClient (has futures_position_information) and BinanceClient (has get_open_position)
-                if hasattr(account_client, 'futures_position_information'):
-                    # PaperBinanceClient: futures_position_information returns a list
-                    position_list = await asyncio.to_thread(
-                        account_client.futures_position_information,
-                        symbol=signal.symbol
-                    )
-                    position_info = position_list[0] if position_list else None
-                else:
-                    # BinanceClient: get_open_position returns a single dict or None
-                    position_info = await asyncio.to_thread(
-                        account_client.get_open_position,
-                        symbol=signal.symbol
-                    )
+                position_info = await asyncio.to_thread(
+                    account_client.futures_position_information,
+                    symbol=signal.symbol
+                )
                 
                 if position_info:
                     position_amt = float(position_info.get("positionAmt", 0))

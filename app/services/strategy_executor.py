@@ -476,45 +476,11 @@ class StrategyExecutor:
         prev_size = summary.position_size
         prev_entry = summary.entry_price
         
-        # ✅ FIX: If prev_side is None but we have exit_reason, try to get actual position from Binance
-        # This handles stale state where database shows no position but Binance has one
-        exit_reason = getattr(order_response, 'exit_reason', None) or getattr(signal, 'exit_reason', None)
-        has_exit_reason = exit_reason and exit_reason not in ("UNKNOWN", None)
-        
-        if has_exit_reason and (prev_side is None or prev_size == 0):
-            # Stale state detected - try to get actual position from Binance
-            try:
-                account_id = summary.account_id or "default"
-                account_client = self.order_manager.account_manager.get_account_client(account_id)
-                if hasattr(account_client, 'futures_position_information'):
-                    position_list = await asyncio.to_thread(
-                        account_client.futures_position_information,
-                        symbol=order_response.symbol
-                    )
-                    binance_position = position_list[0] if position_list else None
-                else:
-                    binance_position = await asyncio.to_thread(
-                        account_client.get_open_position,
-                        symbol=order_response.symbol
-                    )
-                
-                if binance_position and abs(float(binance_position.get("positionAmt", 0))) > 0:
-                    position_amt = float(binance_position.get("positionAmt", 0))
-                    prev_size = abs(position_amt)
-                    prev_side = "LONG" if position_amt > 0 else "SHORT"
-                    logger.info(
-                        f"[{summary.id}] ✅ Recovered position state from Binance (stale state fix): "
-                        f"prev_side={prev_side}, prev_size={prev_size}"
-                    )
-            except Exception as e:
-                logger.debug(f"[{summary.id}] Could not recover position from Binance: {e}")
-        
         # ✅ DEBUG: Log previous state for diagnosis
         logger.debug(
             f"[{summary.id}] Position state before order: prev_side={prev_side}, "
             f"prev_size={prev_size}, prev_entry={prev_entry}, "
-            f"order_side={order_response.side}, executed_qty={order_response.executed_qty}, "
-            f"exit_reason={exit_reason}"
+            f"order_side={order_response.side}, executed_qty={order_response.executed_qty}"
         )
         
         # ✅ CRITICAL: Get strategy UUID first (summary.id is strategy_id string, not UUID)
@@ -549,27 +515,16 @@ class StrategyExecutor:
                 exit_reason = getattr(order_response, 'exit_reason', None) or getattr(signal, 'exit_reason', None)
                 has_exit_reason = exit_reason and exit_reason not in ("UNKNOWN", None)
                 
-                # ✅ CRITICAL FIX: Determine if closing position
-                # Priority order:
-                # 1. exit_reason exists (most reliable indicator - strategy explicitly says it's closing)
-                # 2. Position size logic (prev_side matches order direction and new_size == 0)
-                # 3. Fallback: If exit_reason exists but prev_side is None (stale state), infer from order side
-                
-                # ✅ FIX: If exit_reason exists, it's ALWAYS a closing trade (regardless of prev_side/prev_size)
-                # This handles stale state where database shows prev_side=None but exit_reason indicates closing
-                if has_exit_reason:
-                    # Exit reason exists - this is definitely a closing trade
-                    is_closing_position = True
-                    logger.debug(
-                        f"[{summary.id}] Detected closing position from exit_reason: {exit_reason} "
-                        f"(prev_side={prev_side}, prev_size={prev_size}, order_side={order_response.side})"
-                    )
-                else:
-                    # No exit_reason - use position size logic
-                    is_closing_position = (
-                        (prev_side == "LONG" and order_response.side == "SELL" and new_position_size == 0) or  # Closing LONG
-                        (prev_side == "SHORT" and order_response.side == "BUY" and new_position_size == 0)  # Closing SHORT
-                    )
+                is_closing_position = (
+                    getattr(order_response, 'reduce_only', False) or  # Explicit reduce_only order (if present)
+                    (prev_side == "LONG" and order_response.side == "SELL" and new_position_size == 0) or  # Closing LONG
+                    (prev_side == "SHORT" and order_response.side == "BUY" and new_position_size == 0) or  # Closing SHORT
+                    # ✅ FIX: If exit_reason is TP/SL and prev_side is None, infer from order side
+                    (has_exit_reason and prev_side is None and (
+                        (order_response.side == "SELL" and exit_reason in ("TP", "SL", "TP_TRAILING", "SL_TRAILING")) or  # SELL closes LONG
+                        (order_response.side == "BUY" and exit_reason in ("TP", "SL", "TP_TRAILING", "SL_TRAILING"))  # BUY closes SHORT
+                    ))
+                )
                 
                 # ✅ FIX: More robust check for prev_size (handle 0.0, 0, None, etc.)
                 prev_size_is_zero = (

@@ -600,20 +600,14 @@
                 const strategyType = data.strategy_type;
                 if (strategyParams[strategyType]) {
                     strategyParams[strategyType].fields.forEach(field => {
-                        if (field.type === 'checkbox') {
-                            // Always include checkbox values (even if unchecked = false)
-                            const value = formData.get(`params.${field.name}`);
-                            data.params[field.name] = value === 'on';
-                        } else {
-                            const value = formData.get(`params.${field.name}`);
-                            if (value !== null && value !== '') {
-                                if (field.type === 'number') {
-                                    const numValue = parseFloat(value);
-                                    // Use parsed value even if 0 (don't fall back to default)
-                                    data.params[field.name] = isNaN(numValue) ? field.default : numValue;
-                                } else {
-                                    data.params[field.name] = value || field.default;
-                                }
+                        const value = formData.get(`params.${field.name}`);
+                        if (value !== null) {
+                            if (field.type === 'checkbox') {
+                                data.params[field.name] = value === 'on';
+                            } else if (field.type === 'number') {
+                                data.params[field.name] = parseFloat(value) || field.default;
+                            } else {
+                                data.params[field.name] = value || field.default;
                             }
                         }
                     });
