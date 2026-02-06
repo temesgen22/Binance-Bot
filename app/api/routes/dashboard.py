@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, List, Dict
 from dateutil import parser as date_parser
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
@@ -29,10 +29,110 @@ from app.services.strategy_runner import StrategyRunner
 from app.services.database_service import DatabaseService
 from app.core.my_binance_client import BinanceClient
 from app.core.binance_client_manager import BinanceClientManager
-from app.models.db_models import User
+from app.models.db_models import User, SystemEvent
+from sqlalchemy import and_, or_
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _calculate_total_running_time(
+    db_service: DatabaseService,
+    strategy_uuid: Optional[str],
+    current_time: Optional[datetime] = None,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None
+) -> Optional[float]:
+    """Calculate total running time for a strategy from SystemEvent table.
+    
+    Sums all periods between 'strategy_started' and 'strategy_stopped' events.
+    If strategy is currently running (has started_at but no stopped_at), 
+    includes time from last start to current time.
+    
+    If date filters are provided, only counts running time within the specified range.
+    
+    Args:
+        db_service: Database service instance
+        strategy_uuid: Strategy UUID (from database)
+        current_time: Current time (defaults to now)
+        start_datetime: Optional start date filter (only count running time after this)
+        end_datetime: Optional end date filter (only count running time before this)
+        
+    Returns:
+        Total running time in seconds, or None if cannot calculate
+    """
+    if not strategy_uuid:
+        return None
+    
+    try:
+        from uuid import UUID
+        strategy_uuid_obj = UUID(strategy_uuid) if isinstance(strategy_uuid, str) else strategy_uuid
+        
+        if current_time is None:
+            current_time = datetime.now(timezone.utc)
+        
+        # Use end_datetime as current_time if filtering by date
+        effective_end_time = end_datetime if end_datetime else current_time
+        
+        # Query all start/stop events for this strategy, ordered by time
+        query = db_service.db.query(SystemEvent).filter(
+            SystemEvent.strategy_id == strategy_uuid_obj,
+            or_(
+                SystemEvent.event_type == 'strategy_started',
+                SystemEvent.event_type == 'strategy_stopped'
+            )
+        )
+        
+        # Apply date filters if provided
+        if start_datetime:
+            query = query.filter(SystemEvent.created_at >= start_datetime)
+        if end_datetime:
+            query = query.filter(SystemEvent.created_at <= end_datetime)
+        
+        query = query.order_by(SystemEvent.created_at.asc())
+        events = query.all()
+        
+        if not events:
+            return None
+        
+        total_seconds = 0.0
+        start_time = None
+        
+        for event in events:
+            if event.event_type == 'strategy_started':
+                # If we already have a start_time, that means we had an unclosed period
+                # This shouldn't happen in normal operation, but handle it
+                if start_time is not None:
+                    # Close the previous period at this start time (assume immediate stop/start)
+                    pass
+                start_time = event.created_at
+            elif event.event_type == 'strategy_stopped':
+                if start_time is not None:
+                    # Calculate duration of this running period
+                    # Clip to date range if filters are applied
+                    period_start = max(start_time, start_datetime) if start_datetime else start_time
+                    period_end = min(event.created_at, effective_end_time) if end_datetime else event.created_at
+                    
+                    duration = (period_end - period_start).total_seconds()
+                    if duration > 0:
+                        total_seconds += duration
+                    start_time = None
+        
+        # If we have an unclosed start (strategy is currently running)
+        if start_time is not None:
+            # Clip to date range if filters are applied
+            period_start = max(start_time, start_datetime) if start_datetime else start_time
+            period_end = effective_end_time
+            
+            duration = (period_end - period_start).total_seconds()
+            if duration > 0:
+                total_seconds += duration
+        
+        return total_seconds if total_seconds > 0 else None
+        
+    except Exception as e:
+        logger.debug(f"Error calculating total running time for strategy {strategy_uuid}: {e}")
+        return None
 
 
 @router.get("/overview", response_model=DashboardOverview)
@@ -648,11 +748,13 @@ def get_strategy_comparison(
         
         comparison_strategies = []
         
+        # Get all strategies once to avoid multiple calls
+        all_strategies = runner.list_strategies()
+        
         for strategy_id in strategy_id_list:
             try:
-                # Get strategy from runner by listing all strategies and filtering
-                strategies = runner.list_strategies()
-                strategy = next((s for s in strategies if s.id == strategy_id), None)
+                # Get strategy from the pre-fetched list
+                strategy = next((s for s in all_strategies if s.id == strategy_id), None)
                 if not strategy:
                     logger.warning(f"Strategy {strategy_id} not found in runner")
                     continue
@@ -728,6 +830,21 @@ def get_strategy_comparison(
                 
                 total_pnl_with_unrealized = total_pnl + unrealized_pnl
                 
+                # Calculate total running time from SystemEvent table
+                # If date filters are applied, only count running time within the date range
+                total_running_time_seconds = None
+                if db_strategy:
+                    try:
+                        total_running_time_seconds = _calculate_total_running_time(
+                            db_service=db_service,
+                            strategy_uuid=str(db_strategy.id),
+                            current_time=datetime.now(timezone.utc),
+                            start_datetime=start_datetime,
+                            end_datetime=end_datetime
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not calculate total running time for strategy {strategy_id}: {e}")
+                
                 # Create StrategyPerformance object
                 perf = StrategyPerformance(
                     strategy_id=strategy_id,
@@ -763,6 +880,7 @@ def get_strategy_comparison(
                     auto_tuning_enabled=getattr(strategy, 'auto_tuning_enabled', False),
                     total_trade_fees=round(total_trade_fees, 4) if total_trade_fees is not None else None,
                     total_funding_fees=round(total_funding_fees, 4) if total_funding_fees is not None else None,
+                    total_running_time_seconds=round(total_running_time_seconds, 2) if total_running_time_seconds is not None else None,
                 )
                 
                 comparison_strategies.append(perf)
@@ -777,10 +895,41 @@ def get_strategy_comparison(
                 detail="No strategies found for comparison after filtering"
             )
         
-        # Calculate comparison metrics
-        # We need to pass completed trades data for accurate profit factor calculation
-        # For now, calculate from StrategyPerformance objects
-        comparison_metrics = _calculate_comparison_metrics(comparison_strategies)
+        # Collect completed trades for accurate profit factor calculation
+        completed_trades_by_strategy = {}
+        for strategy_id in strategy_id_list:
+            if strategy_id in [s.strategy_id for s in comparison_strategies]:
+                # Find the corresponding strategy and db_strategy
+                for s in comparison_strategies:
+                    if s.strategy_id == strategy_id:
+                        # Get db_strategy again to fetch trades
+                        db_strategy = None
+                        if runner.strategy_service:
+                            try:
+                                db_strategy = runner.strategy_service.db_service.get_strategy(current_user.id, strategy_id)
+                            except Exception:
+                                pass
+                        
+                        if db_strategy:
+                            try:
+                                trades = _get_completed_trades_from_database(
+                                    db_service=db_service,
+                                    user_id=current_user.id,
+                                    strategy_uuid=db_strategy.id,
+                                    strategy_id=strategy_id,
+                                    start_datetime=start_datetime,
+                                    end_datetime=end_datetime
+                                )
+                                completed_trades_by_strategy[strategy_id] = trades
+                            except Exception:
+                                pass
+                        break
+        
+        # Calculate comparison metrics with completed trades for accurate profit factor
+        comparison_metrics = _calculate_comparison_metrics(
+            comparison_strategies,
+            completed_trades_by_strategy=completed_trades_by_strategy
+        )
         
         # Build date range object
         date_range = None
@@ -803,7 +952,10 @@ def get_strategy_comparison(
         )
 
 
-def _calculate_comparison_metrics(strategies: List[StrategyPerformance]) -> ComparisonSummary:
+def _calculate_comparison_metrics(
+    strategies: List,
+    completed_trades_by_strategy: Optional[Dict[str, List]] = None
+) -> ComparisonSummary:
     """Calculate comparison metrics across strategies."""
     
     if not strategies:
@@ -812,23 +964,36 @@ def _calculate_comparison_metrics(strategies: List[StrategyPerformance]) -> Comp
     # Calculate Profit Factor (winning trades PnL / losing trades PnL)
     profit_factors = {}
     for s in strategies:
-        if s.completed_trades > 0 and s.losing_trades > 0:
-            # Calculate from realized PnL and trade counts
-            # Profit Factor = Sum of winning trades PnL / Sum of losing trades PnL
-            # Approximation: We estimate losing PnL from avg_loss and use total_realized_pnl
-            # Better approach would be to recalculate from completed trades, but this works for comparison
-            if s.largest_loss < 0 and s.largest_win > 0:
-                # Estimate: if we have avg_profit_per_trade, we can estimate
-                # For now, use a simple approximation
+        if s.completed_trades > 0:
+            # Try to calculate from actual completed trades if available
+            if completed_trades_by_strategy and s.strategy_id in completed_trades_by_strategy:
+                trades = completed_trades_by_strategy[s.strategy_id]
+                winning_trades = [t for t in trades if t.pnl_usd and float(t.pnl_usd) > 0]
+                losing_trades = [t for t in trades if t.pnl_usd and float(t.pnl_usd) < 0]
+                
+                gross_profit = sum(float(t.pnl_usd) for t in winning_trades)
+                gross_loss = abs(sum(float(t.pnl_usd) for t in losing_trades))
+                
+                if gross_loss > 0:
+                    profit_factor = gross_profit / gross_loss
+                    if profit_factor > 0:
+                        profit_factors[s.strategy_id] = profit_factor
+                elif gross_profit > 0:
+                    # Perfect profit factor (no losses) - cap at 99.0 for comparison
+                    profit_factors[s.strategy_id] = 99.0
+            elif s.losing_trades > 0 and s.largest_loss < 0:
+                # Fallback: estimate from available data
+                # This is less accurate but better than nothing
                 total_realized = s.total_realized_pnl
-                # Estimate losing trades total (conservative: use largest_loss as proxy)
-                # This is an approximation - ideally we'd sum actual losing trades
-                estimated_losing_total = abs(s.largest_loss) * s.losing_trades * 0.5  # Conservative estimate
+                # Estimate: avg_loss * losing_trades ≈ total_loss
+                # Then: total_realized = total_win - total_loss, so total_win = total_realized + total_loss
+                estimated_avg_loss = abs(s.largest_loss) * 0.6  # Conservative estimate
+                estimated_losing_total = estimated_avg_loss * s.losing_trades
                 estimated_winning_total = total_realized + estimated_losing_total
                 
                 if estimated_losing_total > 0 and estimated_winning_total >= 0:
                     profit_factor = estimated_winning_total / estimated_losing_total
-                    if profit_factor > 0:  # Only include valid profit factors
+                    if profit_factor > 0:
                         profit_factors[s.strategy_id] = profit_factor
     
     # Calculate Risk/Reward (avg win / abs(avg loss))
@@ -863,21 +1028,27 @@ def _calculate_comparison_metrics(strategies: List[StrategyPerformance]) -> Comp
             fee_impacts[s.strategy_id] = fee_impact
     
     # Calculate Uptime % (time running / total time)
+    # Use total_running_time_seconds if available (more accurate for multiple start/stop cycles)
     uptime_percents = {}
     for s in strategies:
         try:
             if s.created_at:
                 total_time = (datetime.now(timezone.utc) - s.created_at).total_seconds() / 86400
                 if total_time > 0:
-                    if s.started_at and s.stopped_at:
+                    # Prefer total_running_time_seconds if available (accounts for all cycles)
+                    if s.total_running_time_seconds is not None and s.total_running_time_seconds > 0:
+                        running_time_days = s.total_running_time_seconds / 86400
+                        uptime_percents[s.strategy_id] = min((running_time_days / total_time) * 100, 100)
+                    elif s.started_at and s.stopped_at:
+                        # Fallback: use last start/stop cycle
                         running_time = (s.stopped_at - s.started_at).total_seconds() / 86400
+                        if running_time >= 0:
+                            uptime_percents[s.strategy_id] = min((running_time / total_time) * 100, 100)
                     elif s.started_at:
+                        # Currently running
                         running_time = (datetime.now(timezone.utc) - s.started_at).total_seconds() / 86400
-                    else:
-                        running_time = 0.0
-                    
-                    if running_time >= 0:
-                        uptime_percents[s.strategy_id] = min((running_time / total_time) * 100, 100)  # Cap at 100%
+                        if running_time >= 0:
+                            uptime_percents[s.strategy_id] = min((running_time / total_time) * 100, 100)
         except (TypeError, AttributeError) as e:
             logger.debug(f"Error calculating uptime for strategy {s.strategy_id}: {e}")
             continue

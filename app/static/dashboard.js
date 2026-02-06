@@ -8,6 +8,28 @@
 })();
 
 const API_BASE = '';
+
+// Format duration in seconds to human-readable format (hours or minutes)
+function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined || isNaN(seconds) || seconds < 0) {
+        return 'N/A';
+    }
+    
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    
+    if (hours > 0) {
+        if (minutes > 0) {
+            return `${hours}h ${minutes}m`;
+        }
+        return `${hours}h`;
+    } else if (minutes > 0) {
+        return `${minutes}m`;
+    } else {
+        return `${Math.floor(seconds)}s`;
+    }
+}
+
 let currentTab = 'overview';
 let currentFilters = {
     start_date: null,
@@ -1709,8 +1731,11 @@ function renderComparisonTable(data) {
         { key: 'winning_trades', label: 'Wins', format: 'number' },
         { key: 'losing_trades', label: 'Losses', format: 'number' },
         { key: 'avg_profit_per_trade', label: 'Avg Profit/Trade', format: 'currency' },
+        { key: 'largest_win', label: 'Highest Win', format: 'currency' },
+        { key: 'largest_loss', label: 'Highest Loss', format: 'currency' },
         { key: 'total_trade_fees', label: 'Trade Fees', format: 'currency' },
         { key: 'total_funding_fees', label: 'Funding Fees', format: 'currency' },
+        { key: 'total_running_time_seconds', label: 'Running Time', format: 'duration' },
         { key: 'leverage', label: 'Leverage', format: 'number' },
         { key: 'risk_per_trade', label: 'Risk %', format: 'percent' }
     ];
@@ -1740,15 +1765,68 @@ function renderComparisonTable(data) {
                 value = `${parseFloat(value).toFixed(2)}%`;
             } else if (metric.format === 'number') {
                 value = parseFloat(value).toFixed(2);
+            } else if (metric.format === 'duration') {
+                value = formatDuration(parseFloat(value));
             } else if (metric.format === 'text') {
                 value = String(value);
             }
             
             // Highlight best/worst if comparison metrics available
+            // Map metric keys to comparison_metrics field names
             if (data.comparison_metrics) {
                 const metricKey = metric.key;
-                if (data.comparison_metrics[metricKey]) {
-                    const metricData = data.comparison_metrics[metricKey];
+                let metricData = null;
+                
+                // Map frontend metric keys to backend comparison_metrics fields
+                const metricMapping = {
+                    'total_pnl': null,  // Calculate on-the-fly
+                    'win_rate': null,   // Calculate on-the-fly
+                    'completed_trades': null,  // Calculate on-the-fly
+                    'total_trade_fees': 'fee_impact',
+                    'total_funding_fees': 'fee_impact',
+                    'total_running_time_seconds': 'uptime_percent',
+                };
+                
+                // Check if this metric has a direct mapping
+                if (metricMapping[metricKey] && data.comparison_metrics[metricMapping[metricKey]]) {
+                    metricData = data.comparison_metrics[metricMapping[metricKey]];
+                } else {
+                    // For metrics not in comparison_metrics, calculate best/worst on-the-fly
+                    // Only do this for numeric metrics
+                    if (metric.format === 'currency' || metric.format === 'percent' || metric.format === 'number') {
+                        const values = data.strategies.map(s => {
+                            const v = s[metricKey];
+                            return v !== null && v !== undefined ? parseFloat(v) : (metricKey.includes('pnl') ? -Infinity : Infinity);
+                        }).filter(v => isFinite(v));
+                        
+                        if (values.length > 0) {
+                            const maxVal = Math.max(...values);
+                            const minVal = Math.min(...values);
+                            const currentVal = strategy[metricKey] !== null && strategy[metricKey] !== undefined 
+                                ? parseFloat(strategy[metricKey]) : null;
+                            
+                            // For PnL and positive metrics: higher is better
+                            // For fees and negative metrics: lower is better
+                            const isPositiveMetric = metricKey.includes('pnl') || metricKey.includes('win_rate') || 
+                                                     metricKey.includes('trades') || metricKey.includes('running_time');
+                            
+                            if (currentVal !== null && isFinite(currentVal)) {
+                                if (isPositiveMetric && currentVal === maxVal && maxVal !== minVal) {
+                                    cellClass = 'value-best';
+                                } else if (!isPositiveMetric && currentVal === minVal && maxVal !== minVal) {
+                                    cellClass = 'value-best';
+                                } else if (isPositiveMetric && currentVal === minVal && maxVal !== minVal) {
+                                    cellClass = 'value-worst';
+                                } else if (!isPositiveMetric && currentVal === maxVal && maxVal !== minVal) {
+                                    cellClass = 'value-worst';
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Use comparison_metrics if available
+                if (metricData) {
                     if (metricData.best_strategy_id === strategy.strategy_id) {
                         cellClass = 'value-best';
                     } else if (metricData.worst_strategy_id === strategy.strategy_id) {
@@ -1889,6 +1967,21 @@ function renderComparisonCards(data) {
         }
         html += `</div>`;
         
+        // Highest Win/Loss Section
+        if ((strategy.largest_win !== null && strategy.largest_win !== undefined && strategy.largest_win > 0) ||
+            (strategy.largest_loss !== null && strategy.largest_loss !== undefined && strategy.largest_loss < 0)) {
+            html += `<div style="background: #f8f9fa; border-radius: 4px; padding: 12px; margin-top: 15px; border-top: 1px solid #e9ecef;">`;
+            html += `<div style="display: flex; justify-content: space-between; font-size: 0.9em;">`;
+            if (strategy.largest_win !== null && strategy.largest_win !== undefined && strategy.largest_win > 0) {
+                html += `<span>🏆 Highest Win: <strong style="color: #28a745;">$${parseFloat(strategy.largest_win).toFixed(2)}</strong></span>`;
+            }
+            if (strategy.largest_loss !== null && strategy.largest_loss !== undefined && strategy.largest_loss < 0) {
+                html += `<span>📉 Highest Loss: <strong style="color: #dc3545;">$${parseFloat(Math.abs(strategy.largest_loss)).toFixed(2)}</strong></span>`;
+            }
+            html += `</div>`;
+            html += `</div>`;
+        }
+        
         // Fees Section
         if (strategy.total_trade_fees !== null && strategy.total_trade_fees !== undefined) {
             html += `<div style="background: #f8f9fa; border-radius: 4px; padding: 12px; margin-top: 15px; border-top: 1px solid #e9ecef;">`;
@@ -1904,6 +1997,15 @@ function renderComparisonCards(data) {
                 const feeImpact = (totalFees / Math.abs(strategy.total_pnl)) * 100;
                 html += `<div style="margin-top: 8px; font-size: 0.85em; color: #666;">Fee Impact: <strong>${feeImpact.toFixed(2)}%</strong> of PnL</div>`;
             }
+            html += `</div>`;
+        }
+        
+        // Running Time Section
+        if (strategy.total_running_time_seconds !== null && strategy.total_running_time_seconds !== undefined) {
+            html += `<div style="background: #e8f4f8; border-radius: 4px; padding: 12px; margin-top: 15px; border-top: 1px solid #e9ecef;">`;
+            html += `<div style="font-size: 0.9em;">`;
+            html += `<span>⏱️ Total Running Time: <strong>${formatDuration(strategy.total_running_time_seconds)}</strong></span>`;
+            html += `</div>`;
             html += `</div>`;
         }
         
@@ -2375,8 +2477,8 @@ function exportComparisonData() {
     const headers = [
         'Strategy Name', 'Symbol', 'Type', 'Total PnL', 'Realized PnL', 
         'Unrealized PnL', 'Win Rate', 'Completed Trades', 'Winning Trades', 
-        'Losing Trades', 'Avg Profit/Trade', 'Trade Fees', 'Funding Fees', 
-        'Leverage', 'Risk %'
+        'Losing Trades', 'Avg Profit/Trade', 'Highest Win', 'Highest Loss',
+        'Trade Fees', 'Funding Fees', 'Running Time', 'Leverage', 'Risk %'
     ];
     
     let csv = headers.join(',') + '\n';
@@ -2394,8 +2496,11 @@ function exportComparisonData() {
             s.winning_trades || 0,
             s.losing_trades || 0,
             s.avg_profit_per_trade !== null && s.avg_profit_per_trade !== undefined ? s.avg_profit_per_trade : 0,
+            s.largest_win !== null && s.largest_win !== undefined ? s.largest_win : 0,
+            s.largest_loss !== null && s.largest_loss !== undefined ? s.largest_loss : 0,
             s.total_trade_fees !== null && s.total_trade_fees !== undefined ? s.total_trade_fees : 0,
             s.total_funding_fees !== null && s.total_funding_fees !== undefined ? s.total_funding_fees : 0,
+            s.total_running_time_seconds !== null && s.total_running_time_seconds !== undefined ? `"${formatDuration(s.total_running_time_seconds)}"` : 'N/A',
             s.leverage || 0,
             s.risk_per_trade !== null && s.risk_per_trade !== undefined ? s.risk_per_trade : 0
         ];

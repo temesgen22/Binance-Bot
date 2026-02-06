@@ -68,6 +68,9 @@ class StrategyPerformance(BaseModel):
     # Fee tracking
     total_trade_fees: Optional[float] = Field(default=None, description="Total trading fees paid across all completed trades")
     total_funding_fees: Optional[float] = Field(default=None, description="Total funding fees paid across all completed trades")
+    
+    # Running time
+    total_running_time_seconds: Optional[float] = Field(default=None, description="Total time strategy has been running across all start/stop cycles (in seconds)")
 
 
 class StrategyPerformanceList(BaseModel):

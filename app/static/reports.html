@@ -597,6 +597,17 @@
 
         // formatPercent is now in utils.js
 
+        // Format price to show exact database value (up to 8 decimal places, remove trailing zeros)
+        function formatPrice(price) {
+            if (price === null || price === undefined || isNaN(price)) {
+                return 'N/A';
+            }
+            // Convert to number and format to up to 8 decimal places, removing trailing zeros
+            const num = parseFloat(price);
+            // Use toFixed(8) then remove trailing zeros
+            return num.toFixed(8).replace(/\.?0+$/, '');
+        }
+
         function formatDate(dateString) {
             // Use UserSettings if available, otherwise fallback to UTC format
             if (typeof UserSettings !== 'undefined') {
@@ -907,14 +918,14 @@
                 html += `<td><strong>${trade.symbol}</strong></td>`;
                 html += `<td><span class="badge ${trade.side === 'LONG' ? 'success' : 'danger'}">${trade.side}</span></td>`;
                 html += `<td>${formatDate(trade.entry_time)}</td>`;
-                html += `<td>$${trade.entry_price.toFixed(4)}</td>`;
+                html += `<td>$${formatPrice(trade.entry_price)}</td>`;
                 html += `<td>${formatDate(trade.exit_time)}</td>`;
-                html += `<td>$${(trade.exit_price || 0).toFixed(4)}</td>`;
-                html += `<td>${trade.quantity.toFixed(4)}</td>`;
+                html += `<td>$${formatPrice(trade.exit_price)}</td>`;
+                html += `<td>${formatPrice(trade.quantity)}</td>`;
                 html += `<td>${trade.leverage}x</td>`;
-                html += `<td>$${trade.fee_paid.toFixed(4)}</td>`;
-                html += `<td>$${(trade.funding_fee || 0).toFixed(4)}</td>`;
-                html += `<td>${trade.initial_margin ? '$' + trade.initial_margin.toFixed(2) : 'N/A'}</td>`;
+                html += `<td>$${formatPrice(trade.fee_paid)}</td>`;
+                html += `<td>$${formatPrice(trade.funding_fee || 0)}</td>`;
+                html += `<td>${trade.initial_margin ? '$' + formatPrice(trade.initial_margin) : 'N/A'}</td>`;
                 html += `<td>${trade.margin_type ? `<span class="badge info">${trade.margin_type}</span>` : 'N/A'}</td>`;
                 html += `<td>${trade.notional_value ? '$' + trade.notional_value.toFixed(2) : 'N/A'}</td>`;
                 html += `<td class="${pnlClass}"><strong>${formatCurrency(trade.pnl_usd)}</strong></td>`;

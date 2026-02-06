@@ -754,8 +754,8 @@
                 html += `<div class="position-details">`;
                 html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side || 'N/A'}</span></span></div>`;
                 html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${entryPrice.toFixed(4)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${currentPrice.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${formatPrice(entryPrice)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${formatPrice(currentPrice)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.strategy_name) {
                     html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
@@ -954,9 +954,9 @@
             html += `<td>${trade.order_id}</td>`;
             html += `<td><span class="badge ${trade.side === 'BUY' ? 'success' : 'danger'}">${trade.side}</span></td>`;
             html += `<td><span class="badge info">${trade.status}</span></td>`;
-            html += `<td>$${trade.price.toFixed(4)}</td>`;
-            html += `<td>$${(trade.avg_price || trade.price).toFixed(4)}</td>`;
-            html += `<td>${trade.executed_qty.toFixed(4)}</td>`;
+            html += `<td>$${formatPrice(trade.price)}</td>`;
+            html += `<td>$${formatPrice(trade.avg_price || trade.price)}</td>`;
+            html += `<td>${formatPrice(trade.executed_qty)}</td>`;
             
             // Commission
             if (trade.commission !== null && trade.commission !== undefined) {
@@ -1041,6 +1041,17 @@
         }
 
         // formatCurrency is now in utils.js
+
+        // Format price to show exact database value (up to 8 decimal places, remove trailing zeros)
+        function formatPrice(price) {
+            if (price === null || price === undefined || isNaN(price)) {
+                return 'N/A';
+            }
+            // Convert to number and format to up to 8 decimal places, removing trailing zeros
+            const num = parseFloat(price);
+            // Use toFixed(8) then remove trailing zeros
+            return num.toFixed(8).replace(/\.?0+$/, '');
+        }
 
         // Load user info
         // loadUserInfo is now in common.js
