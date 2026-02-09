@@ -19,6 +19,8 @@ import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsUiState
+import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +31,7 @@ fun StrategyDetailsScreen(
 ) {
     val strategy by viewModel.strategy.collectAsState()
     val stats by viewModel.stats.collectAsState()
+    val performance by viewModel.performance.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     
     LaunchedEffect(strategyId) {
@@ -170,6 +173,21 @@ fun StrategyDetailsScreen(
                         
                         // Strategy Configuration
                         ConfigurationSection(strategy = strat)
+                        
+                        // Strategy Parameters (from performance data)
+                        performance?.let { perf ->
+                            StrategyParametersSection(performance = perf)
+                        }
+                        
+                        // Timestamps (from performance data)
+                        performance?.let { perf ->
+                            TimestampsSection(performance = perf)
+                        }
+                        
+                        // Auto-Tuning Status (from performance data)
+                        performance?.let { perf ->
+                            AutoTuningSection(performance = perf)
+                        }
                     }
                 } ?: run {
                     Box(
@@ -337,6 +355,141 @@ fun MetricRow(
                 else -> MaterialTheme.colorScheme.onSurface
             }
         )
+    }
+}
+
+@Composable
+fun StrategyParametersSection(performance: StrategyPerformanceDto) {
+    if (performance.params.isEmpty()) return
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+        ) {
+            Text(
+                text = "Strategy Parameters",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Divider()
+            
+            // Filter parameters based on strategy type
+            val relevantParams = getRelevantParams(performance.strategyType, performance.params)
+            
+            relevantParams.forEach { (key, value) ->
+                MetricRow(
+                    label = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                    value = formatParamValue(value)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TimestampsSection(performance: StrategyPerformanceDto) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+        ) {
+            Text(
+                text = "Timestamps",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Divider()
+            
+            MetricRow("Created", FormatUtils.formatDateTime(performance.createdAt))
+            performance.startedAt?.let {
+                MetricRow("Last Started", FormatUtils.formatDateTime(it))
+            }
+            performance.stoppedAt?.let {
+                MetricRow("Last Stopped", FormatUtils.formatDateTime(it))
+            }
+            performance.lastTradeAt?.let {
+                MetricRow("Last Trade", FormatUtils.formatDateTime(it))
+            }
+            performance.lastSignal?.let {
+                MetricRow("Last Signal", it)
+            }
+        }
+    }
+}
+
+@Composable
+fun AutoTuningSection(performance: StrategyPerformanceDto) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+        ) {
+            Text(
+                text = "Auto-Tuning",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Divider()
+            
+            MetricRow(
+                "Status",
+                if (performance.autoTuningEnabled) "Enabled" else "Disabled",
+                isHighlight = true,
+                isPositive = performance.autoTuningEnabled
+            )
+        }
+    }
+}
+
+fun getRelevantParams(strategyType: String, params: Map<String, Any>): Map<String, Any> {
+    // Define parameters for each strategy type
+    val emaScalpingParams = listOf(
+        "ema_fast", "ema_slow", "take_profit_pct", "stop_loss_pct",
+        "interval_seconds", "kline_interval", "enable_short",
+        "min_ema_separation", "enable_htf_bias", "cooldown_candles",
+        "trailing_stop_enabled", "trailing_stop_activation_pct"
+    )
+    
+    val rangeMeanReversionParams = listOf(
+        "lookback_period", "buy_zone_pct", "sell_zone_pct",
+        "ema_fast_period", "ema_slow_period", "max_ema_spread_pct",
+        "max_atr_multiplier", "rsi_period", "rsi_oversold",
+        "rsi_overbought", "tp_buffer_pct", "sl_buffer_pct", "kline_interval"
+    )
+    
+    val relevantKeys = when {
+        strategyType == "scalping" || strategyType == "ema_crossover" || strategyType == "reverse_scalping" -> emaScalpingParams
+        strategyType == "range_mean_reversion" -> rangeMeanReversionParams
+        else -> params.keys.toList() // Show all if unknown type
+    }
+    
+    return params.filterKeys { it in relevantKeys }
+}
+
+fun formatParamValue(value: Any?): String {
+    return when (value) {
+        is Boolean -> value.toString()
+        is Double -> String.format(Locale.getDefault(), "%.4f", value)
+        is Float -> String.format(Locale.getDefault(), "%.4f", value)
+        is Number -> value.toString()
+        null -> "N/A"
+        else -> value.toString()
     }
 }
 

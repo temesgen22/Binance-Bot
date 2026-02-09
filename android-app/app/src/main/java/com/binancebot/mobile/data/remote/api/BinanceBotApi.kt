@@ -161,6 +161,16 @@ interface BinanceBotApi {
         @Query("offset") offset: Int = 0
     ): Response<List<TradeDto>>
     
+    @GET("trades/pnl/overview")
+    suspend fun getPnLOverview(
+        @Query("account_id") accountId: String? = null,
+        @Query("start_date") startDate: String? = null,
+        @Query("end_date") endDate: String? = null
+    ): Response<List<SymbolPnLDto>>
+    
+    @GET("trades/symbols")
+    suspend fun getSymbols(): Response<List<String>>
+    
     // ========== Accounts ==========
     
     @GET("accounts/list")

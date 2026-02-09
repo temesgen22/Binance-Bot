@@ -49,3 +49,5 @@ data class MarketAnalysisResponse(
 
 
 
+
+

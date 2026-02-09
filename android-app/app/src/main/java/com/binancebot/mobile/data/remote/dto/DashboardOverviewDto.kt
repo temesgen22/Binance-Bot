@@ -40,14 +40,3 @@ data class DashboardOverviewDto(
     @SerializedName("pnl_timeline")
     val pnlTimeline: List<Map<String, Any>>? = null
 )
-
-data class SymbolPnLDto(
-    @SerializedName("symbol")
-    val symbol: String,
-    @SerializedName("total_realized_pnl")
-    val totalRealizedPnL: Double,
-    @SerializedName("total_unrealized_pnl")
-    val totalUnrealizedPnL: Double,
-    @SerializedName("total_pnl")
-    val totalPnL: Double
-)

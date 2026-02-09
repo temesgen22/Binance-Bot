@@ -20,6 +20,7 @@ import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.components.ErrorHandler
 import com.binancebot.mobile.presentation.components.BottomNavigationBar
 import com.binancebot.mobile.presentation.components.shouldShowBottomNav
+import com.binancebot.mobile.presentation.components.SwipeRefreshBox
 import com.binancebot.mobile.presentation.navigation.Screen
 import com.binancebot.mobile.presentation.screens.accounts.CreateAccountDialog
 import com.binancebot.mobile.presentation.theme.Spacing
@@ -102,42 +103,47 @@ fun AccountsScreen(
                 )
             }
             else -> {
-                if (accounts.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(padding),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
+                SwipeRefreshBox(
+                    isRefreshing = uiState is AccountUiState.Loading,
+                    onRefresh = { viewModel.loadAccounts() }
+                ) {
+                    if (accounts.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(padding),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "No accounts found",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(Spacing.Small))
-                            Text(
-                                text = "Add a Binance account to start trading",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "No accounts found",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.Small))
+                                Text(
+                                    text = "Add a Binance account to start trading",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(padding),
-                        contentPadding = PaddingValues(Spacing.ScreenPadding),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
-                    ) {
-                        items(
-                            items = accounts,
-                            key = { it.accountId }
-                        ) { account ->
-                            AccountCard(account = account)
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(padding),
+                            contentPadding = PaddingValues(Spacing.ScreenPadding),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
+                        ) {
+                            items(
+                                items = accounts,
+                                key = { it.accountId }
+                            ) { account ->
+                                AccountCard(account = account)
+                            }
                         }
                     }
                 }

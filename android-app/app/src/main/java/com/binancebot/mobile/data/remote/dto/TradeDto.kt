@@ -4,19 +4,19 @@ import com.google.gson.annotations.SerializedName
 
 data class TradeDto(
     @SerializedName("id")
-    val id: String,
+    val id: String? = null,
     @SerializedName("strategy_id")
-    val strategyId: String,
+    val strategyId: String? = null,
     @SerializedName("order_id")
-    val orderId: Long,
+    val orderId: Long? = null,
     @SerializedName("symbol")
-    val symbol: String,
+    val symbol: String? = null,
     @SerializedName("side")
-    val side: String,
+    val side: String? = null,
     @SerializedName("executed_qty")
-    val executedQty: Double,
+    val executedQty: Double? = null,
     @SerializedName("avg_price")
-    val avgPrice: Double,
+    val avgPrice: Double? = null,
     @SerializedName("commission")
     val commission: Double? = null,
     @SerializedName("timestamp")

@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.components.ErrorHandler
+import com.binancebot.mobile.presentation.components.SwipeRefreshBox
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.ReportsViewModel
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Clear
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,7 +48,12 @@ fun ReportsScreen(
             
             val startDate = when (filter) {
                 "today" -> {
-                    endDate // Same day
+                    // For today, use start of day to end of day
+                    val startCalendar = java.util.Calendar.getInstance()
+                    startCalendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    startCalendar.set(java.util.Calendar.MINUTE, 0)
+                    startCalendar.set(java.util.Calendar.SECOND, 0)
+                    dateFormat.format(startCalendar.time)
                 }
                 "week" -> {
                     val startCalendar = java.util.Calendar.getInstance()
@@ -139,13 +146,23 @@ fun ReportsScreen(
                 )
             }
             else -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
+                SwipeRefreshBox(
+                    isRefreshing = uiState is ReportsUiState.Loading,
+                    onRefresh = { 
+                        viewModel.loadTradingReport(
+                            strategyId = selectedStrategyId,
+                            dateFrom = dateRange?.first,
+                            dateTo = dateRange?.second
+                        )
+                    }
                 ) {
-                    // Time Filter Chips
-                    if (showFilters) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                    ) {
+                        // Time Filter Chips
+                        if (showFilters) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -178,6 +195,25 @@ fun ReportsScreen(
                                 label = { Text("This Year") }
                             )
                         }
+                        
+                        // Strategy Filter
+                        OutlinedTextField(
+                            value = selectedStrategyId ?: "",
+                            onValueChange = { selectedStrategyId = if (it.isBlank()) null else it },
+                            label = { Text("Strategy ID") },
+                            placeholder = { Text("Enter strategy ID to filter") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.Small),
+                            trailingIcon = if (selectedStrategyId != null) {
+                                {
+                                    IconButton(onClick = { selectedStrategyId = null }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                    }
+                                }
+                            } else null
+                        )
+                        
                         Spacer(modifier = Modifier.height(Spacing.Small))
                     }
                     
@@ -390,6 +426,7 @@ fun ReportsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
                     }
                 }
             }
