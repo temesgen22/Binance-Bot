@@ -1,0 +1,448 @@
+@startuml Binance Trading Bot - Class Diagram
+!theme plain
+skinparam linetype ortho
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam package {
+    BackgroundColor<<Core>> LightBlue
+    BackgroundColor<<Services>> LightGreen
+    BackgroundColor<<Strategies>> LightYellow
+    BackgroundColor<<Models>> LightCoral
+    BackgroundColor<<API>> LightGray
+}
+
+' ============================================
+' UML Class Diagram for Binance Trading Bot
+' ============================================
+' This diagram shows the main classes and their relationships
+' 
+' Key Relationships:
+' - StrategyRunner orchestrates strategy execution
+' - StrategyExecutor runs the strategy loop
+' - StrategyOrderManager handles order execution and trade tracking
+' - StrategyService and AccountService use cache-aside pattern (BaseCacheService)
+' - All services use DatabaseService for PostgreSQL and RedisStorage for caching
+' - Strategies inherit from base Strategy class and implement evaluate() method
+' - Models are separated into Pydantic (API) and SQLAlchemy (Database) models
+' ============================================
+
+' Define packages
+package "Core" {
+    class BinanceClient {
+        -_rest: Client
+        -_precision_cache: Dict
+        -_circuit_breaker: CircuitBreaker
+        +get_price(symbol: str): float
+        +place_order(...): OrderResponse
+        +get_open_position(symbol: str): Dict
+        +adjust_leverage(symbol: str, leverage: int): Dict
+        +get_current_leverage(symbol: str): int
+    }
+
+    class BinanceClientManager {
+        -_clients: Dict[str, BinanceClient]
+        -_accounts: Dict[str, BinanceAccountConfig]
+        +get_client(account_id: str): BinanceClient
+        +get_default_client(): BinanceClient
+        +add_account(...): None
+    }
+
+    class DatabaseService {
+        -db: Session | AsyncSession
+        +create_strategy(...): Strategy
+        +get_strategy(...): Strategy
+        +create_trade(...): Trade
+        +get_user_trades(...): List[Trade]
+        +get_user_trades_batch(...): List[Trade]
+    }
+
+    class RedisStorage {
+        -_client: Redis
+        -enabled: bool
+        +save_strategy(...): None
+        +get_strategy(...): StrategySummary
+        +save_trades(...): None
+        +get_trades(...): List[OrderResponse]
+    }
+
+    class CircuitBreaker {
+        -state: CircuitState
+        -failure_count: int
+        +call_sync(...): Any
+        +call_async(...): Any
+    }
+
+    class Settings {
+        +binance_api_key: str
+        +binance_api_secret: str
+        +database_url: str
+        +redis_enabled: bool
+    }
+}
+
+package "Models - Pydantic" {
+    class StrategySummary {
+        +id: str
+        +name: str
+        +symbol: str
+        +strategy_type: StrategyType
+        +status: StrategyState
+        +leverage: int
+        +position_size: Optional[float]
+        +position_side: Optional[Literal]
+        +entry_price: Optional[float]
+        +unrealized_pnl: Optional[float]
+    }
+
+    class OrderResponse {
+        +symbol: str
+        +order_id: int
+        +status: str
+        +side: Literal["BUY", "SELL"]
+        +price: float
+        +avg_price: Optional[float]
+        +executed_qty: float
+        +timestamp: Optional[datetime]
+        +leverage: Optional[int]
+        +commission: Optional[float]
+    }
+
+    class StrategySignal {
+        +action: SignalAction
+        +symbol: str
+        +confidence: float
+        +price: Optional[float]
+        +exit_reason: Optional[str]
+        +position_side: Optional[Literal]
+    }
+
+    class StrategyContext {
+        +id: str
+        +name: str
+        +symbol: str
+        +leverage: int
+        +risk_per_trade: float
+        +params: dict
+        +interval_seconds: int
+    }
+
+    class CreateStrategyRequest {
+        +name: str
+        +symbol: str
+        +strategy_type: StrategyType
+        +leverage: int
+        +risk_per_trade: float
+        +fixed_amount: Optional[float]
+        +params: StrategyParams
+    }
+}
+
+package "Models - SQLAlchemy" {
+    class User {
+        +id: UUID
+        +username: str
+        +email: str
+        +password_hash: str
+        +is_active: bool
+        +accounts: relationship
+        +strategies: relationship
+    }
+
+    class Account {
+        +id: UUID
+        +user_id: UUID
+        +account_id: str
+        +api_key: str
+        +api_secret: str
+        +testnet: bool
+        +is_active: bool
+    }
+
+    class Strategy {
+        +id: UUID
+        +user_id: UUID
+        +strategy_id: str
+        +name: str
+        +symbol: str
+        +strategy_type: str
+        +status: str
+        +leverage: int
+        +position_size: Optional[Numeric]
+        +position_side: Optional[str]
+        +entry_price: Optional[Numeric]
+        +unrealized_pnl: Optional[Numeric]
+    }
+
+    class Trade {
+        +id: UUID
+        +strategy_id: UUID
+        +user_id: UUID
+        +order_id: BigInteger
+        +symbol: str
+        +side: str
+        +price: Numeric
+        +executed_qty: Numeric
+        +timestamp: DateTime
+        +leverage: Optional[int]
+        +commission: Optional[Numeric]
+    }
+
+    User "1" -- "*" Account
+    User "1" -- "*" Strategy
+    Strategy "1" -- "*" Trade
+    Account "1" -- "*" Strategy
+}
+
+package "Services" {
+    class StrategyRunner {
+        -_strategies: Dict[str, StrategySummary]
+        -_tasks: Dict[str, asyncio.Task]
+        -_trades: Dict[str, List[OrderResponse]]
+        -client_manager: BinanceClientManager
+        -strategy_service: StrategyService
+        -trade_service: TradeService
+        +register(...): StrategySummary
+        +start(strategy_id: str): StrategySummary
+        +stop(strategy_id: str): StrategySummary
+        +list_strategies(): List[StrategySummary]
+        +get_trades(strategy_id: str): List[OrderResponse]
+    }
+
+    class StrategyExecutor {
+        -account_manager: StrategyAccountManager
+        -state_manager: StrategyPersistence
+        -order_manager: StrategyOrderManager
+        -notifications: NotificationService
+        +run_loop(...): None
+        -_execute_order(...): None
+    }
+
+    class StrategyOrderManager {
+        -account_manager: StrategyAccountManager
+        -trade_service: TradeService
+        -strategy_service: StrategyService
+        -user_id: UUID
+        +execute_order(...): Optional[OrderResponse]
+        +track_trade(...): None
+        +place_tp_sl_orders(...): None
+    }
+
+    class StrategyPersistence {
+        -strategy_service: StrategyService
+        -redis: RedisStorage
+        +update_position_info(...): None
+        +reconcile_position_state(...): None
+        +save_to_redis(...): None
+    }
+
+    class StrategyService {
+        -db_service: DatabaseService
+        -redis: RedisStorage
+        +create_strategy(...): StrategySummary
+        +get_strategy(...): StrategySummary
+        +list_strategies(...): List[StrategySummary]
+        +update_strategy(...): StrategySummary
+    }
+
+    class TradeService {
+        -db_service: DatabaseService
+        -redis: RedisStorage
+        +save_trade(...): Trade
+        +get_strategy_trades(...): List[OrderResponse]
+        +get_trades_batch(...): Dict[UUID, List[OrderResponse]]
+    }
+
+    class OrderExecutor {
+        -client: BinanceClient
+        -trade_service: TradeService
+        +execute(...): Optional[OrderResponse]
+    }
+
+    class RiskManager {
+        -client: BinanceClient
+        +size_position(...): PositionSizingResult
+        +calculate_risk(...): float
+    }
+
+    class NotificationService {
+        -telegram: TelegramNotifier
+        +notify_strategy_started(...): None
+        +notify_strategy_stopped(...): None
+        +notify_order_executed(...): None
+        +notify_strategy_error(...): None
+    }
+
+    class TelegramNotifier {
+        -bot_token: str
+        -chat_id: str
+        +send_message(...): bool
+        +notify_order_executed(...): bool
+        +notify_strategy_started(...): bool
+    }
+
+    class StrategyAccountManager {
+        -strategy_service: StrategyService
+        -client_manager: BinanceClientManager
+        +get_account_client(...): BinanceClient
+    }
+
+    class StrategyRegistry {
+        -_registry: Dict[str, type[Strategy]]
+        +build(...): Strategy
+    }
+
+    class BaseCacheService {
+        #db_service: DatabaseService
+        #redis: RedisStorage
+        #cache_ttl: int
+        #_save_to_cache(...): None
+        #_get_from_cache(...): Optional[Dict]
+        #_redis_key(...): str
+        #_invalidate_cache(...): None
+    }
+
+    class AccountService {
+        +create_account(...): BinanceAccountConfig
+        +get_account(...): Optional[BinanceAccountConfig]
+        +list_accounts(...): List[BinanceAccountConfig]
+        +get_default_account(...): Optional[BinanceAccountConfig]
+    }
+
+    BaseCacheService <|-- AccountService
+    BaseCacheService <|-- StrategyService
+}
+
+package "Strategies" {
+    abstract class Strategy {
+        #context: StrategyContext
+        #client: BinanceClient
+        +evaluate(): StrategySignal
+        +sync_position_state(...): None
+        +teardown(): None
+        +stop(): None
+    }
+
+    class EmaScalpingStrategy {
+        -position: Optional[Literal]
+        -entry_price: Optional[float]
+        -trailing_stop: Optional[TrailingStopManager]
+        +evaluate(): StrategySignal
+        +sync_position_state(...): None
+    }
+
+    class RangeMeanReversionStrategy {
+        -position: Optional[Literal]
+        -entry_price: Optional[float]
+        -entry_candle_time: Optional[datetime]
+        +evaluate(): StrategySignal
+        +sync_position_state(...): None
+    }
+
+    class TrailingStopManager {
+        -entry_price: float
+        -take_profit_pct: float
+        -stop_loss_pct: float
+        -position_type: Literal
+        +check_and_update(...): Optional[str]
+    }
+
+    Strategy <|-- EmaScalpingStrategy
+    Strategy <|-- RangeMeanReversionStrategy
+    EmaScalpingStrategy --> TrailingStopManager
+}
+
+package "API Routes" {
+    class FastAPI {
+        +get(...): Route
+        +post(...): Route
+    }
+
+    class StrategiesRouter {
+        +register(...): StrategySummary
+        +list_strategies(): List[StrategySummary]
+        +start(...): StrategySummary
+        +stop(...): StrategySummary
+    }
+
+    class TradesRouter {
+        +list_all_trades(): List[TradeWithTimestamp]
+        +get_symbol_pnl(...): SymbolPnL
+        +get_pnl_overview(): List[SymbolPnL]
+    }
+
+    class ReportsRouter {
+        +get_trading_report(): TradingReport
+    }
+
+    class AccountsRouter {
+        +create_account(...): Account
+        +list_accounts(): Dict[str, Account]
+    }
+}
+
+' Relationships
+StrategyRunner --> BinanceClientManager
+StrategyRunner --> StrategyService
+StrategyRunner --> TradeService
+StrategyRunner --> NotificationService
+StrategyRunner --> StrategyExecutor
+StrategyRunner --> StrategyRegistry
+
+StrategyExecutor --> StrategyOrderManager
+StrategyExecutor --> StrategyPersistence
+StrategyExecutor --> NotificationService
+StrategyExecutor --> StrategyAccountManager
+
+StrategyOrderManager --> OrderExecutor
+StrategyOrderManager --> TradeService
+StrategyOrderManager --> StrategyService
+
+StrategyPersistence --> StrategyService
+StrategyPersistence --> RedisStorage
+
+StrategyService --> DatabaseService
+StrategyService --> RedisStorage
+
+TradeService --> DatabaseService
+TradeService --> RedisStorage
+
+OrderExecutor --> BinanceClient
+OrderExecutor --> TradeService
+
+RiskManager --> BinanceClient
+
+StrategyRegistry --> Strategy
+Strategy --> BinanceClient
+Strategy --> StrategyContext
+
+StrategyExecutor --> Strategy
+StrategyOrderManager --> StrategySummary
+StrategyPersistence --> StrategySummary
+
+StrategiesRouter --> StrategyRunner
+StrategiesRouter --> StrategyService
+TradesRouter --> StrategyRunner
+TradesRouter --> TradeService
+ReportsRouter --> StrategyRunner
+ReportsRouter --> TradeService
+AccountsRouter --> AccountService
+
+BinanceClientManager --> BinanceClient
+BinanceClient --> CircuitBreaker
+BinanceClientManager --> Settings
+DatabaseService --> User
+DatabaseService --> Strategy
+DatabaseService --> Trade
+DatabaseService --> Account
+
+
+TradeService --> DatabaseService
+TradeService --> RedisStorage
+
+StrategyRegistry --> Strategy
+StrategyRegistry --> StrategyType
+
+NotificationService --> TelegramNotifier
+
+@enduml
+
