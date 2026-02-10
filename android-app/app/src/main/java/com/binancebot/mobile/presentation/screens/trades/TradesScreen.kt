@@ -30,6 +30,13 @@ import com.binancebot.mobile.presentation.viewmodel.TradesViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.rememberDatePickerState
 
 @Composable
 fun TradesScreen(
@@ -63,6 +70,7 @@ fun TradesScreen(
     var filterAccountId by remember { mutableStateOf<String?>(null) }
     var dateFrom by remember { mutableStateOf("") }
     var dateTo by remember { mutableStateOf("") }
+    var autoRefresh by remember { mutableStateOf(false) }
 
     // Load PnL overview when filters change
     LaunchedEffect(filterAccountId, dateFrom, dateTo) {
@@ -86,6 +94,21 @@ fun TradesScreen(
             dateTo = dateTo.takeIf { it.isNotBlank() },
             accountId = filterAccountId
         )
+    }
+    
+    // Auto-refresh functionality
+    LaunchedEffect(autoRefresh, selectedTabIndex) {
+        if (autoRefresh) {
+            while (autoRefresh) {
+                kotlinx.coroutines.delay(30000) // Refresh every 30 seconds
+                if (autoRefresh) { // Check again after delay
+                    when (selectedTabIndex) {
+                        0, 1 -> viewModel.loadPnLOverview()
+                        2 -> trades.refresh()
+                    }
+                }
+            }
+        }
     }
 
     // Collect all loaded trades for analytics (not just visible ones)
@@ -130,6 +153,16 @@ fun TradesScreen(
                     }
 
                     IconButton(
+                        onClick = { autoRefresh = !autoRefresh },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = if (autoRefresh) "Stop Auto-Refresh" else "Auto-Refresh",
+                            tint = if (autoRefresh) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    IconButton(
                         onClick = {
                             when (selectedTabIndex) {
                                 0, 1 -> viewModel.loadPnLOverview()
@@ -169,6 +202,37 @@ fun TradesScreen(
                 lastSyncTime = lastSyncTime.value,
                 modifier = Modifier.fillMaxWidth()
             )
+            
+            // Auto-refresh indicator
+            if (autoRefresh) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.Tiny),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(Spacing.Small),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.Small))
+                        Text(
+                            text = "Auto-refreshing every 30 seconds",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
 
             if (selectedTabIndex != 2 || trades.itemCount > 0) {
                 OverallStatsCard(
@@ -581,21 +645,19 @@ private fun FiltersSection(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
         ) {
-            OutlinedTextField(
+            DatePickerTextField(
                 value = dateFrom,
                 onValueChange = onDateFrom,
-                label = { Text("From Date") },
-                placeholder = { Text("YYYY-MM-DD") },
-                modifier = Modifier.weight(1f),
-                trailingIcon = { Icon(Icons.Default.DateRange, contentDescription = "Pick Date") }
+                label = "From Date",
+                placeholder = "YYYY-MM-DD",
+                modifier = Modifier.weight(1f)
             )
-            OutlinedTextField(
+            DatePickerTextField(
                 value = dateTo,
                 onValueChange = onDateTo,
-                label = { Text("To Date") },
-                placeholder = { Text("YYYY-MM-DD") },
-                modifier = Modifier.weight(1f),
-                trailingIcon = { Icon(Icons.Default.DateRange, contentDescription = "Pick Date") }
+                label = "To Date",
+                placeholder = "YYYY-MM-DD",
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -663,7 +725,7 @@ fun TradeCard(trade: com.binancebot.mobile.domain.model.Trade) {
                 }
             }
 
-            Divider()
+            HorizontalDivider()
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -803,6 +865,71 @@ fun TradeAnalyticsCard(
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    modifier: Modifier = Modifier
+) {
+    var showDatePicker by remember { mutableStateOf(false) }
+    val datePickerState = rememberDatePickerState(
+        initialSelectedDateMillis = value.takeIf { it.isNotBlank() }?.let {
+            try {
+                val date = java.time.LocalDate.parse(it, DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+                date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            } catch (e: Exception) {
+                System.currentTimeMillis()
+            }
+        } ?: System.currentTimeMillis()
+    )
+    
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        modifier = modifier.clickable { showDatePicker = true },
+        readOnly = true,
+        trailingIcon = {
+            IconButton(onClick = { showDatePicker = true }) {
+                Icon(Icons.Default.DateRange, contentDescription = "Pick Date")
+            }
+        }
+    )
+    
+    if (showDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val date = Instant.ofEpochMilli(millis)
+                                .atZone(ZoneId.systemDefault())
+                                .toLocalDate()
+                            val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+                            onValueChange(formatter.format(date))
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }

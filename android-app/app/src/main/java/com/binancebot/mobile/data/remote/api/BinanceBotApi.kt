@@ -80,6 +80,12 @@ interface BinanceBotApi {
     @GET("strategies/{strategy_id}/stats")
     suspend fun getStrategyStats(@Path("strategy_id") strategyId: String): Response<StrategyStatsDto>
     
+    @GET("strategies/{strategy_id}/activity")
+    suspend fun getStrategyActivity(
+        @Path("strategy_id") strategyId: String,
+        @Query("limit") limit: Int = 50
+    ): Response<List<StrategyActivityDto>>
+    
     // ========== Strategy Performance ==========
     
     @GET("strategies/performance")
@@ -184,13 +190,115 @@ interface BinanceBotApi {
     
     // ========== Risk Management ==========
     
-    @GET("risk/status/portfolio")
+    @GET("api/risk/status/portfolio")
     suspend fun getPortfolioRiskStatus(
         @Query("account_id") accountId: String? = null
     ): Response<PortfolioRiskStatusDto>
     
-    @GET("risk/config")
+    @GET("api/risk/config")
     suspend fun getRiskConfig(
         @Query("account_id") accountId: String? = null
     ): Response<RiskManagementConfigDto>
+    
+    @POST("api/risk/config")
+    suspend fun createRiskConfig(
+        @Query("account_id") accountId: String? = null,
+        @Body config: RiskManagementConfigDto
+    ): Response<RiskManagementConfigDto>
+    
+    @PUT("api/risk/config")
+    suspend fun updateRiskConfig(
+        @Query("account_id") accountId: String? = null,
+        @Body config: RiskManagementConfigDto
+    ): Response<RiskManagementConfigDto>
+    
+    @GET("api/risk/metrics/portfolio")
+    suspend fun getPortfolioRiskMetrics(
+        @Query("account_id") accountId: String? = null
+    ): Response<PortfolioRiskMetricsDto>
+    
+    @GET("api/risk/metrics/strategy/{strategy_id}")
+    suspend fun getStrategyRiskMetrics(
+        @Path("strategy_id") strategyId: String
+    ): Response<StrategyRiskMetricsDto>
+    
+    @GET("api/risk/enforcement/history")
+    suspend fun getEnforcementHistory(
+        @Query("account_id") accountId: String? = null,
+        @Query("event_type") eventType: String? = null,
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0
+    ): Response<EnforcementHistoryDto>
+    
+    @GET("api/risk/reports/daily")
+    suspend fun getDailyRiskReport(
+        @Query("account_id") accountId: String? = null
+    ): Response<RiskReportDto>
+    
+    @GET("api/risk/reports/weekly")
+    suspend fun getWeeklyRiskReport(
+        @Query("account_id") accountId: String? = null
+    ): Response<RiskReportDto>
+    
+    // ========== Backtesting ==========
+    
+    @POST("backtesting/run")
+    suspend fun runBacktest(
+        @Body request: BacktestRequestDto
+    ): Response<BacktestResultDto>
+    
+    // ========== Walk-Forward Analysis ==========
+    
+    @POST("backtesting/walk-forward/start")
+    suspend fun startWalkForwardAnalysis(
+        @Body request: WalkForwardRequestDto
+    ): Response<WalkForwardStartResponseDto>
+    
+    @GET("backtesting/walk-forward/progress/{task_id}")
+    suspend fun getWalkForwardProgress(
+        @Path("task_id") taskId: String
+    ): Response<WalkForwardProgressDto>
+    
+    @GET("backtesting/walk-forward/result/{task_id}")
+    suspend fun getWalkForwardResult(
+        @Path("task_id") taskId: String
+    ): Response<WalkForwardResultDto>
+    
+    @GET("backtesting/walk-forward/history")
+    suspend fun getWalkForwardHistory(
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0,
+        @Query("symbol") symbol: String? = null,
+        @Query("strategy_type") strategyType: String? = null
+    ): Response<Map<String, Any>> // Returns {"analyses": [...], "total": ...}
+    
+    // ========== Auto-Tuning ==========
+    
+    @POST("auto-tuning/strategies/{strategy_id}/enable")
+    suspend fun enableAutoTuning(
+        @Path("strategy_id") strategyId: String,
+        @Body request: EnableAutoTuningRequestDto
+    ): Response<Map<String, Any>>
+    
+    @POST("auto-tuning/strategies/{strategy_id}/disable")
+    suspend fun disableAutoTuning(
+        @Path("strategy_id") strategyId: String
+    ): Response<Map<String, Any>>
+    
+    @POST("auto-tuning/strategies/{strategy_id}/tune-now")
+    suspend fun tuneNow(
+        @Path("strategy_id") strategyId: String
+    ): Response<Map<String, Any>>
+    
+    @GET("auto-tuning/strategies/{strategy_id}/status")
+    suspend fun getTuningStatus(
+        @Path("strategy_id") strategyId: String
+    ): Response<TuningStatusResponseDto>
+    
+    @GET("auto-tuning/strategies/{strategy_id}/history")
+    suspend fun getTuningHistory(
+        @Path("strategy_id") strategyId: String,
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0
+    ): Response<Map<String, Any>> // Returns {"history": [...], "total": ...}
 }

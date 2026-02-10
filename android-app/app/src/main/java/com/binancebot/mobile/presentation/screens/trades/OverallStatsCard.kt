@@ -35,7 +35,7 @@ fun OverallStatsCard(
                 fontWeight = FontWeight.Bold
             )
             
-            Divider()
+            HorizontalDivider()
             
             // First Row: PnL Metrics
             Row(
@@ -59,7 +59,7 @@ fun OverallStatsCard(
                 )
             }
             
-            Divider()
+            HorizontalDivider()
             
             // Second Row: Trade Metrics
             Row(

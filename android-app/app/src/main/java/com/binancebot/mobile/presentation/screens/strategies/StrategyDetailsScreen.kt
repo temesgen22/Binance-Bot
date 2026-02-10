@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +33,7 @@ fun StrategyDetailsScreen(
     val strategy by viewModel.strategy.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val performance by viewModel.performance.collectAsState()
+    val activity by viewModel.activity.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     
     LaunchedEffect(strategyId) {
@@ -44,7 +46,7 @@ fun StrategyDetailsScreen(
                 title = { Text(strategy?.name ?: "Strategy Details") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -116,7 +118,7 @@ fun StrategyDetailsScreen(
                                     StatusBadge(status = strat.status)
                                 }
                                 
-                                Divider()
+                                HorizontalDivider()
                                 
                                 // Quick Actions
                                 Row(
@@ -188,6 +190,17 @@ fun StrategyDetailsScreen(
                         performance?.let { perf ->
                             AutoTuningSection(performance = perf)
                         }
+                        
+                        // Risk Configuration (from performance data if available)
+                        performance?.let { perf ->
+                            RiskConfigurationSection(
+                                strategyId = strategyId,
+                                accountId = perf.accountId
+                            )
+                        }
+                        
+                        // Activity History
+                        ActivityHistorySection(activity = activity)
                     }
                 } ?: run {
                     Box(
@@ -225,7 +238,7 @@ fun MetricSection(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             items.forEach { (label, value) ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -264,7 +277,7 @@ fun PositionSection(strategy: com.binancebot.mobile.domain.model.Strategy) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             
             if (strategy.hasPosition) {
                 strategy.positionSize?.let { size ->
@@ -315,7 +328,7 @@ fun ConfigurationSection(strategy: com.binancebot.mobile.domain.model.Strategy) 
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             MetricRow("Strategy Type", strategy.strategyType)
             MetricRow("Leverage", "${strategy.leverage}x")
             strategy.riskPerTrade?.let {
@@ -377,7 +390,7 @@ fun StrategyParametersSection(performance: StrategyPerformanceDto) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             
             // Filter parameters based on strategy type
             val relevantParams = getRelevantParams(performance.strategyType, performance.params)
@@ -409,7 +422,7 @@ fun TimestampsSection(performance: StrategyPerformanceDto) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             
             MetricRow("Created", FormatUtils.formatDateTime(performance.createdAt))
             performance.startedAt?.let {
@@ -445,7 +458,7 @@ fun AutoTuningSection(performance: StrategyPerformanceDto) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
             
             MetricRow(
                 "Status",
@@ -454,6 +467,135 @@ fun AutoTuningSection(performance: StrategyPerformanceDto) {
                 isPositive = performance.autoTuningEnabled
             )
         }
+    }
+}
+
+@Composable
+fun RiskConfigurationSection(
+    strategyId: String,
+    accountId: String?
+) {
+    // Parameters kept for potential future API integration
+    // Note: This section can be enhanced to fetch risk status from API
+    // For now, it shows a placeholder that can be expanded when API is integrated
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+        ) {
+            Text(
+                text = "Risk Configuration",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            HorizontalDivider()
+            
+            Text(
+                text = "Risk configuration is managed at the account level. " +
+                        "To view or edit risk settings, go to Risk Management screen.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            
+            // Placeholder for future enhancement:
+            // This section can be enhanced to fetch and display:
+            // - Strategy-specific risk limits (if configured)
+            // - Current risk status (can_trade, blocked_reasons)
+            // - Risk checks (portfolio_exposure, daily_loss, weekly_loss, circuit_breaker)
+            // - Risk metrics (current values vs limits)
+            // 
+            // API endpoint: GET /api/risk/status/strategy/{strategy_id}
+            // This would require:
+            // 1. Adding endpoint to BinanceBotApi
+            // 2. Adding DTO for StrategyRiskStatusResponse
+            // 3. Adding method to RiskManagementRepository
+            // 4. Fetching in StrategyDetailsViewModel
+            // 5. Displaying risk status and checks here
+        }
+    }
+}
+
+@Composable
+fun ActivityHistorySection(
+    activity: List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+        ) {
+            Text(
+                text = "Activity History",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            HorizontalDivider()
+            
+            if (activity.isEmpty()) {
+                Text(
+                    text = "No activity history available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                activity.forEachIndexed { index, event ->
+                    ActivityEventItem(event = event)
+                    if (index < activity.size - 1) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.ExtraSmall))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActivityEventItem(
+    event: com.binancebot.mobile.data.remote.dto.StrategyActivityDto
+) {
+    val eventColor = when (event.eventLevel.uppercase()) {
+        "ERROR", "CRITICAL" -> MaterialTheme.colorScheme.error
+        "WARNING" -> MaterialTheme.colorScheme.errorContainer
+        "INFO" -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(Spacing.ExtraSmall)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = event.eventType.replace("_", " ").replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = eventColor
+            )
+            Text(
+                text = FormatUtils.formatDateTime(event.createdAt),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = event.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

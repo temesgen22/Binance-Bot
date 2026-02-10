@@ -27,6 +27,9 @@ class StrategyDetailsViewModel @Inject constructor(
     private val _performance = MutableStateFlow<com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto?>(null)
     val performance: StateFlow<com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto?> = _performance.asStateFlow()
     
+    private val _activity = MutableStateFlow<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>>(emptyList())
+    val activity: StateFlow<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>> = _activity.asStateFlow()
+    
     private val _uiState = MutableStateFlow<StrategyDetailsUiState>(StrategyDetailsUiState.Idle)
     val uiState: StateFlow<StrategyDetailsUiState> = _uiState.asStateFlow()
     
@@ -34,16 +37,18 @@ class StrategyDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = StrategyDetailsUiState.Loading
             
-            // Load strategy, stats, and performance in parallel
+            // Load strategy, stats, performance, and activity in parallel
             val strategyResult = strategyRepository.getStrategy(strategyId)
             val statsResult = strategyRepository.getStrategyStats(strategyId)
             val performanceResult = performanceRepository.getStrategyPerformanceById(strategyId)
+            val activityResult = strategyRepository.getStrategyActivity(strategyId, limit = 50)
             
             when {
                 strategyResult.isSuccess -> {
                     _strategy.value = strategyResult.getOrNull()
                     _stats.value = statsResult.getOrNull()
                     _performance.value = performanceResult.getOrNull()
+                    _activity.value = activityResult.getOrNull() ?: emptyList()
                     _uiState.value = StrategyDetailsUiState.Success
                 }
                 else -> {

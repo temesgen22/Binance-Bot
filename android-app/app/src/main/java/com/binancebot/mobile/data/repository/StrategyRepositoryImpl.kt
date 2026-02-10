@@ -118,4 +118,17 @@ class StrategyRepositoryImpl @Inject constructor(
             }
         }
     }
+    
+    override suspend fun getStrategyActivity(strategyId: String, limit: Int): Result<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>> {
+        return retryApiCall {
+            val response = api.getStrategyActivity(strategyId, limit)
+            response.toResult()
+        }.let {
+            when (it) {
+                is com.binancebot.mobile.util.ApiResult.Success -> Result.success(it.data)
+                is com.binancebot.mobile.util.ApiResult.Error -> Result.failure(Exception(it.message))
+                is com.binancebot.mobile.util.ApiResult.Exception -> Result.failure(it.throwable)
+            }
+        }
+    }
 }

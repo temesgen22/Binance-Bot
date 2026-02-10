@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,17 +44,30 @@ fun SettingsScreen(
     var showThemeDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     
+    val snackbarHostState = remember { SnackbarHostState() }
+    
+    // Show error message if any
+    (uiState as? com.binancebot.mobile.presentation.viewmodel.SettingsUiState.Error)?.let { errorState ->
+        LaunchedEffect(errorState) {
+            snackbarHostState.showSnackbar(
+                message = errorState.message,
+                duration = SnackbarDuration.Long
+            )
+        }
+    }
+    
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -77,7 +93,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     
                     // User Info Display
                     currentUser?.let { user ->
@@ -107,7 +123,7 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        Divider()
+                        HorizontalDivider()
                     }
                     
                     SettingsItem(
@@ -142,7 +158,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     
                     SettingsItem(
                         icon = Icons.Default.Notifications,
@@ -208,7 +224,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     
                     SettingsItem(
                         icon = Icons.Default.Info,
@@ -218,7 +234,7 @@ fun SettingsScreen(
                     )
                     
                     SettingsItem(
-                        icon = Icons.Default.Help,
+                        icon = Icons.AutoMirrored.Filled.Help,
                         title = "Help & Support",
                         subtitle = "Get help and contact support",
                         onClick = { 
@@ -247,7 +263,7 @@ fun SettingsScreen(
                     containerColor = MaterialTheme.colorScheme.error
                 )
             ) {
-                Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.Logout, null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(Spacing.Small))
                 Text("Logout")
             }
@@ -340,7 +356,10 @@ fun SettingsScreen(
     // Show error message if any
     (uiState as? com.binancebot.mobile.presentation.viewmodel.SettingsUiState.Error)?.let { errorState ->
         LaunchedEffect(errorState) {
-            // TODO: Show snackbar with error message
+            snackbarHostState.showSnackbar(
+                message = errorState.message,
+                duration = SnackbarDuration.Long
+            )
         }
     }
 }

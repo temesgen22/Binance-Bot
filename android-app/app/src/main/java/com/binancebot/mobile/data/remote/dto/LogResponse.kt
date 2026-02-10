@@ -11,16 +11,17 @@ data class LogResponse(
 
 data class LogEntryDto(
     @SerializedName("id")
-    val id: String,
+    val id: String? = null,
     @SerializedName("timestamp")
-    val timestamp: String,
+    val timestamp: String? = null,
     @SerializedName("level")
-    val level: String,
+    val level: String? = null,
     @SerializedName("message")
-    val message: String,
+    val message: String? = null,
     @SerializedName("symbol")
     val symbol: String? = null
 )
+
 
 
 

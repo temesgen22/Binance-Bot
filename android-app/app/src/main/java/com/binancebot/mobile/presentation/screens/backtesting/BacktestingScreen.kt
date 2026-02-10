@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.binancebot.mobile.presentation.screens.backtesting
 
 import androidx.compose.foundation.clickable
@@ -5,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +30,7 @@ fun BacktestingScreen(
 ) {
     var selectedTabIndex by remember { mutableStateOf(0) }
     val backtestHistory by viewModel.backtestHistory.collectAsState()
+    val currentResult by viewModel.currentBacktestResult.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     
     Scaffold(
@@ -35,7 +39,7 @@ fun BacktestingScreen(
                 title = { Text("Backtesting") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -50,12 +54,18 @@ fun BacktestingScreen(
             TabRow(selectedTabIndex = selectedTabIndex) {
                 Tab(
                     selected = selectedTabIndex == 0,
-                    onClick = { selectedTabIndex = 0 },
+                    onClick = { 
+                        selectedTabIndex = 0
+                        viewModel.clearCurrentResult()
+                    },
                     text = { Text("New") }
                 )
                 Tab(
                     selected = selectedTabIndex == 1,
-                    onClick = { selectedTabIndex = 1 },
+                    onClick = { 
+                        selectedTabIndex = 1
+                        // Don't clear result if viewing details
+                    },
                     text = { Text("History") }
                 )
             }
@@ -67,14 +77,51 @@ fun BacktestingScreen(
                     uiState = uiState,
                     onRetry = { viewModel.loadBacktestHistory() }
                 )
-                1 -> BacktestHistoryTab(
-                    backtestHistory = backtestHistory,
-                    uiState = uiState,
-                    onRetry = { viewModel.loadBacktestHistory() },
-                    onViewDetails = { backtestId ->
-                        // TODO: Navigate to backtest details
+                1 -> {
+                    // Show results if viewing a specific backtest
+                    if (currentResult != null) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(Spacing.ScreenPadding),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Backtest Details",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                TextButton(onClick = { viewModel.clearCurrentResult() }) {
+                                    Text("Back to History")
+                                }
+                            }
+                            BacktestResultsCard(
+                                result = currentResult!!,
+                                onDismiss = { viewModel.clearCurrentResult() }
+                            )
+                        }
+                    } else {
+                        BacktestHistoryTab(
+                            backtestHistory = backtestHistory,
+                            uiState = uiState,
+                            onRetry = { viewModel.loadBacktestHistory() },
+                            onViewDetails = { backtestId ->
+                                // Show backtest details - find the backtest in history and display it
+                                val backtest = backtestHistory.find { it.id == backtestId }
+                                backtest?.let {
+                                    // Store the result to display it
+                                    viewModel.setCurrentResult(it)
+                                }
+                            }
+                        )
                     }
-                )
+                }
             }
         }
     }
@@ -84,12 +131,27 @@ fun BacktestingScreen(
 fun NewBacktestTab(
     viewModel: BacktestingViewModel,
     uiState: BacktestingUiState,
-    onRetry: () -> Unit
+    onRetry: () -> Unit = {}
 ) {
-    var selectedStrategyId by remember { mutableStateOf<String?>(null) }
+    val currentResult by viewModel.currentBacktestResult.collectAsState()
+    val strategiesViewModel: com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel = hiltViewModel()
+    val strategies by strategiesViewModel.strategies.collectAsState()
+    
+    var selectedStrategy by remember { mutableStateOf<com.binancebot.mobile.domain.model.Strategy?>(null) }
+    var symbol by remember { mutableStateOf("BTCUSDT") }
     var startDate by remember { mutableStateOf("") }
     var endDate by remember { mutableStateOf("") }
+    var leverage by remember { mutableStateOf("5") }
+    var riskPerTrade by remember { mutableStateOf("0.01") }
+    var initialBalance by remember { mutableStateOf("1000.0") }
+    var showAdvancedOptions by remember { mutableStateOf(false) }
+    var expandedStrategyDropdown by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(Unit) {
+        strategiesViewModel.loadStrategies()
+        viewModel.loadBacktestHistory()
+    }
     
     Column(
         modifier = Modifier
@@ -113,25 +175,60 @@ fun NewBacktestTab(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                Divider()
+                HorizontalDivider()
+                
+                // Symbol Input
+                OutlinedTextField(
+                    value = symbol,
+                    onValueChange = { symbol = it.uppercase() },
+                    label = { Text("Symbol (e.g., BTCUSDT)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(Icons.Default.CurrencyBitcoin, contentDescription = null)
+                    }
+                )
                 
                 // Strategy Selection
                 Text(
-                    text = "Strategy",
+                    text = "Strategy Type",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Spacing.Small)
                 )
-                OutlinedTextField(
-                    value = selectedStrategyId ?: "",
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Select Strategy") },
-                    trailingIcon = {
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Choose a strategy to backtest") }
-                )
+                ExposedDropdownMenuBox(
+                    expanded = expandedStrategyDropdown,
+                    onExpandedChange = { expandedStrategyDropdown = !expandedStrategyDropdown }
+                ) {
+                    OutlinedTextField(
+                        value = selectedStrategy?.let { "${it.name} (${it.strategyType})" } ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Select Strategy") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedStrategyDropdown)
+                        },
+                        placeholder = { Text("Choose a strategy to backtest") }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedStrategyDropdown,
+                        onDismissRequest = { expandedStrategyDropdown = false }
+                    ) {
+                        strategies.forEach { strategy ->
+                            DropdownMenuItem(
+                                text = { Text("${strategy.name} (${strategy.strategyType})") },
+                                onClick = {
+                                    selectedStrategy = strategy
+                                    symbol = strategy.symbol
+                                    expandedStrategyDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
                 
                 // Date Range
                 Text(
@@ -170,14 +267,79 @@ fun NewBacktestTab(
                     )
                 }
                 
+                // Advanced Options Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Advanced Options",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = showAdvancedOptions,
+                        onCheckedChange = { showAdvancedOptions = it }
+                    )
+                }
+                
+                // Advanced Options
+                if (showAdvancedOptions) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
+                        ) {
+                            OutlinedTextField(
+                                value = leverage,
+                                onValueChange = { leverage = it },
+                                label = { Text("Leverage") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = riskPerTrade,
+                                onValueChange = { riskPerTrade = it },
+                                label = { Text("Risk Per Trade") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+                        OutlinedTextField(
+                            value = initialBalance,
+                            onValueChange = { initialBalance = it },
+                            label = { Text("Initial Balance (USDT)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+                
                 // Run Backtest Button
                 Spacer(modifier = Modifier.height(Spacing.Medium))
                 Button(
                     onClick = {
-                        // TODO: Implement backtest execution
+                        selectedStrategy?.let { strategy ->
+                            viewModel.runBacktest(
+                                symbol = symbol,
+                                strategyType = strategy.strategyType,
+                                startTime = startDate,
+                                endTime = endDate,
+                                leverage = leverage.toIntOrNull() ?: 5,
+                                riskPerTrade = riskPerTrade.toDoubleOrNull() ?: 0.01,
+                                initialBalance = initialBalance.toDoubleOrNull() ?: 1000.0,
+                                params = emptyMap() // Could extract from strategy.params if available
+                            )
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selectedStrategyId != null && startDate.isNotBlank() && endDate.isNotBlank() && uiState !is BacktestingUiState.Loading
+                    enabled = selectedStrategy != null && 
+                             symbol.isNotBlank() && 
+                             startDate.isNotBlank() && 
+                             endDate.isNotBlank() && 
+                             uiState !is BacktestingUiState.Loading
                 ) {
                     if (uiState is BacktestingUiState.Loading) {
                         CircularProgressIndicator(
@@ -192,15 +354,15 @@ fun NewBacktestTab(
                         Text("Run Backtest")
                     }
                 }
-                
-                // Info Message
-                Text(
-                    text = "Note: Backtesting functionality requires backend API implementation. The endpoints are not currently available.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = Spacing.Small)
-                )
             }
+        }
+        
+        // Results Display
+        currentResult?.let { result ->
+            BacktestResultsCard(
+                result = result,
+                onDismiss = { viewModel.clearCurrentResult() }
+            )
         }
         
         // Info Card
@@ -233,6 +395,236 @@ fun NewBacktestTab(
 }
 
 @Composable
+fun BacktestResultsCard(
+    result: com.binancebot.mobile.data.remote.dto.BacktestResultDto,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "📊 Backtest Results",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+            HorizontalDivider()
+            
+            // Key Metrics
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = "Total PnL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.totalPnL),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (result.totalPnL >= 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Return",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = String.format("%.2f%%", result.totalReturnPct),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (result.totalReturnPct >= 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
+                    )
+                }
+            }
+            
+            // Performance Metrics Grid
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(Spacing.Medium),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Win Rate",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = String.format("%.2f%%", result.winRate * 100),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Total Trades",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${result.totalTrades} (${result.completedTrades} completed, ${result.openTrades} open)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Winning/Losing",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${result.winningTrades}W / ${result.losingTrades}L",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Avg Profit/Trade",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.avgProfitPerTrade),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Largest Win",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.largestWin),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Largest Loss",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.largestLoss),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Max Drawdown",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.maxDrawdown)} (${String.format("%.2f%%", result.maxDrawdownPct)})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Total Fees",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.totalFees),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Final Balance",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.finalBalance),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun BacktestHistoryTab(
     backtestHistory: List<com.binancebot.mobile.data.remote.dto.BacktestResultDto>,
     uiState: BacktestingUiState,
@@ -250,7 +642,7 @@ fun BacktestHistoryTab(
         }
         is BacktestingUiState.Error -> {
             ErrorHandler(
-                message = (uiState as BacktestingUiState.Error).message,
+                message = uiState.message,
                 onRetry = onRetry,
                 modifier = Modifier.fillMaxSize()
             )
@@ -360,7 +752,7 @@ fun BacktestHistoryCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "${backtest.totalPnL}",
+                        text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(backtest.totalPnL),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (backtest.totalPnL >= 0) {

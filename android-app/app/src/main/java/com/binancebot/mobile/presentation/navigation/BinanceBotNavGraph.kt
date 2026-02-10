@@ -24,6 +24,7 @@ fun BinanceBotNavGraph(
     startDestination: String,
     onOpenDrawer: () -> Unit = {}
 ) {
+    // onOpenDrawer kept for potential future drawer navigation
     NavHost(navController = navController, startDestination = startDestination) {
         composable(Screen.Login.route) {
             LoginScreen(

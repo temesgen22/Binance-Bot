@@ -71,14 +71,14 @@ data class LogFilters(
 // Extension to convert DTO to domain
 private fun LogEntryDto.toDomain(): LogEntry {
     return LogEntry(
-        id = id,
+        id = id ?: System.currentTimeMillis().toString(),
         timestamp = try {
-            java.time.Instant.parse(timestamp).toEpochMilli()
+            timestamp?.let { java.time.Instant.parse(it).toEpochMilli() } ?: System.currentTimeMillis()
         } catch (e: Exception) {
             System.currentTimeMillis()
         },
-        level = level,
-        message = message,
+        level = level ?: "UNKNOWN",
+        message = message ?: "",
         symbol = symbol
     )
 }

@@ -2,7 +2,10 @@ package com.binancebot.mobile.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.binancebot.mobile.data.remote.dto.AutoTuningConfigDto
 import com.binancebot.mobile.domain.model.Strategy
+import com.binancebot.mobile.domain.repository.AutoTuningRepository
+import com.binancebot.mobile.domain.repository.StrategyRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,7 +15,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class AutoTuningViewModel @Inject constructor(
-    // TODO: Inject AutoTuningRepository and StrategyRepository when API is available
+    private val autoTuningRepository: AutoTuningRepository,
+    private val strategyRepository: StrategyRepository
 ) : ViewModel() {
     
     private val _strategies = MutableStateFlow<List<Strategy>>(emptyList())
@@ -24,34 +28,70 @@ class AutoTuningViewModel @Inject constructor(
     fun loadStrategies() {
         viewModelScope.launch {
             _uiState.value = AutoTuningUiState.Loading
-            // TODO: Load strategies from repository
-            // For now, return empty list
-            _strategies.value = emptyList()
-            _uiState.value = AutoTuningUiState.Success
+            strategyRepository.getStrategies()
+                .onSuccess { strategiesList ->
+                    _strategies.value = strategiesList
+                    _uiState.value = AutoTuningUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = AutoTuningUiState.Error(
+                        error.message ?: "Failed to load strategies"
+                    )
+                }
         }
     }
     
-    fun enableAutoTuning(strategyId: String) {
+    fun enableAutoTuning(
+        strategyId: String,
+        config: AutoTuningConfigDto = AutoTuningConfigDto() // Default config
+    ) {
         viewModelScope.launch {
             _uiState.value = AutoTuningUiState.Loading
-            // TODO: Implement API call when backend is available
-            _uiState.value = AutoTuningUiState.Error("Auto-Tuning API not yet implemented. Please wait for backend support.")
+            autoTuningRepository.enableAutoTuning(strategyId, config)
+                .onSuccess {
+                    // Refresh strategies to get updated auto-tuning status
+                    loadStrategies()
+                    _uiState.value = AutoTuningUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = AutoTuningUiState.Error(
+                        error.message ?: "Failed to enable auto-tuning"
+                    )
+                }
         }
     }
     
     fun disableAutoTuning(strategyId: String) {
         viewModelScope.launch {
             _uiState.value = AutoTuningUiState.Loading
-            // TODO: Implement API call when backend is available
-            _uiState.value = AutoTuningUiState.Error("Auto-Tuning API not yet implemented. Please wait for backend support.")
+            autoTuningRepository.disableAutoTuning(strategyId)
+                .onSuccess {
+                    // Refresh strategies to get updated auto-tuning status
+                    loadStrategies()
+                    _uiState.value = AutoTuningUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = AutoTuningUiState.Error(
+                        error.message ?: "Failed to disable auto-tuning"
+                    )
+                }
         }
     }
     
     fun tuneNow(strategyId: String) {
         viewModelScope.launch {
             _uiState.value = AutoTuningUiState.Loading
-            // TODO: Implement API call when backend is available
-            _uiState.value = AutoTuningUiState.Error("Auto-Tuning API not yet implemented. Please wait for backend support.")
+            autoTuningRepository.tuneNow(strategyId)
+                .onSuccess {
+                    _uiState.value = AutoTuningUiState.Success
+                    // Optionally refresh strategies after tuning
+                    loadStrategies()
+                }
+                .onFailure { error ->
+                    _uiState.value = AutoTuningUiState.Error(
+                        error.message ?: "Failed to trigger tuning"
+                    )
+                }
         }
     }
 }

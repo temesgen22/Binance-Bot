@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,7 +26,7 @@ fun DataPrivacyScreen(
                 title = { Text("Data & Privacy") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -55,7 +56,7 @@ fun DataPrivacyScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     Text(
                         text = "We collect the following data:",
                         style = MaterialTheme.typography.bodyMedium,
@@ -85,7 +86,7 @@ fun DataPrivacyScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     Text(
                         text = "Your data is stored securely:",
                         style = MaterialTheme.typography.bodyMedium,
@@ -114,7 +115,7 @@ fun DataPrivacyScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Divider()
+                    HorizontalDivider()
                     Text(
                         text = "You have the right to:",
                         style = MaterialTheme.typography.bodyMedium,

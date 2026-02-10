@@ -1,7 +1,13 @@
 package com.binancebot.mobile.presentation.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -22,46 +28,51 @@ fun NavigationDrawer(
     modifier: Modifier = Modifier
 ) {
     ModalDrawerSheet(modifier = modifier) {
-        // Header
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.Large),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier.fillMaxSize()
         ) {
-            Text(
-                text = "Binance Bot",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(Spacing.Small))
-            Text(
-                text = "Trading Platform",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
-        Divider()
-        
-        // Navigation Items
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = Spacing.Small)
-        ) {
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                label = { Text(Screen.Home.title) },
-                selected = currentRoute == Screen.Home.route,
-                onClick = {
-                    onNavigate(Screen.Home.route)
-                    onClose()
-                },
-                modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
+            // Header
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(Spacing.Large),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Binance Bot",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(Spacing.Small))
+                Text(
+                    text = "Trading Platform",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             
-            NavigationDrawerItem(
+            HorizontalDivider()
+            
+            // Navigation Items - Scrollable
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = Spacing.Small)
+            ) {
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    label = { Text(Screen.Home.title) },
+                    selected = currentRoute == Screen.Home.route,
+                    onClick = {
+                        onNavigate(Screen.Home.route)
+                        onClose()
+                    },
+                    modifier = Modifier.padding(horizontal = Spacing.Small)
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
                 label = { Text(Screen.Dashboard.title) },
                 selected = currentRoute == Screen.Dashboard.route,
@@ -70,10 +81,10 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.List, contentDescription = null) },
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
                 label = { Text(Screen.Strategies.title) },
                 selected = currentRoute == Screen.Strategies.route,
                 onClick = {
@@ -81,9 +92,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.ShoppingCart, contentDescription = null) },
                 label = { Text(Screen.Trades.title) },
                 selected = currentRoute == Screen.Trades.route,
@@ -92,9 +103,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
                 label = { Text(Screen.Accounts.title) },
                 selected = currentRoute == Screen.Accounts.route,
@@ -103,9 +114,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Security, contentDescription = null) },
                 label = { Text(Screen.RiskManagement.title) },
                 selected = currentRoute == Screen.RiskManagement.route,
@@ -114,9 +125,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Assessment, contentDescription = null) },
                 label = { Text(Screen.Reports.title) },
                 selected = currentRoute == Screen.Reports.route,
@@ -125,10 +136,10 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.Article, contentDescription = null) },
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.Article, contentDescription = null) },
                 label = { Text(Screen.Logs.title) },
                 selected = currentRoute == Screen.Logs.route,
                 onClick = {
@@ -136,20 +147,20 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.TrendingUp, contentDescription = null) },
-                label = { Text(Screen.MarketAnalyzer.title) },
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.TrendingUp, contentDescription = null) },
+                    label = { Text(Screen.MarketAnalyzer.title) },
                 selected = currentRoute == Screen.MarketAnalyzer.route,
                 onClick = {
                     onNavigate(Screen.MarketAnalyzer.route)
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
                 label = { Text(Screen.Backtesting.title) },
                 selected = currentRoute == Screen.Backtesting.route,
@@ -158,20 +169,20 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.TrendingUp, contentDescription = null) },
-                label = { Text(Screen.WalkForward.title) },
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.TrendingUp, contentDescription = null) },
+                    label = { Text(Screen.WalkForward.title) },
                 selected = currentRoute == Screen.WalkForward.route,
                 onClick = {
                     onNavigate(Screen.WalkForward.route)
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Assessment, contentDescription = null) },
                 label = { Text(Screen.StrategyPerformance.title) },
                 selected = currentRoute == Screen.StrategyPerformance.route,
@@ -180,9 +191,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Security, contentDescription = null) },
                 label = { Text(Screen.TestAccounts.title) },
                 selected = currentRoute == Screen.TestAccounts.route,
@@ -191,9 +202,9 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
+                )
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Tune, contentDescription = null) },
                 label = { Text(Screen.AutoTuning.title) },
                 selected = currentRoute == Screen.AutoTuning.route,
@@ -203,10 +214,10 @@ fun NavigationDrawer(
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
             )
-            
-            Divider(modifier = Modifier.padding(vertical = Spacing.Small))
-            
-            NavigationDrawerItem(
+                
+                Divider(modifier = Modifier.padding(vertical = Spacing.Small))
+                
+                NavigationDrawerItem(
                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                 label = { Text(Screen.Settings.title) },
                 selected = currentRoute == Screen.Settings.route,
@@ -215,10 +226,10 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
-            
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Default.Logout, contentDescription = null) },
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
                 label = { Text("Logout") },
                 selected = false,
                 onClick = {
@@ -226,7 +237,8 @@ fun NavigationDrawer(
                     onClose()
                 },
                 modifier = Modifier.padding(horizontal = Spacing.Small)
-            )
+                )
+            }
         }
     }
 }

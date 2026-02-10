@@ -137,7 +137,7 @@ fun PositionCard(position: Position) {
                 }
             }
             
-            Divider()
+            HorizontalDivider()
             
             // Position Details
             Row(

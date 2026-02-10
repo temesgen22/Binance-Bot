@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,11 +20,13 @@ import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.ReportsViewModel
 import com.binancebot.mobile.presentation.viewmodel.ReportsUiState
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.ui.platform.LocalContext
+import com.binancebot.mobile.presentation.util.ExportUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,11 +36,15 @@ fun ReportsScreen(
 ) {
     val tradingReport by viewModel.tradingReport.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     
     // Filter state
     var showFilters by remember { mutableStateOf(false) }
     var selectedTimeFilter by remember { mutableStateOf<String?>(null) }
     var selectedStrategyId by remember { mutableStateOf<String?>(null) }
+    
+    // Export dialog state
+    var showExportDialog by remember { mutableStateOf(false) }
     
     // Calculate date range from time filter
     val dateRange = remember(selectedTimeFilter) {
@@ -91,7 +98,7 @@ fun ReportsScreen(
                 title = { Text("Trading Reports") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -250,41 +257,34 @@ fun ReportsScreen(
                                             horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
                                         ) {
                                             IconButton(
-                                            onClick = { 
-                                                // Export functionality
-                                                // TODO: Implement CSV export
-                                                // This would require:
-                                                // 1. Convert report data to CSV format
-                                                // 2. Use Android FileProvider to save file
-                                                // 3. Share via Intent
-                                            },
-                                            modifier = Modifier.size(40.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.FileDownload,
-                                                contentDescription = "Export",
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { 
-                                                // Share functionality
-                                                // TODO: Implement share
-                                                // This would require:
-                                                // 1. Convert report to shareable format (text/JSON)
-                                                // 2. Use Android ShareSheet
-                                            },
-                                            modifier = Modifier.size(40.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Share,
-                                                contentDescription = "Share",
-                                                modifier = Modifier.size(20.dp)
-                                            )
+                                                onClick = { showExportDialog = true },
+                                                modifier = Modifier.size(40.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.FileDownload,
+                                                    contentDescription = "Export",
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { 
+                                                    tradingReport?.let { report ->
+                                                        val text = ExportUtils.formatReportAsText(report)
+                                                        ExportUtils.shareText(context, text, "Share Trading Report")
+                                                    }
+                                                },
+                                                modifier = Modifier.size(40.dp),
+                                                enabled = tradingReport != null
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Share,
+                                                    contentDescription = "Share",
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
                                         }
                                     }
-                                    }
-                                    Divider()
+                                    HorizontalDivider()
                                     
                                     // Metrics Grid (2x2)
                                     Row(
@@ -298,7 +298,7 @@ fun ReportsScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Text(
-                                                text = "${report.totalTrades ?: 0}",
+                                                text = "${report.totalTrades}",
                                                 style = MaterialTheme.typography.headlineMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
@@ -310,7 +310,7 @@ fun ReportsScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Text(
-                                                text = "${String.format("%.2f", (report.overallWinRate ?: 0.0) * 100)}%",
+                                                text = "${String.format("%.2f", report.overallWinRate * 100)}%",
                                                 style = MaterialTheme.typography.headlineMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
@@ -330,7 +330,7 @@ fun ReportsScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Text(
-                                                text = "${report.totalStrategies ?: 0}",
+                                                text = "${report.totalStrategies}",
                                                 style = MaterialTheme.typography.headlineMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
@@ -342,10 +342,10 @@ fun ReportsScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Text(
-                                                text = FormatUtils.formatCurrency(report.overallNetPnl ?: 0.0),
+                                                text = FormatUtils.formatCurrency(report.overallNetPnl),
                                                 style = MaterialTheme.typography.headlineMedium,
                                                 fontWeight = FontWeight.Bold,
-                                                color = if ((report.overallNetPnl ?: 0.0) >= 0) {
+                                                color = if (report.overallNetPnl >= 0) {
                                                     MaterialTheme.colorScheme.primary
                                                 } else {
                                                     MaterialTheme.colorScheme.error
@@ -355,22 +355,20 @@ fun ReportsScreen(
                                     }
                                     
                                     // Report Generated At
-                                    report.reportGeneratedAt?.let {
-                                        Spacer(modifier = Modifier.height(Spacing.Small))
-                                        Text(
-                                            text = "Generated: $it",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                                    Spacer(modifier = Modifier.height(Spacing.Small))
+                                    Text(
+                                        text = "Generated: ${report.reportGeneratedAt}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                             
                             // Win Rate Chart for Strategies
-                            if (report.strategies != null && report.strategies.isNotEmpty()) {
+                            if (report.strategies.isNotEmpty()) {
                                 val winRateData = report.strategies.map { strategyReport ->
                                     (strategyReport.strategyName ?: "Unknown") to 
-                                        ((strategyReport.winRate ?: 0.0) * 100).toFloat()
+                                        (strategyReport.winRate * 100).toFloat()
                                 }
                                 
                                 com.binancebot.mobile.presentation.components.charts.WinRateChart(
@@ -380,7 +378,7 @@ fun ReportsScreen(
                             }
                             
                             // Strategy Reports
-                            if (report.strategies != null && report.strategies.isNotEmpty()) {
+                            if (report.strategies.isNotEmpty()) {
                                 Text(
                                     text = "Strategy Performance",
                                     style = MaterialTheme.typography.titleMedium,
@@ -403,11 +401,11 @@ fun ReportsScreen(
                                                 style = MaterialTheme.typography.titleMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
-                                            Divider()
+                                            HorizontalDivider()
                                             
-                                            MetricRow("Total Trades", "${strategyReport.totalTrades ?: 0}")
-                                            MetricRow("Win Rate", "${String.format("%.2f", (strategyReport.winRate ?: 0.0) * 100)}%")
-                                            MetricRow("Total PnL", FormatUtils.formatCurrency(strategyReport.netPnl ?: 0.0))
+                                            MetricRow("Total Trades", "${strategyReport.totalTrades}")
+                                            MetricRow("Win Rate", "${String.format("%.2f", strategyReport.winRate * 100)}%")
+                                            MetricRow("Total PnL", FormatUtils.formatCurrency(strategyReport.netPnl))
                                             // Calculate profit factor if we have profit and loss data
                                             val profitFactor = if (strategyReport.totalLossUsd != 0.0) {
                                                 strategyReport.totalProfitUsd / strategyReport.totalLossUsd
@@ -430,6 +428,56 @@ fun ReportsScreen(
                     }
                 }
             }
+        }
+        
+        // Export Dialog
+        if (showExportDialog && tradingReport != null) {
+            AlertDialog(
+                onDismissRequest = { showExportDialog = false },
+                title = { Text("Export Report") },
+                text = {
+                    Column {
+                        Text("Choose export format:")
+                        Spacer(modifier = Modifier.height(Spacing.Medium))
+                    }
+                },
+                confirmButton = {
+                    Column {
+                        Button(
+                            onClick = {
+                                tradingReport?.let { report ->
+                                    val uri = ExportUtils.exportReportToCsv(context, report)
+                                    uri?.let {
+                                        ExportUtils.shareFile(context, it, "text/csv", "Share Trading Report (CSV)")
+                                    }
+                                    showExportDialog = false
+                                }
+                            }
+                        ) {
+                            Text("Export as CSV")
+                        }
+                        Spacer(modifier = Modifier.height(Spacing.Small))
+                        Button(
+                            onClick = {
+                                tradingReport?.let { report ->
+                                    val uri = ExportUtils.exportReportToJson(context, report)
+                                    uri?.let {
+                                        ExportUtils.shareFile(context, it, "application/json", "Share Trading Report (JSON)")
+                                    }
+                                    showExportDialog = false
+                                }
+                            }
+                        ) {
+                            Text("Export as JSON")
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showExportDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }

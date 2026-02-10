@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,13 +37,18 @@ fun StrategyPerformanceScreen(
     var sortBy by remember { mutableStateOf("total_pnl") }
     var selectedStrategies by remember { mutableStateOf<Set<String>>(emptySet()) }
     
+    // Load initial data
+    LaunchedEffect(Unit) {
+        viewModel.loadPerformance(rankBy = sortBy)
+    }
+    
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Strategy Performance") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -49,7 +56,7 @@ fun StrategyPerformanceScreen(
                         IconButton(onClick = { 
                             navController.navigate("strategy_comparison/${selectedStrategies.joinToString(",")}")
                         }) {
-                            Icon(Icons.Default.CompareArrows, contentDescription = "Compare")
+                            Icon(Icons.AutoMirrored.Filled.CompareArrows, contentDescription = "Compare")
                         }
                     }
                     IconButton(onClick = { showFilters = !showFilters }) {

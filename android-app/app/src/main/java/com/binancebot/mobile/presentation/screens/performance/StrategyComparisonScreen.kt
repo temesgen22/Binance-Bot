@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,7 +46,7 @@ fun StrategyComparisonScreen(
                 title = { Text("Strategy Comparison") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -82,7 +84,7 @@ fun StrategyComparisonScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Icon(
-                                Icons.Default.CompareArrows,
+                                Icons.AutoMirrored.Filled.CompareArrows,
                                 contentDescription = "No comparison",
                                 modifier = Modifier.size(64.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -148,7 +150,7 @@ fun StrategyComparisonScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
-                                Divider()
+                                HorizontalDivider()
                                 
                                 // Strategy Names Row
                                 Row(
@@ -183,7 +185,7 @@ fun StrategyComparisonScreen(
                                     }
                                 }
                                 
-                                Divider()
+                                HorizontalDivider()
                                 
                                 // Metrics Rows
                                 ComparisonMetricRow("Total PnL", selectedStrategies.map { FormatUtils.formatCurrency(it.totalPnl) })

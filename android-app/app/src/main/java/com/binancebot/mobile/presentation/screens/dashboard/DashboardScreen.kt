@@ -45,7 +45,7 @@ fun DashboardScreen(
     // Offline support - simplified for now
     val isOnline = remember { androidx.compose.runtime.mutableStateOf(true) }
     val lastSyncTime = remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
-
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -157,18 +157,18 @@ fun DashboardScreen(
                                 verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
                             ) {
 
-                                item {
+                    item {
                                     MetricCard(
                                         title = "Total PnL",
                                         value = FormatUtils.formatCurrency(viewModel.totalPnL),
                                         modifier = Modifier.fillMaxWidth(),
                                         isHighlight = true
-                                    )
-                                }
-
-                                item {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(Spacing.Medium)
                                     ) {
                                         MetricCard(
@@ -225,7 +225,7 @@ fun DashboardScreen(
                                         horizontalArrangement = Arrangement.spacedBy(Spacing.Medium)
                                     ) {
                                         MetricCard(
-                                            title = "Win Rate",
+                                title = "Win Rate",
                                             value = overview?.let { String.format("%.1f%%", it.overallWinRate) }
                                                 ?: calculateWinRate(strategies),
                                             modifier = Modifier.weight(1f)
@@ -233,32 +233,32 @@ fun DashboardScreen(
                                         MetricCard(
                                             title = "Total Trades",
                                             value = overview?.let { "${it.totalTrades}" } ?: "${viewModel.totalTrades}",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                }
-
-                                item {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(Spacing.Medium)
                                     ) {
                                         MetricCard(
                                             title = "Completed Trades",
                                             value = overview?.let { "${it.completedTrades}" } ?: "${viewModel.completedTrades}",
-                                            modifier = Modifier.weight(1f)
-                                        )
+                                modifier = Modifier.weight(1f)
+                            )
                                         MetricCard(
                                             title = "Active Strategies",
                                             value = "${viewModel.activeStrategies}/${viewModel.totalStrategies}",
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                }
-
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    
                                 // Account balance
                                 overview?.accountBalance?.let { balance ->
-                                    item {
+                        item {
                                         MetricCard(
                                             title = "Account Balance",
                                             value = FormatUtils.formatCurrency(balance),
@@ -344,16 +344,16 @@ fun DashboardScreen(
                                                                 style = MaterialTheme.typography.titleMedium,
                                                                 fontWeight = FontWeight.Bold,
                                                                 color = MaterialTheme.colorScheme.onErrorContainer
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        )
                                     }
-
+                                }
+                            }
+                        }
+                    }
+                }
+                
                                     ov.topSymbol?.let { topSymbol ->
-                                        item {
+                item {
                                             Card(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -371,7 +371,7 @@ fun DashboardScreen(
                                                             style = MaterialTheme.typography.labelMedium,
                                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                                         )
-                                                        Text(
+                    Text(
                                                             text = topSymbol.symbol,
                                                             style = MaterialTheme.typography.titleMedium,
                                                             fontWeight = FontWeight.Bold
@@ -401,7 +401,7 @@ fun DashboardScreen(
                                 }
 
                                 // Performance chart section - FIXED (no extra elvis after remember)
-                                item {
+                item {
                                     val pnlData = remember(overview) {
                                         overview?.pnlTimeline?.let { timeline ->
                                             timeline.mapIndexedNotNull { index, entry ->
@@ -495,7 +495,7 @@ fun DashboardScreen(
                                                     fontWeight = FontWeight.Bold
                                                 )
                                                 Spacer(modifier = Modifier.height(Spacing.Medium))
-                                                Text(
+                        Text(
                                                     text = "No historical data available yet",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -535,31 +535,31 @@ fun DashboardScreen(
                                             title = "Win Rate by Strategy (Estimated)"
                                         )
                                     } else if (strategies.isEmpty() && overview == null) {
-                                        Card(
+    Card(
                                             modifier = Modifier.fillMaxWidth(),
                                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                                        ) {
+    ) {
                                             Column(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
                                                     .padding(Spacing.CardPadding),
                                                 horizontalAlignment = Alignment.CenterHorizontally
-                                            ) {
-                                                Text(
+            ) {
+                Text(
                                                     text = "Win Rate by Strategy",
                                                     style = MaterialTheme.typography.titleMedium,
                                                     fontWeight = FontWeight.Bold
-                                                )
+                )
                                                 Spacer(modifier = Modifier.height(Spacing.Medium))
-                                                Text(
+                Text(
                                                     text = "No strategy data available",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                )
+            }
+        }
+    }
+}
 
                                 // Strategy performance summary
                                 if (strategies.isNotEmpty()) {
@@ -745,7 +745,7 @@ fun StrategySummaryCard(
                         fontWeight = FontWeight.Bold,
                         color = if (it >= 0) {
                             MaterialTheme.colorScheme.primary
-                        } else {
+                } else {
                             MaterialTheme.colorScheme.error
                         }
                     )

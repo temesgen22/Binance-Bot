@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,7 +39,7 @@ fun MarketAnalyzerScreen(
     var emaSlowPeriod by remember { mutableStateOf("50") }
     var maxEmaSpreadPct by remember { mutableStateOf("0.005") }
     var rsiPeriod by remember { mutableStateOf("14") }
-    var swingPeriod by remember { mutableStateOf("20") }
+    var swingPeriod by remember { mutableStateOf("5") }
     
     Scaffold(
         topBar = {
@@ -46,7 +47,7 @@ fun MarketAnalyzerScreen(
                 title = { Text("Market Analyzer") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -84,7 +85,7 @@ fun MarketAnalyzerScreen(
                             emaSlowPeriod = emaSlowPeriod.toIntOrNull() ?: 50,
                             maxEmaSpreadPct = maxEmaSpreadPct.toDoubleOrNull() ?: 0.005,
                             rsiPeriod = rsiPeriod.toIntOrNull() ?: 14,
-                            swingPeriod = swingPeriod.toIntOrNull() ?: 20
+                            swingPeriod = swingPeriod.toIntOrNull() ?: 5
                         )
                     },
                     modifier = Modifier
@@ -324,7 +325,7 @@ fun AnalysisResultsCard(
                 }
             }
             
-            Divider()
+            HorizontalDivider()
             
             // Key Metrics
             Row(
@@ -380,34 +381,178 @@ fun AnalysisResultsCard(
                 }
             }
             
-            // Chart Placeholder
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
+            // Indicators Section
+            if (analysis.indicators.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 ) {
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        modifier = Modifier.padding(Spacing.Medium),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Small)
                     ) {
                         Text(
-                            text = "📈 Market Chart",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = "Technical Indicators",
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.height(Spacing.Small))
+                        analysis.indicators.forEach { (key, value) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = when (value) {
+                                        is Double -> String.format("%.4f", value)
+                                        is Float -> String.format("%.4f", value)
+                                        is Number -> value.toString()
+                                        else -> value.toString()
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Trend Info Section
+            if (analysis.trendInfo.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(Spacing.Medium),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                    ) {
                         Text(
-                            text = "Chart will be displayed here",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "Trend Information",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
                         )
-                        // TODO: Add actual chart component
+                        analysis.trendInfo.forEach { (key, value) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = when (value) {
+                                        is Double -> String.format("%.4f", value)
+                                        is Float -> String.format("%.4f", value)
+                                        is Number -> value.toString()
+                                        else -> value.toString()
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Range Info Section (if available)
+            analysis.rangeInfo?.let { rangeInfo ->
+                if (rangeInfo.isNotEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(Spacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                        ) {
+                            Text(
+                                text = "Range Information",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            rangeInfo.forEach { (key, value) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = when (value) {
+                                            is Double -> String.format("%.4f", value)
+                                            is Float -> String.format("%.4f", value)
+                                            is Number -> value.toString()
+                                            else -> value.toString()
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Volume Analysis Section (if available)
+            analysis.volumeAnalysis?.let { volumeAnalysis ->
+                if (volumeAnalysis.isNotEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(Spacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                        ) {
+                            Text(
+                                text = "Volume Analysis",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            volumeAnalysis.forEach { (key, value) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = when (value) {
+                                            is Double -> String.format("%.4f", value)
+                                            is Float -> String.format("%.4f", value)
+                                            is Number -> value.toString()
+                                            else -> value.toString()
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

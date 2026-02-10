@@ -99,7 +99,7 @@ fun SymbolPnLCard(symbolPnL: SymbolPnL) {
                 )
             }
             
-            Divider()
+            HorizontalDivider()
             
             // PnL Breakdown
             Row(
@@ -142,7 +142,7 @@ fun SymbolPnLCard(symbolPnL: SymbolPnL) {
                 }
             }
             
-            Divider()
+            HorizontalDivider()
             
             // Statistics
             Row(
@@ -189,7 +189,7 @@ fun SymbolPnLCard(symbolPnL: SymbolPnL) {
             
             // Open Positions Count
             if (symbolPnL.openPositions.isNotEmpty()) {
-                Divider()
+                HorizontalDivider()
                 Text(
                     text = "Open Positions: ${symbolPnL.openPositions.size}",
                     style = MaterialTheme.typography.bodySmall,

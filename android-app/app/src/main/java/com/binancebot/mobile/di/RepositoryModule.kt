@@ -80,4 +80,22 @@ abstract class RepositoryModule {
     abstract fun bindDashboardRepository(
         dashboardRepositoryImpl: DashboardRepositoryImpl
     ): DashboardRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindBacktestingRepository(
+        backtestingRepositoryImpl: BacktestingRepositoryImpl
+    ): BacktestingRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindWalkForwardRepository(
+        walkForwardRepositoryImpl: WalkForwardRepositoryImpl
+    ): WalkForwardRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindAutoTuningRepository(
+        autoTuningRepositoryImpl: AutoTuningRepositoryImpl
+    ): AutoTuningRepository
 }

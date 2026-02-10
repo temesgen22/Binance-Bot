@@ -213,7 +213,7 @@ fun AccountCard(account: com.binancebot.mobile.domain.model.Account) {
                 }
             }
             
-            Divider()
+            HorizontalDivider()
             
             Row(
                 modifier = Modifier.fillMaxWidth(),

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,7 +42,7 @@ fun AutoTuningScreen(
                 title = { Text("Auto-Tuning") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -165,7 +166,7 @@ fun AutoTuningStrategyCard(
                 )
             }
             
-            Divider()
+            HorizontalDivider()
             
             // Auto-Tuning Status
             Row(
@@ -235,13 +236,6 @@ fun AutoTuningStrategyCard(
                 }
             }
             
-            // Info Message
-            Text(
-                text = "Note: Auto-Tuning functionality requires backend API implementation. The endpoints are not currently available.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Spacing.Small)
-            )
         }
     }
 }
