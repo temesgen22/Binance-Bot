@@ -28,22 +28,49 @@ object ExportUtils {
         return try {
             val file = File(context.getExternalFilesDir(null), fileName)
             FileWriter(file).use { writer ->
-                // Write header
-                writer.append("Strategy ID,Strategy Name,Symbol,Total Trades,Win Rate,Total PnL,Profit Factor\n")
+                // Write header with more columns
+                writer.append("Strategy ID,Strategy Name,Symbol,Type,Total Trades,Wins,Losses,Win Rate (%),Total Profit,Total Loss,Net PnL,Profit Factor,Trading Fees,Funding Fees\n")
                 
                 // Write strategy summaries
                 report.strategies.forEach { strategyReport ->
                     writer.append("${strategyReport.strategyId},")
                     writer.append("\"${strategyReport.strategyName}\",")
                     writer.append("${strategyReport.symbol},")
+                    writer.append("\"${strategyReport.strategyType ?: ""}\",")
                     writer.append("${strategyReport.totalTrades},")
-                    writer.append("${strategyReport.winRate},")
+                    writer.append("${strategyReport.wins},")
+                    writer.append("${strategyReport.losses},")
+                    // Backend returns 0-100, format correctly
+                    val winRatePct = if (strategyReport.winRate > 1.0) strategyReport.winRate else strategyReport.winRate * 100
+                    writer.append("${String.format("%.2f", winRatePct)},")
+                    writer.append("${strategyReport.totalProfitUsd},")
+                    writer.append("${strategyReport.totalLossUsd},")
                     writer.append("${strategyReport.netPnl},")
                     val profitFactor = if (strategyReport.totalLossUsd != 0.0) {
-                        strategyReport.totalProfitUsd / strategyReport.totalLossUsd
-                    } else 0.0
-                    writer.append("${profitFactor}\n")
+                        strategyReport.totalProfitUsd / kotlin.math.abs(strategyReport.totalLossUsd)
+                    } else if (strategyReport.totalProfitUsd > 0) Double.MAX_VALUE else 0.0
+                    writer.append("${if (profitFactor == Double.MAX_VALUE) "Infinity" else String.format("%.4f", profitFactor)},")
+                    writer.append("${strategyReport.totalFee},")
+                    writer.append("${strategyReport.totalFundingFee}\n")
                 }
+                
+                // Add summary row
+                writer.append("\n")
+                writer.append("TOTAL,,,")
+                writer.append(",${report.totalTrades}")
+                val totalWins = report.strategies.sumOf { it.wins }
+                val totalLosses = report.strategies.sumOf { it.losses }
+                writer.append(",${totalWins},${totalLosses}")
+                val overallWinRate = if (report.overallWinRate > 1.0) report.overallWinRate else report.overallWinRate * 100
+                writer.append(",${String.format("%.2f", overallWinRate)}")
+                val totalProfit = report.strategies.sumOf { it.totalProfitUsd }
+                val totalLoss = report.strategies.sumOf { it.totalLossUsd }
+                writer.append(",${totalProfit},${totalLoss}")
+                writer.append(",${report.overallNetPnl}")
+                writer.append(",")  // Skip profit factor for total
+                val totalFees = report.strategies.sumOf { it.totalFee }
+                val totalFundingFees = report.strategies.sumOf { it.totalFundingFee }
+                writer.append(",${totalFees},${totalFundingFees}\n")
             }
             
             getUriForFile(context, file)
@@ -191,29 +218,52 @@ object ExportUtils {
     }
     
     /**
+     * Helper to format win rate correctly.
+     * Backend returns 0-100 (e.g., 65.5 for 65.5%), not 0-1.
+     */
+    private fun formatWinRate(winRate: Double): String {
+        // If value > 1, it's already a percentage; otherwise convert
+        val percentage = if (winRate > 1.0) winRate else winRate * 100
+        return String.format("%.1f%%", percentage)
+    }
+    
+    /**
      * Format trading report as shareable text
      */
     fun formatReportAsText(report: TradingReportDto): String {
         val sb = StringBuilder()
         sb.append("Trading Report\n")
         sb.append("=============\n\n")
+        
+        // Overall Summary
+        sb.append("Overall Summary\n")
         sb.append("Total Strategies: ${report.totalStrategies}\n")
         sb.append("Total Trades: ${report.totalTrades}\n")
-        sb.append("Total PnL: ${FormatUtils.formatCurrency(report.overallNetPnl)}\n\n")
+        sb.append("Overall Win Rate: ${formatWinRate(report.overallWinRate)}\n")
+        sb.append("Net PnL: ${FormatUtils.formatCurrency(report.overallNetPnl)}\n\n")
         
         sb.append("Strategy Details:\n")
         sb.append("----------------\n")
         report.strategies.forEach { strategyReport ->
-            sb.append("\nStrategy: ${strategyReport.strategyName}\n")
-            sb.append("  Symbol: ${strategyReport.symbol}\n")
-            sb.append("  Total Trades: ${strategyReport.totalTrades}\n")
-            sb.append("  Win Rate: ${String.format("%.2f%%", strategyReport.winRate * 100)}\n")
-            sb.append("  Total PnL: ${FormatUtils.formatCurrency(strategyReport.netPnl)}\n")
+            sb.append("\n${strategyReport.strategyName} (${strategyReport.symbol})\n")
+            sb.append("  Trades: ${strategyReport.totalTrades} (W: ${strategyReport.wins} / L: ${strategyReport.losses})\n")
+            sb.append("  Win Rate: ${formatWinRate(strategyReport.winRate)}\n")
+            sb.append("  Profit: ${FormatUtils.formatCurrency(strategyReport.totalProfitUsd)}\n")
+            sb.append("  Loss: ${FormatUtils.formatCurrency(strategyReport.totalLossUsd)}\n")
+            sb.append("  Net PnL: ${FormatUtils.formatCurrency(strategyReport.netPnl)}\n")
             val profitFactor = if (strategyReport.totalLossUsd != 0.0) {
-                strategyReport.totalProfitUsd / strategyReport.totalLossUsd
-            } else 0.0
-            sb.append("  Profit Factor: ${String.format("%.2f", profitFactor)}\n")
+                strategyReport.totalProfitUsd / kotlin.math.abs(strategyReport.totalLossUsd)
+            } else if (strategyReport.totalProfitUsd > 0) Double.POSITIVE_INFINITY else 0.0
+            sb.append("  Profit Factor: ${if (profitFactor.isInfinite()) "∞" else String.format("%.2f", profitFactor)}\n")
+            if (strategyReport.totalFee > 0) {
+                sb.append("  Trading Fees: ${FormatUtils.formatCurrency(strategyReport.totalFee)}\n")
+            }
+            if (strategyReport.totalFundingFee != 0.0) {
+                sb.append("  Funding Fees: ${FormatUtils.formatCurrency(strategyReport.totalFundingFee)}\n")
+            }
         }
+        
+        sb.append("\nGenerated: ${report.reportGeneratedAt}\n")
         
         return sb.toString()
     }

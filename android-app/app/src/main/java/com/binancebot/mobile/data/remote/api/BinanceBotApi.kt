@@ -112,7 +112,7 @@ interface BinanceBotApi {
     
     // ========== Trading Reports ==========
     
-    @GET("reports/trading")
+    @GET("reports")
     suspend fun getTradingReport(
         @Query("strategy_id") strategyId: String? = null,
         @Query("strategy_name") strategyName: String? = null,

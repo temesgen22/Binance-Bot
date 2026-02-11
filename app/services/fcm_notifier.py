@@ -164,25 +164,30 @@ class FCMNotifier:
                 logger.debug(f"No FCM tokens found for user {user_id}{filter_info}")
                 return 0
             
-            # Prepare message
-            message = messaging.MulticastMessage(
-                notification=messaging.Notification(
-                    title=title,
-                    body=body,
-                ),
-                data=data or {},
-                tokens=[token.token for token in tokens],
-                android=messaging.AndroidConfig(
-                    priority="high",
-                    notification=messaging.AndroidNotification(
-                        channel_id=channel_id,
-                        sound="default",
+            # Prepare messages for each token (firebase-admin 6.0+ uses send_each instead of send_multicast)
+            token_list = [token.token for token in tokens]
+            messages = [
+                messaging.Message(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body,
                     ),
-                ),
-            )
+                    data=data or {},
+                    token=token_str,
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            channel_id=channel_id,
+                            sound="default",
+                        ),
+                    ),
+                )
+                for token_str in token_list
+            ]
             
-            # Send notification (run in thread pool to avoid blocking event loop)
-            response = await asyncio.to_thread(messaging.send_multicast, message)
+            # Send notifications (run in thread pool to avoid blocking event loop)
+            # Use send_each for firebase-admin 6.0+
+            response = await asyncio.to_thread(messaging.send_each, messages)
             
             # Update token status based on results
             successful = 0

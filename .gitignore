@@ -76,7 +76,10 @@ tests/test_android_app_endpoints.py
 
 # Firebase service account key (sensitive - never commit)
 app/config/firebase-service-account.json
+app/config/firebase-service-account.json.json
+app/config/*.json
 **/firebase-service-account.json
+**/firebase-service-account.json.json
 **/firebase-credentials.json
 **/google-services.json
 

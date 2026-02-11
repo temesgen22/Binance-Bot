@@ -329,127 +329,118 @@ fun TradesScreen(
                         }
 
                         else -> {
+                            // Show filters above the scrollable content
+                            if (showFilters) {
+                                FiltersSection(
+                                    accounts = accounts,
+                                    availableSymbols = availableSymbols,
+                                    filterAccountId = filterAccountId,
+                                    onFilterAccountId = { filterAccountId = it },
+                                    filterSide = filterSide,
+                                    onFilterSide = { filterSide = it },
+                                    filterStrategyId = filterStrategyId,
+                                    onFilterStrategyId = { filterStrategyId = it },
+                                    filterSymbol = filterSymbol,
+                                    onFilterSymbol = { filterSymbol = it },
+                                    dateFrom = dateFrom,
+                                    onDateFrom = { dateFrom = it },
+                                    dateTo = dateTo,
+                                    onDateTo = { dateTo = it },
+                                    onClearAll = {
+                                        filterStrategyId = null
+                                        filterSymbol = null
+                                        filterSide = null
+                                        filterAccountId = null
+                                        dateFrom = ""
+                                        dateTo = ""
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            
                             SwipeRefreshBox(
                                 isRefreshing = trades.loadState.refresh is LoadState.Loading,
-                                onRefresh = { trades.refresh() }
+                                onRefresh = { trades.refresh() },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .weight(1f)
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(Spacing.ScreenPadding),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
                                 ) {
+                                    // Analytics card as header item
                                     if (allLoadedTrades.isNotEmpty()) {
-                                        TradeAnalyticsCard(
-                                            analytics = tradeAnalytics,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(
-                                                    horizontal = Spacing.ScreenPadding,
-                                                    vertical = Spacing.Small
+                                        item {
+                                            TradeAnalyticsCard(
+                                                analytics = tradeAnalytics,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+
+                                        item {
+                                            com.binancebot.mobile.presentation.components.charts.TradeDistributionChart(
+                                                buyCount = tradeAnalytics.buyTrades,
+                                                sellCount = tradeAnalytics.sellTrades,
+                                                modifier = Modifier.fillMaxWidth(),
+                                                title = "Trade Distribution"
+                                            )
+                                        }
+                                    }
+
+                                    // Trade items
+                                    items(
+                                        count = trades.itemCount,
+                                        key = { index -> trades[index]?.id ?: index.toString() }
+                                    ) { index ->
+                                        val trade = trades[index]
+                                        trade?.let {
+                                            if (!allLoadedTrades.any { existing -> existing.id == it.id }) {
+                                                allLoadedTrades.add(it)
+                                            }
+                                            TradeCard(trade = it)
+                                        }
+                                    }
+
+                                    if (trades.loadState.append is LoadState.Loading) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(Spacing.Medium),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                CircularProgressIndicator()
+                                            }
+                                        }
+                                    }
+
+                                    if (trades.loadState.append is LoadState.Error) {
+                                        item {
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(Spacing.Medium),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = MaterialTheme.colorScheme.errorContainer
                                                 )
-                                        )
-
-                                        com.binancebot.mobile.presentation.components.charts.TradeDistributionChart(
-                                            buyCount = tradeAnalytics.buyTrades,
-                                            sellCount = tradeAnalytics.sellTrades,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(
-                                                    horizontal = Spacing.ScreenPadding,
-                                                    vertical = Spacing.Small
-                                                ),
-                                            title = "Trade Distribution"
-                                        )
-                                    }
-
-                                    if (showFilters) {
-                                        FiltersSection(
-                                            accounts = accounts,
-                                            availableSymbols = availableSymbols,
-                                            filterAccountId = filterAccountId,
-                                            onFilterAccountId = { filterAccountId = it },
-                                            filterSide = filterSide,
-                                            onFilterSide = { filterSide = it },
-                                            filterStrategyId = filterStrategyId,
-                                            onFilterStrategyId = { filterStrategyId = it },
-                                            filterSymbol = filterSymbol,
-                                            onFilterSymbol = { filterSymbol = it },
-                                            dateFrom = dateFrom,
-                                            onDateFrom = { dateFrom = it },
-                                            dateTo = dateTo,
-                                            onDateTo = { dateTo = it },
-                                            onClearAll = {
-                                                filterStrategyId = null
-                                                filterSymbol = null
-                                                filterSide = null
-                                                filterAccountId = null
-                                                dateFrom = ""
-                                                dateTo = ""
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-
-                                    LazyColumn(
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(Spacing.ScreenPadding),
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
-                                    ) {
-                                        // ✅ Use count-based items overload from LazyListScope
-                                        items(
-                                            count = trades.itemCount,
-                                            key = { index -> trades[index]?.id ?: index.toString() }
-                                        ) { index ->
-                                            val trade = trades[index]
-                                            trade?.let {
-                                                if (!allLoadedTrades.any { existing -> existing.id == it.id }) {
-                                                    allLoadedTrades.add(it)
-                                                }
-                                                TradeCard(trade = it)
-                                            }
-                                        }
-
-                                        if (trades.loadState.append is LoadState.Loading) {
-                                            item {
-                                                Box(
+                                            ) {
+                                                Column(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .padding(Spacing.Medium),
-                                                    contentAlignment = Alignment.Center
+                                                    horizontalAlignment = Alignment.CenterHorizontally
                                                 ) {
-                                                    CircularProgressIndicator()
-                                                }
-                                            }
-                                        }
-
-                                        if (trades.loadState.append is LoadState.Error) {
-                                            item {
-                                                Card(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(Spacing.Medium),
-                                                    colors = CardDefaults.cardColors(
-                                                        containerColor = MaterialTheme.colorScheme.errorContainer
+                                                    Text(
+                                                        text = "Failed to load more trades",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = MaterialTheme.colorScheme.onErrorContainer
                                                     )
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(Spacing.Medium),
-                                                        horizontalAlignment = Alignment.CenterHorizontally
-                                                    ) {
+                                                    Spacer(modifier = Modifier.height(Spacing.Small))
+                                                    TextButton(onClick = { trades.retry() }) {
                                                         Text(
-                                                            text = "Failed to load more trades",
-                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            "Retry",
                                                             color = MaterialTheme.colorScheme.onErrorContainer
                                                         )
-                                                        Spacer(modifier = Modifier.height(Spacing.Small))
-                                                        TextButton(onClick = { trades.retry() }) {
-                                                            Text(
-                                                                "Retry",
-                                                                color = MaterialTheme.colorScheme.onErrorContainer
-                                                            )
-                                                        }
                                                     }
                                                 }
                                             }
