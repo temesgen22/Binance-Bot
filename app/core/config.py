@@ -132,6 +132,23 @@ class Settings(BaseSettings):
     telegram_enabled: bool = Field(default=False, alias="TELEGRAM_ENABLED")
     telegram_profit_threshold_usd: Optional[float] = Field(default=None, alias="TELEGRAM_PROFIT_THRESHOLD_USD")
     telegram_loss_threshold_usd: Optional[float] = Field(default=None, alias="TELEGRAM_LOSS_THRESHOLD_USD")
+    
+    # Firebase Cloud Messaging (FCM) Configuration
+    firebase_service_account_path: Optional[str] = Field(
+        default=None,
+        alias="FIREBASE_SERVICE_ACCOUNT_PATH",
+        description="Path to Firebase service account JSON key file"
+    )
+    firebase_project_id: Optional[str] = Field(
+        default=None,
+        alias="FIREBASE_PROJECT_ID",
+        description="Firebase project ID (optional, for logging/validation)"
+    )
+    firebase_enabled: bool = Field(
+        default=False,
+        alias="FIREBASE_ENABLED",
+        description="Enable Firebase Cloud Messaging for push notifications"
+    )
 
     @field_validator("base_symbols", mode="after")
     @classmethod

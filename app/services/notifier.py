@@ -5,12 +5,16 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
+from uuid import UUID
 import httpx
 from loguru import logger
 
 from app.models.strategy import StrategySummary, StrategyState
 from app.models.order import OrderResponse
+
+if TYPE_CHECKING:
+    from app.services.fcm_notifier import FCMNotifier
 
 
 class NotificationLevel(str, Enum):
@@ -773,6 +777,153 @@ class TelegramNotifier:
         )
         
         return await self.send_message(message)
+    
+    async def notify_risk_warning(
+        self,
+        warning_type: NotificationType,
+        account_id: str,
+        current_value: float,
+        limit_value: float,
+        strategy_id: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        summary: Optional[StrategySummary] = None,
+    ) -> bool:
+        """Send notification for a risk warning (approaching limit).
+        
+        Args:
+            warning_type: Type of warning (e.g., DAILY_LOSS_LIMIT_WARNING)
+            account_id: Account ID
+            current_value: Current value
+            limit_value: Limit value
+            strategy_id: Optional strategy ID
+            strategy_name: Optional strategy name
+            summary: Optional strategy summary
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        if summary:
+            additional_info = {
+                "current_value": current_value,
+                "limit_value": limit_value,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "strategy_name": strategy_name,
+            }
+            message = self.format_strategy_message(warning_type, summary, additional_info)
+        else:
+            # Account-level warning
+            limit_name = warning_type.value.replace("_LIMIT_WARNING", "").replace("_", " ").title()
+            message = f"⚠️ <b>{limit_name} Warning</b>\n\n"
+            message += f"Account: <b>{account_id}</b>\n"
+            message += f"Approaching limit threshold (80%)\n\n"
+            
+            current = abs(current_value)
+            limit = abs(limit_value)
+            percentage = (current / limit * 100) if limit != 0 else 0
+            remaining = limit - current
+            
+            if "LOSS" in warning_type.value:
+                message += f"Current Loss: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                message += f"Limit: ${limit:,.2f}\n"
+                message += f"Remaining: ${remaining:,.2f} before breach\n"
+            elif "DRAWDOWN" in warning_type.value:
+                message += f"Current Drawdown: <b>{current:.2f}%</b> ({percentage:.1f}%)\n"
+                message += f"Limit: {limit:.2f}%\n"
+                message += f"Remaining: {remaining:.2f}% before breach\n"
+            else:  # EXPOSURE
+                message += f"Current Exposure: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                message += f"Limit: ${limit:,.2f}\n"
+                message += f"Remaining: ${remaining:,.2f} before breach\n"
+            
+            if strategy_id:
+                message += f"\nStrategy: {strategy_name or strategy_id[:8]}...\n"
+            
+            message += "\n⚠️ <b>Action Required:</b> Monitor closely. Limit may be breached soon."
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            message += f"\n\n⏰ {timestamp}"
+        
+        return await self.send_message(message)
+    
+    async def notify_risk_breach(
+        self,
+        breach_type: NotificationType,
+        account_id: str,
+        current_value: float,
+        limit_value: float,
+        breach_level: str = "account",
+        strategy_id: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        action_taken: str = "Trading blocked",
+        summary: Optional[StrategySummary] = None,
+    ) -> bool:
+        """Send notification for a risk breach (limit exceeded).
+        
+        Args:
+            breach_type: Type of breach (e.g., DAILY_LOSS_LIMIT_BREACH)
+            account_id: Account ID
+            current_value: Current value that exceeded limit
+            limit_value: Limit value
+            breach_level: "account" or "strategy"
+            strategy_id: Optional strategy ID
+            strategy_name: Optional strategy name
+            action_taken: Action taken
+            summary: Optional strategy summary
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        if summary:
+            additional_info = {
+                "current_value": current_value,
+                "limit_value": limit_value,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "strategy_name": strategy_name,
+                "action_taken": action_taken,
+                "breach_type": f"({breach_level})",
+            }
+            message = self.format_strategy_message(breach_type, summary, additional_info)
+        else:
+            # Account-level breach
+            limit_name = breach_type.value.replace("_LIMIT_BREACH", "").replace("_", " ").title()
+            message = f"🚨 <b>{limit_name} BREACHED</b>\n\n"
+            message += f"Account: <b>{account_id}</b>\n"
+            message += f"Risk limit has been exceeded!\n\n"
+            
+            current = abs(current_value)
+            limit = abs(limit_value)
+            exceeded_by = current - limit
+            percentage = (current / limit * 100) if limit != 0 else 0
+            
+            if "LOSS" in breach_type.value:
+                message += f"Current Loss: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                message += f"Limit: ${limit:,.2f}\n"
+                message += f"Exceeded by: <b>${exceeded_by:,.2f}</b>\n"
+            elif "DRAWDOWN" in breach_type.value:
+                message += f"Current Drawdown: <b>{current:.2f}%</b> ({percentage:.1f}%)\n"
+                message += f"Limit: {limit:.2f}%\n"
+                message += f"Exceeded by: <b>{exceeded_by:.2f}%</b>\n"
+            else:  # EXPOSURE
+                message += f"Current Exposure: <b>${current:,.2f}</b> ({percentage:.1f}%)\n"
+                message += f"Limit: ${limit:,.2f}\n"
+                message += f"Exceeded by: <b>${exceeded_by:,.2f}</b>\n"
+            
+            if strategy_id:
+                message += f"\nStrategy: <b>{strategy_name or 'Unknown'}</b>\n"
+                message += f"Strategy ID: <code>{strategy_id}</code>\n"
+            
+            message += f"\n🛑 <b>Action Taken:</b> {action_taken}\n"
+            
+            if breach_level == "account":
+                message += "⚠️ <b>Account-level breach:</b> All strategies on this account are affected.\n"
+            elif breach_level == "strategy":
+                message += "⚠️ <b>Strategy-level breach:</b> Only this strategy is affected.\n"
+            
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            message += f"\n⏰ {timestamp}"
+        
+        return await self.send_message(message, disable_notification=False)
 
 
 class NotificationService:
@@ -781,6 +932,7 @@ class NotificationService:
     def __init__(
         self,
         telegram_notifier: Optional[TelegramNotifier] = None,
+        fcm_notifier: Optional["FCMNotifier"] = None,
         profit_threshold_usd: Optional[float] = None,
         loss_threshold_usd: Optional[float] = None,
     ) -> None:
@@ -788,24 +940,66 @@ class NotificationService:
         
         Args:
             telegram_notifier: Telegram notifier instance
+            fcm_notifier: FCM notifier instance for mobile push notifications
             profit_threshold_usd: Profit threshold in USD to trigger notification
             loss_threshold_usd: Loss threshold in USD to trigger notification (negative value)
         """
         self.telegram = telegram_notifier
+        self.fcm = fcm_notifier
         self.profit_threshold = profit_threshold_usd
         self.loss_threshold = loss_threshold_usd
         
         # Track notified thresholds per strategy to avoid spam
         self._notified_thresholds: Dict[str, Dict[str, float]] = {}
     
+    async def _send_fcm_notification(
+        self,
+        user_id: Optional["UUID"],
+        notification_method: str,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Helper to send FCM notifications with fresh async session.
+        
+        Args:
+            user_id: User UUID
+            notification_method: Name of the FCM notifier method to call
+            *args: Positional arguments for the method
+            **kwargs: Keyword arguments for the method
+        """
+        if not self.fcm or not user_id:
+            return
+        
+        try:
+            from app.core.database import get_async_db
+            
+            async for db in get_async_db():
+                try:
+                    method = getattr(self.fcm, notification_method)
+                    await method(user_id, *args, db=db, **kwargs)
+                except Exception as e:
+                    logger.error(f"Failed to send FCM notification ({notification_method}): {e}")
+                finally:
+                    break
+        except Exception as e:
+            logger.error(f"Failed to get async session for FCM notification: {e}")
+    
     async def notify_strategy_started(
         self,
         summary: StrategySummary,
         reason: Optional[str] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that a strategy started."""
         if self.telegram:
             await self.telegram.notify_strategy_started(summary, reason)
+        
+        # FCM notification
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(user_id, "notify_strategy_started", summary, reason=reason)
+            )
+        
         # Reset threshold tracking for this strategy
         self._notified_thresholds.pop(summary.id, None)
     
@@ -814,10 +1008,21 @@ class NotificationService:
         summary: StrategySummary,
         reason: Optional[str] = None,
         final_pnl: Optional[float] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that a strategy stopped."""
         if self.telegram:
             await self.telegram.notify_strategy_stopped(summary, reason, final_pnl)
+        
+        # FCM notification
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_strategy_stopped", summary, 
+                    reason=reason, final_pnl=final_pnl
+                )
+            )
+        
         # Clear threshold tracking
         self._notified_thresholds.pop(summary.id, None)
     
@@ -826,25 +1031,40 @@ class NotificationService:
         summary: StrategySummary,
         error: Exception,
         error_type: Optional[str] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that a strategy encountered an error."""
         if self.telegram:
             await self.telegram.notify_strategy_error(summary, error, error_type)
+        
+        # FCM notification
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(user_id, "notify_strategy_error", summary, error)
+            )
     
     async def notify_critical_error(
         self,
         summary: Optional[StrategySummary],
         error: Exception,
         context: Optional[str] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify about a critical system error."""
         if self.telegram:
             await self.telegram.notify_critical_error(summary, error, context)
+        
+        # FCM notification for critical errors
+        if self.fcm and user_id and summary:
+            asyncio.create_task(
+                self._send_fcm_notification(user_id, "notify_strategy_error", summary, error)
+            )
     
     async def check_and_notify_pnl_threshold(
         self,
         summary: StrategySummary,
         pnl: float,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Check PnL against thresholds and notify if reached.
         
@@ -853,6 +1073,7 @@ class NotificationService:
         Args:
             summary: Strategy summary
             pnl: Current profit/loss
+            user_id: User UUID for FCM notifications
         """
         strategy_id = summary.id
         
@@ -873,6 +1094,13 @@ class NotificationService:
                         pnl,
                         self.profit_threshold,
                     )
+                # FCM notification
+                if self.fcm and user_id:
+                    asyncio.create_task(
+                        self._send_fcm_notification(
+                            user_id, "notify_pnl_threshold", summary, pnl, self.profit_threshold
+                        )
+                    )
                 notified["profit"] = pnl
         
         # Check loss threshold (loss_threshold should be negative)
@@ -885,6 +1113,13 @@ class NotificationService:
                         summary,
                         pnl,
                         self.loss_threshold,
+                    )
+                # FCM notification
+                if self.fcm and user_id:
+                    asyncio.create_task(
+                        self._send_fcm_notification(
+                            user_id, "notify_pnl_threshold", summary, pnl, self.loss_threshold
+                        )
                     )
                 notified["loss"] = pnl
     
@@ -921,6 +1156,7 @@ class NotificationService:
         order_response: OrderResponse,
         position_action: str = "TRADE",  # OPEN, CLOSE, or TRADE
         exit_reason: Optional[str] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that an order was successfully executed.
         
@@ -929,6 +1165,7 @@ class NotificationService:
             order_response: OrderResponse from executed order
             position_action: Whether this opens, closes, or modifies a position
             exit_reason: Optional exit reason if closing position
+            user_id: User UUID for FCM notifications
         """
         if self.telegram:
             await self.telegram.notify_order_executed(
@@ -936,6 +1173,23 @@ class NotificationService:
                 order_response,
                 position_action,
                 exit_reason,
+            )
+        
+        # FCM notification for trade execution
+        if self.fcm and user_id:
+            pnl = float(order_response.realized_pnl) if order_response.realized_pnl else None
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_trade_executed",
+                    trade_id=str(order_response.order_id),
+                    strategy_id=summary.id,
+                    strategy_name=summary.name,
+                    symbol=order_response.symbol,
+                    side=order_response.side,
+                    quantity=str(order_response.executed_qty),
+                    price=str(order_response.avg_price or order_response.price),
+                    pnl=pnl,
+                )
             )
     
     async def notify_order_blocked_by_risk(
@@ -947,6 +1201,7 @@ class NotificationService:
         current_value: Optional[float] = None,
         limit_value: Optional[float] = None,
         symbol: Optional[str] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that an order was blocked by risk limits.
         
@@ -958,10 +1213,24 @@ class NotificationService:
             current_value: Current value that exceeded limit
             limit_value: Limit value that was exceeded
             symbol: Trading symbol
+            user_id: User UUID for FCM notifications
         """
         if self.telegram:
             await self.telegram.notify_order_blocked_by_risk(
                 summary, reason, account_id, limit_type, current_value, limit_value, symbol
+            )
+        
+        # FCM notification for risk alert
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_risk_alert",
+                    alert_type=limit_type or "order_blocked",
+                    account_id=account_id,
+                    message=reason,
+                    current_value=current_value,
+                    limit_value=limit_value,
+                )
             )
     
     async def notify_circuit_breaker_triggered(
@@ -971,6 +1240,7 @@ class NotificationService:
         reason: str,
         strategies_affected: Optional[list[str]] = None,
         summary: Optional[StrategySummary] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify that a circuit breaker was triggered.
         
@@ -980,10 +1250,22 @@ class NotificationService:
             reason: Reason why circuit breaker triggered
             strategies_affected: List of strategy IDs affected
             summary: Optional strategy summary if single strategy affected
+            user_id: User UUID for FCM notifications
         """
         if self.telegram:
             await self.telegram.notify_circuit_breaker_triggered(
                 account_id, breaker_type, reason, strategies_affected, summary
+            )
+        
+        # FCM notification for circuit breaker
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_risk_alert",
+                    alert_type="circuit_breaker",
+                    account_id=account_id,
+                    message=f"Circuit breaker triggered: {reason}",
+                )
             )
     
     async def notify_risk_warning(
@@ -995,6 +1277,7 @@ class NotificationService:
         strategy_id: Optional[str] = None,
         strategy_name: Optional[str] = None,
         summary: Optional[StrategySummary] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify about risk warning (approaching limit).
         
@@ -1006,11 +1289,25 @@ class NotificationService:
             strategy_id: Optional strategy ID
             strategy_name: Optional strategy name
             summary: Optional strategy summary
+            user_id: User UUID for FCM notifications
         """
         if self.telegram:
             await self.telegram.notify_risk_warning(
                 warning_type, account_id, current_value, limit_value,
                 strategy_id, strategy_name, summary
+            )
+        
+        # FCM notification for risk warning
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_risk_alert",
+                    alert_type=warning_type.value.lower(),
+                    account_id=account_id,
+                    message=f"Risk warning: {warning_type.value}",
+                    current_value=current_value,
+                    limit_value=limit_value,
+                )
             )
     
     async def notify_risk_breach(
@@ -1024,6 +1321,7 @@ class NotificationService:
         strategy_name: Optional[str] = None,
         action_taken: str = "Trading blocked",
         summary: Optional[StrategySummary] = None,
+        user_id: Optional[UUID] = None,
     ) -> None:
         """Notify about risk breach (limit exceeded).
         
@@ -1037,10 +1335,24 @@ class NotificationService:
             strategy_name: Optional strategy name
             action_taken: Action taken
             summary: Optional strategy summary
+            user_id: User UUID for FCM notifications
         """
         if self.telegram:
             await self.telegram.notify_risk_breach(
                 breach_type, account_id, current_value, limit_value,
                 breach_level, strategy_id, strategy_name, action_taken, summary
+            )
+        
+        # FCM notification for risk breach
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_risk_alert",
+                    alert_type=breach_type.value.lower(),
+                    account_id=account_id,
+                    message=f"Risk limit breached: {action_taken}",
+                    current_value=current_value,
+                    limit_value=limit_value,
+                )
             )
 

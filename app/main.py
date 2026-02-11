@@ -29,6 +29,7 @@ from app.api.routes.backtesting import router as backtesting_router
 from app.api.routes.auto_tuning import router as auto_tuning_router
 from app.api.routes.risk_metrics import router as risk_metrics_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.notifications import router as notifications_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -166,22 +167,42 @@ def create_app() -> FastAPI:
         )
     
     # Initialize Telegram notification service if enabled
-    notification_service = None
+    telegram_notifier = None
     if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
         telegram_notifier = TelegramNotifier(
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
             enabled=settings.telegram_enabled,
         )
-        notification_service = NotificationService(
-            telegram_notifier=telegram_notifier,
-            profit_threshold_usd=settings.telegram_profit_threshold_usd,
-            loss_threshold_usd=settings.telegram_loss_threshold_usd,
-        )
     elif settings.telegram_enabled and (not settings.telegram_bot_token or not settings.telegram_chat_id):
         logger.warning(
             "Telegram notifications are enabled but bot_token or chat_id is missing. "
-            "Notifications will be disabled."
+            "Telegram notifications will be disabled."
+        )
+    
+    # Initialize FCM notifier if enabled
+    fcm_notifier = None
+    if settings.firebase_enabled:
+        try:
+            from app.services.fcm_notifier import FCMNotifier
+            fcm_notifier = FCMNotifier(enabled=True)
+            if fcm_notifier.enabled:
+                logger.info("FCM push notifications enabled")
+            else:
+                logger.warning("FCM notifier disabled (initialization failed)")
+                fcm_notifier = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize FCM notifier: {e}")
+            fcm_notifier = None
+    
+    # Create NotificationService with available notifiers
+    notification_service = None
+    if telegram_notifier or fcm_notifier:
+        notification_service = NotificationService(
+            telegram_notifier=telegram_notifier,
+            fcm_notifier=fcm_notifier,
+            profit_threshold_usd=settings.telegram_profit_threshold_usd,
+            loss_threshold_usd=settings.telegram_loss_threshold_usd,
         )
     
     runner = StrategyRunner(
@@ -684,6 +705,7 @@ def create_app() -> FastAPI:
     app.include_router(auto_tuning_router)  # Auto-tuning API
     app.include_router(risk_metrics_router)  # Risk metrics and monitoring API
     app.include_router(dashboard_router)  # Dashboard overview API
+    app.include_router(notifications_router)  # FCM token management for push notifications
     
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)

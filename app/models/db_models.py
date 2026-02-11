@@ -75,6 +75,7 @@ class User(Base):
     sensitivity_analyses = relationship("SensitivityAnalysis", back_populates="user", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
+    fcm_tokens = relationship("FCMToken", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("username ~ '^[a-z0-9_-]+$'", name="users_username_check"),
@@ -166,6 +167,40 @@ class APIToken(Base):
 
     # Relationships
     user = relationship("User", back_populates="api_tokens")
+
+
+class FCMToken(Base):
+    """FCM token storage for push notifications to mobile and web clients."""
+    __tablename__ = "fcm_tokens"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Token details
+    token = Column(String(500), nullable=False, unique=True, index=True)  # FCM token from Firebase
+    device_id = Column(String(255), nullable=False, index=True)  # Device identifier
+    device_type = Column(String(50), nullable=False, default="android")  # android, ios, web
+    client_type = Column(String(50), nullable=False, default="android_app", index=True)  # android_app, web_app, ios_app
+    device_name = Column(String(100), nullable=True)  # User-friendly device name (e.g., 'Pixel 7', 'Chrome Browser')
+    app_version = Column(String(50), nullable=True)  # App version for debugging
+    
+    # Status
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    last_used_at = Column(DateTime(timezone=True))  # Last time notification was sent successfully
+    
+    # Relationships
+    user = relationship("User", back_populates="fcm_tokens")
+    
+    __table_args__ = (
+        # One token per device per user
+        Index("idx_fcm_tokens_user_device", "user_id", "device_id", unique=True),
+        Index("idx_fcm_tokens_active", "is_active"),
+        Index("idx_fcm_tokens_client_type", "client_type"),
+    )
 
 
 # ============================================

@@ -1736,6 +1736,7 @@ async def get_realtime_risk_status(
                     limit_value=risk_config.max_drawdown_pct * 100,
                     breach_level="account",
                     action_taken="Trading blocked",
+                    user_id=runner.user_id,
                 )
                 _safe_create_notification_task(notification_coro)
         elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt):
@@ -1752,6 +1753,7 @@ async def get_realtime_risk_status(
                     limit_value=-abs(risk_config.max_daily_loss_usdt),
                     breach_level="account",
                     action_taken="All strategies blocked",
+                    user_id=runner.user_id,
                 )
                 _safe_create_notification_task(notification_coro)
         elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt):
@@ -1767,6 +1769,7 @@ async def get_realtime_risk_status(
                     current_value=weekly_pnl_usdt,
                     limit_value=-abs(risk_config.max_weekly_loss_usdt),
                     breach_level="account",
+                    user_id=runner.user_id,
                     action_taken="All strategies blocked",
                 )
                 _safe_create_notification_task(notification_coro)
@@ -1784,6 +1787,7 @@ async def get_realtime_risk_status(
                     limit_value=risk_config.max_portfolio_exposure_usdt,
                     breach_level="account",
                     action_taken="Trading blocked",
+                    user_id=runner.user_id,
                 )
                 _safe_create_notification_task(notification_coro)
         elif (risk_config.max_drawdown_pct and current_drawdown_pct >= (risk_config.max_drawdown_pct * 100 * 0.8)) or \
@@ -1803,6 +1807,7 @@ async def get_realtime_risk_status(
                         account_id=account_id_normalized or "default",
                         current_value=current_drawdown_pct,
                         limit_value=risk_config.max_drawdown_pct * 100,
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
                 elif risk_config.max_daily_loss_usdt and daily_pnl_usdt <= -abs(risk_config.max_daily_loss_usdt) * 0.8:
@@ -1811,6 +1816,7 @@ async def get_realtime_risk_status(
                         account_id=account_id_normalized or "default",
                         current_value=abs(daily_pnl_usdt),
                         limit_value=abs(risk_config.max_daily_loss_usdt),
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
                 elif risk_config.max_weekly_loss_usdt and weekly_pnl_usdt <= -abs(risk_config.max_weekly_loss_usdt) * 0.8:
@@ -1819,6 +1825,7 @@ async def get_realtime_risk_status(
                         account_id=account_id_normalized or "default",
                         current_value=abs(weekly_pnl_usdt),
                         limit_value=abs(risk_config.max_weekly_loss_usdt),
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
                 elif risk_config.max_portfolio_exposure_usdt and total_exposure_usdt >= risk_config.max_portfolio_exposure_usdt * 0.8:
@@ -1827,6 +1834,7 @@ async def get_realtime_risk_status(
                         account_id=account_id_normalized or "default",
                         current_value=total_exposure_usdt,
                         limit_value=risk_config.max_portfolio_exposure_usdt,
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
         
@@ -2216,6 +2224,7 @@ async def get_strategy_risk_status(
                                     limit_value=-abs(max_daily_loss),
                                     breach_level="account",
                                     action_taken="All strategies blocked",
+                                    user_id=runner.user_id,
                                 )
                                 _safe_create_notification_task(notification_coro)
                 
@@ -2245,6 +2254,7 @@ async def get_strategy_risk_status(
                                     limit_value=-abs(max_weekly_loss),
                                     breach_level="account",
                                     action_taken="All strategies blocked",
+                                    user_id=runner.user_id,
                                 )
                                 _safe_create_notification_task(notification_coro)
                 
@@ -2797,6 +2807,7 @@ async def get_strategy_risk_status(
                         strategy_name=strategy_name,
                         action_taken="Strategy stopped",
                         summary=summary,
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
             elif not weekly_loss_allowed and account_risk_status != "breach":
@@ -2837,6 +2848,7 @@ async def get_strategy_risk_status(
                         strategy_name=strategy_name,
                         action_taken="Strategy stopped",
                         summary=summary,
+                        user_id=runner.user_id,
                     )
                     _safe_create_notification_task(notification_coro)
             
