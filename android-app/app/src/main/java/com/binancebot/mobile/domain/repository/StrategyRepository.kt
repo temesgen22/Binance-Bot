@@ -15,4 +15,5 @@ interface StrategyRepository {
     suspend fun stopStrategy(strategyId: String): Result<Unit>
     suspend fun getStrategyStats(strategyId: String): Result<com.binancebot.mobile.data.remote.dto.StrategyStatsDto>
     suspend fun getStrategyActivity(strategyId: String, limit: Int = 50): Result<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>>
+    suspend fun getStrategyHealth(strategyId: String): Result<com.binancebot.mobile.data.remote.dto.StrategyHealthDto>
 }

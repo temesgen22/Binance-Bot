@@ -46,8 +46,11 @@ object AppModule {
     
     @Provides
     @Singleton
-    fun provideNotificationManager(@ApplicationContext context: Context): com.binancebot.mobile.util.NotificationManager {
-        return com.binancebot.mobile.util.NotificationManager(context)
+    fun provideNotificationManager(
+        @ApplicationContext context: Context,
+        notificationDao: com.binancebot.mobile.data.local.dao.NotificationDao
+    ): com.binancebot.mobile.util.NotificationManager {
+        return com.binancebot.mobile.util.NotificationManager(context, notificationDao)
     }
 }
 

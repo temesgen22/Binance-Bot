@@ -90,3 +90,11 @@ sealed class MarketAnalyzerUiState {
 
 
 
+
+
+
+
+
+
+
+

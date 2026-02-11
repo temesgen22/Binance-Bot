@@ -1,10 +1,15 @@
 package com.binancebot.mobile.presentation.components
 
+import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.binancebot.mobile.presentation.navigation.Screen
 
 /**
@@ -31,12 +36,23 @@ fun BottomNavigationBar(
                 icon = {
                     Icon(
                         imageVector = screen.icon ?: Icons.Default.Home,
-                        contentDescription = screen.title
+                        contentDescription = screen.title,
+                        modifier = Modifier.size(24.dp)
                     )
                 },
-                label = { Text(screen.title) },
+                label = {
+                    Text(
+                        text = screen.title,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                },
                 selected = currentRoute == screen.route,
-                onClick = { onNavigate(screen.route) }
+                onClick = { onNavigate(screen.route) },
+                alwaysShowLabel = true
             )
         }
     }

@@ -73,3 +73,11 @@ interface TradeDao {
 
 
 
+
+
+
+
+
+
+
+

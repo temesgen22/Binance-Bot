@@ -20,6 +20,7 @@ import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsUiState
+import com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import java.util.Locale
 
@@ -28,7 +29,8 @@ import java.util.Locale
 fun StrategyDetailsScreen(
     strategyId: String,
     navController: NavController,
-    viewModel: StrategyDetailsViewModel = hiltViewModel()
+    viewModel: StrategyDetailsViewModel = hiltViewModel(),
+    riskManagementViewModel: RiskManagementViewModel = hiltViewModel()
 ) {
     val strategy by viewModel.strategy.collectAsState()
     val stats by viewModel.stats.collectAsState()
@@ -151,8 +153,26 @@ fun StrategyDetailsScreen(
                             }
                         }
                         
-                        // Performance Metrics
-                        stats?.let {
+                        // Performance Metrics - use performance data (stats endpoint doesn't exist)
+                        performance?.let { perf ->
+                            MetricSection(
+                                title = "Performance Metrics",
+                                items = listOf(
+                                    "Total Trades" to perf.totalTrades.toString(),
+                                    "Completed Trades" to perf.completedTrades.toString(),
+                                    "Winning Trades" to perf.winningTrades.toString(),
+                                    "Losing Trades" to perf.losingTrades.toString(),
+                                    "Win Rate" to "${String.format("%.2f", if (perf.winRate > 1.0) perf.winRate else perf.winRate * 100)}%",
+                                    "Total PnL" to FormatUtils.formatCurrency(perf.totalPnl),
+                                    "Realized PnL" to FormatUtils.formatCurrency(perf.totalRealizedPnl),
+                                    "Unrealized PnL" to FormatUtils.formatCurrency(perf.totalUnrealizedPnl),
+                                    "Avg Profit/Trade" to FormatUtils.formatCurrency(perf.avgProfitPerTrade),
+                                    "Largest Win" to FormatUtils.formatCurrency(perf.largestWin),
+                                    "Largest Loss" to FormatUtils.formatCurrency(perf.largestLoss)
+                                )
+                            )
+                        } ?: stats?.let {
+                            // Fallback to stats if performance is not available
                             MetricSection(
                                 title = "Performance Metrics",
                                 items = listOf(
@@ -193,9 +213,10 @@ fun StrategyDetailsScreen(
                         
                         // Risk Configuration (from performance data if available)
                         performance?.let { perf ->
-                            RiskConfigurationSection(
+                            com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
                                 strategyId = strategyId,
-                                accountId = perf.accountId
+                                strategyName = strategy?.name ?: strategyId,
+                                viewModel = riskManagementViewModel
                             )
                         }
                         
@@ -473,51 +494,16 @@ fun AutoTuningSection(performance: StrategyPerformanceDto) {
 @Composable
 fun RiskConfigurationSection(
     strategyId: String,
-    accountId: String?
+    accountId: String?,
+    strategyName: String?,
+    riskManagementViewModel: RiskManagementViewModel
 ) {
-    // Parameters kept for potential future API integration
-    // Note: This section can be enhanced to fetch risk status from API
-    // For now, it shows a placeholder that can be expanded when API is integrated
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.CardPadding),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
-        ) {
-            Text(
-                text = "Risk Configuration",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            HorizontalDivider()
-            
-            Text(
-                text = "Risk configuration is managed at the account level. " +
-                        "To view or edit risk settings, go to Risk Management screen.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            
-            // Placeholder for future enhancement:
-            // This section can be enhanced to fetch and display:
-            // - Strategy-specific risk limits (if configured)
-            // - Current risk status (can_trade, blocked_reasons)
-            // - Risk checks (portfolio_exposure, daily_loss, weekly_loss, circuit_breaker)
-            // - Risk metrics (current values vs limits)
-            // 
-            // API endpoint: GET /api/risk/status/strategy/{strategy_id}
-            // This would require:
-            // 1. Adding endpoint to BinanceBotApi
-            // 2. Adding DTO for StrategyRiskStatusResponse
-            // 3. Adding method to RiskManagementRepository
-            // 4. Fetching in StrategyDetailsViewModel
-            // 5. Displaying risk status and checks here
-        }
-    }
+    // Use the same StrategyRiskConfigSection from StrategiesScreen
+    com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
+        strategyId = strategyId,
+        strategyName = strategyName ?: strategyId,
+        viewModel = riskManagementViewModel
+    )
 }
 
 @Composable

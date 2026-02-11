@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,9 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import android.util.Log
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import com.binancebot.mobile.presentation.components.ErrorHandler
 import com.binancebot.mobile.presentation.components.StatusBadge
@@ -35,6 +39,7 @@ import com.binancebot.mobile.presentation.viewmodel.StrategyPerformanceViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategyPerformanceUiState
 import com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel
 import com.binancebot.mobile.presentation.viewmodel.AccountViewModel
+import com.binancebot.mobile.presentation.viewmodel.RiskManagementUiState
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -187,11 +192,6 @@ fun StrategiesScreen(
                             .fillMaxSize()
                             .padding(padding)
                     ) {
-                        // Overall Performance Summary
-                        performanceList?.summary?.let { summary ->
-                            OverallPerformanceSummary(summary = summary)
-                        }
-                        
                         // Search Bar
                         OutlinedTextField(
                             value = searchQuery,
@@ -244,6 +244,16 @@ fun StrategiesScreen(
                                         onClick = { filterStatus = if (filterStatus == "stopped") null else "stopped" },
                                         label = { Text("Stopped") }
                                     )
+                                    FilterChip(
+                                        selected = filterStatus == "stopped_by_risk",
+                                        onClick = { filterStatus = if (filterStatus == "stopped_by_risk") null else "stopped_by_risk" },
+                                        label = { Text("Stopped by Risk") }
+                                    )
+                                    FilterChip(
+                                        selected = filterStatus == "error",
+                                        onClick = { filterStatus = if (filterStatus == "error") null else "error" },
+                                        label = { Text("Error") }
+                                    )
                                 }
                                 
                                 Spacer(modifier = Modifier.height(Spacing.Small))
@@ -266,73 +276,83 @@ fun StrategiesScreen(
                                     }
                                 }
                                 
-                                // Advanced Filters
+                                // Advanced Filters - Compact and Scrollable
                                 AnimatedVisibility(
                                     visible = showAdvancedFilters,
                                     enter = expandVertically(),
                                     exit = shrinkVertically()
                                 ) {
-                                    Column(
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.Small)
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 300.dp), // Limit max height
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                                     ) {
-                                        // Symbol Filter
-                                        OutlinedTextField(
-                                            value = filterSymbol,
-                                            onValueChange = { filterSymbol = it },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            label = { Text("Symbol (e.g., BTCUSDT)") },
-                                            singleLine = true
-                                        )
-                                        
-                                        // Account Filter
-                                        AccountFilterDropdown(
-                                            accounts = accounts,
-                                            selectedAccountId = filterAccount,
-                                            onAccountSelected = { filterAccount = it }
-                                        )
-                                        
-                                        // Rank By Selector
-                                        RankBySelector(
-                                            selectedRankBy = rankBy,
-                                            onRankBySelected = { rankBy = it }
-                                        )
-                                        
-                                        // Date Range Filters
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
+                                        Column(
+                                            modifier = Modifier
+                                                .verticalScroll(rememberScrollState())
+                                                .padding(Spacing.Small),
+                                            verticalArrangement = Arrangement.spacedBy(Spacing.Small)
                                         ) {
+                                            // Symbol Filter
                                             OutlinedTextField(
-                                                value = startDate ?: "",
-                                                onValueChange = { startDate = it.takeIf { it.isNotBlank() } },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("Start Date (ISO)") },
-                                                placeholder = { Text("YYYY-MM-DDTHH:mm:ss") },
+                                                value = filterSymbol,
+                                                onValueChange = { filterSymbol = it },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                label = { Text("Symbol") },
                                                 singleLine = true
                                             )
-                                            OutlinedTextField(
-                                                value = endDate ?: "",
-                                                onValueChange = { endDate = it.takeIf { it.isNotBlank() } },
-                                                modifier = Modifier.weight(1f),
-                                                label = { Text("End Date (ISO)") },
-                                                placeholder = { Text("YYYY-MM-DDTHH:mm:ss") },
-                                                singleLine = true
+                                            
+                                            // Account Filter
+                                            AccountFilterDropdown(
+                                                accounts = accounts,
+                                                selectedAccountId = filterAccount,
+                                                onAccountSelected = { filterAccount = it }
                                             )
-                                        }
-                                        
-                                        // Clear Filters Button
-                                        TextButton(
-                                            onClick = {
-                                                filterStatus = null
-                                                filterAccount = null
-                                                filterSymbol = ""
-                                                rankBy = "total_pnl"
-                                                startDate = null
-                                                endDate = null
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text("Clear All Filters")
+                                            
+                                            // Rank By Selector
+                                            RankBySelector(
+                                                selectedRankBy = rankBy,
+                                                onRankBySelected = { rankBy = it }
+                                            )
+                                            
+                                            // Date Range Filters
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = startDate ?: "",
+                                                    onValueChange = { startDate = it.takeIf { it.isNotBlank() } },
+                                                    modifier = Modifier.weight(1f),
+                                                    label = { Text("Start") },
+                                                    placeholder = { Text("YYYY-MM-DD") },
+                                                    singleLine = true
+                                                )
+                                                OutlinedTextField(
+                                                    value = endDate ?: "",
+                                                    onValueChange = { endDate = it.takeIf { it.isNotBlank() } },
+                                                    modifier = Modifier.weight(1f),
+                                                    label = { Text("End") },
+                                                    placeholder = { Text("YYYY-MM-DD") },
+                                                    singleLine = true
+                                                )
+                                            }
+                                            
+                                            // Clear Filters Button
+                                            TextButton(
+                                                onClick = {
+                                                    filterStatus = null
+                                                    filterAccount = null
+                                                    filterSymbol = ""
+                                                    rankBy = "total_pnl"
+                                                    startDate = null
+                                                    endDate = null
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("Clear All Filters")
+                                            }
                                         }
                                     }
                                 }
@@ -387,7 +407,8 @@ fun StrategiesScreen(
                                         onStop = { strategiesViewModel.stopStrategy(performance.strategyId) },
                                         onEdit = { showEditDialog = performance.strategyId },
                                         onDelete = { showDeleteDialog = performance.strategyId },
-                                        onDetails = { navController.navigate("strategy_details/${performance.strategyId}") }
+                                        onDetails = { navController.navigate("strategy_details/${performance.strategyId}") },
+                                        strategiesViewModel = strategiesViewModel
                                     )
                                 }
                             }
@@ -420,70 +441,6 @@ fun StrategiesScreen(
                 }
             }
         )
-    }
-}
-
-@Composable
-fun OverallPerformanceSummary(summary: Map<String, Any>) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.Small),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(Spacing.CardPadding)
-        ) {
-            Text(
-                text = "Overall Performance",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = Spacing.Small)
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatCard(
-                    label = "Total PnL",
-                    value = FormatUtils.formatCurrency((summary["total_pnl"] as? Number)?.toDouble() ?: 0.0),
-                    isPositive = (summary["total_pnl"] as? Number)?.toDouble() ?: 0.0 >= 0,
-                    modifier = Modifier.weight(1f)
-                )
-                StatCard(
-                    label = "Total Strategies",
-                    value = "${summary["total_strategies"] ?: 0}",
-                    modifier = Modifier.weight(1f)
-                )
-                StatCard(
-                    label = "Active",
-                    value = "${summary["active_strategies"] ?: 0}",
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Spacer(modifier = Modifier.height(Spacing.Small))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatCard(
-                    label = "Win Rate",
-                    value = String.format("%.2f%%", (summary["overall_win_rate"] as? Number)?.toDouble() ?: 0.0),
-                    modifier = Modifier.weight(1f)
-                )
-                StatCard(
-                    label = "Total Trades",
-                    value = "${summary["total_trades"] ?: 0}",
-                    modifier = Modifier.weight(1f)
-                )
-                StatCard(
-                    label = "Best Strategy",
-                    value = (summary["best_performing"] as? String) ?: "-",
-                    isSmall = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
     }
 }
 
@@ -622,7 +579,8 @@ fun EnhancedStrategyCard(
     onStop: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onDetails: () -> Unit
+    onDetails: () -> Unit,
+    strategiesViewModel: StrategiesViewModel
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -644,36 +602,58 @@ fun EnhancedStrategyCard(
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Small),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
                 ) {
                     // Rank Badge
                     RankBadge(rank = performance.rank ?: 0)
                     
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = Spacing.Small)
+                    ) {
                         Text(
                             text = performance.strategyName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "${performance.symbol} • ${performance.strategyType}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
                 
+                // Right side: Status, Health Indicator, Expand button
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Small),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tiny),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.wrapContentWidth()
                 ) {
                     StatusBadge(status = performance.status)
-                    IconButton(onClick = onExpandToggle) {
-                        Icon(
-                            if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (isExpanded) "Collapse" else "Expand"
+                    // Health indicator for running strategies - always visible next to status
+                    val isRunning = performance.status.lowercase().trim() == "running"
+                    if (isRunning) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        StrategyHealthIndicator(
+                            strategyId = performance.strategyId,
+                            strategiesViewModel = strategiesViewModel
                         )
                     }
+                }
+                IconButton(onClick = onExpandToggle) {
+                    Icon(
+                        if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand"
+                    )
                 }
             }
             
@@ -685,8 +665,53 @@ fun EnhancedStrategyCard(
                 MetricColumn("Total PnL", FormatUtils.formatCurrency(performance.totalPnl), performance.totalPnl >= 0)
                 MetricColumn("Win Rate", "${String.format("%.2f", performance.winRate)}%")
                 MetricColumn("Trades", "${performance.completedTrades}/${performance.totalTrades}")
+            }
+            
+            // Second Metrics Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                MetricColumn("Realized", FormatUtils.formatCurrency(performance.totalRealizedPnl), performance.totalRealizedPnl >= 0)
+                MetricColumn("Unrealized", FormatUtils.formatCurrency(performance.totalUnrealizedPnl), performance.totalUnrealizedPnl >= 0)
                 performance.percentile?.let {
                     PercentileBadge(percentile = it)
+                }
+            }
+            
+            // Position Info (if has position)
+            if (performance.positionSide != null && performance.positionSize != null && performance.positionSize > 0) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Small),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.ShowChart,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "${performance.positionSide} • ${String.format("%.4f", performance.positionSize)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    performance.totalUnrealizedPnl?.let { pnl ->
+                        Text(
+                            text = FormatUtils.formatCurrency(pnl),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (pnl >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
             
@@ -696,7 +721,12 @@ fun EnhancedStrategyCard(
                 enter = expandVertically(),
                 exit = shrinkVertically()
             ) {
-                StrategyDetailsView(performance = performance)
+                val riskManagementViewModel: com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+                StrategyDetailsView(
+                    performance = performance,
+                    riskManagementViewModel = riskManagementViewModel,
+                    strategiesViewModel = strategiesViewModel
+                )
             }
             
             Divider(modifier = Modifier.padding(vertical = Spacing.Small))
@@ -706,6 +736,7 @@ fun EnhancedStrategyCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
             ) {
+                // Only show Start button if not stopped_by_risk (user can't start if stopped by risk)
                 if (performance.status == "running") {
                     Button(
                         onClick = onStop,
@@ -718,7 +749,7 @@ fun EnhancedStrategyCard(
                         Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
                         Text("Stop")
                     }
-                } else {
+                } else if (performance.status != "stopped_by_risk") {
                     Button(
                         onClick = onStart,
                         modifier = Modifier.weight(1f),
@@ -729,6 +760,20 @@ fun EnhancedStrategyCard(
                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
                         Text("Start")
+                    }
+                } else {
+                    // Show disabled button for stopped_by_risk
+                    Button(
+                        onClick = { },
+                        modifier = Modifier.weight(1f),
+                        enabled = false,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Icon(Icons.Default.Warning, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                        Text("Stopped by Risk")
                     }
                 }
                 IconButton(onClick = onEdit) {
@@ -824,7 +869,11 @@ fun MetricColumn(label: String, value: String, isPositive: Boolean = false) {
 }
 
 @Composable
-fun StrategyDetailsView(performance: StrategyPerformanceDto) {
+fun StrategyDetailsView(
+    performance: StrategyPerformanceDto,
+    riskManagementViewModel: com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel,
+    strategiesViewModel: StrategiesViewModel
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -906,6 +955,21 @@ fun StrategyDetailsView(performance: StrategyPerformanceDto) {
         DetailSection("Auto-Tuning") {
             DetailRow("Status", if (performance.autoTuningEnabled) "Enabled" else "Disabled")
         }
+        
+        // Health Status Section (for running strategies)
+        if (performance.status == "running") {
+            StrategyHealthDetailsSection(
+                strategyId = performance.strategyId,
+                strategiesViewModel = strategiesViewModel
+            )
+        }
+        
+        // Risk Configuration Section
+        StrategyRiskConfigSection(
+            strategyId = performance.strategyId,
+            strategyName = performance.strategyName,
+            viewModel = riskManagementViewModel
+        )
     }
 }
 
@@ -964,6 +1028,301 @@ fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) {
             )
             content()
         }
+    }
+}
+
+@Composable
+fun StrategyHealthIndicator(
+    strategyId: String,
+    strategiesViewModel: StrategiesViewModel
+) {
+    val strategyHealth by strategiesViewModel.strategyHealth.collectAsState()
+    val health = strategyHealth[strategyId]
+    var isLoading by remember(strategyId) { mutableStateOf(true) }
+    
+    // Load health status when component is displayed
+    LaunchedEffect(strategyId) {
+        // Always load health when component is displayed
+        isLoading = true
+        Log.d("StrategyHealth", "Loading health for strategy: $strategyId")
+        strategiesViewModel.loadStrategyHealth(strategyId)
+    }
+    
+    // Update loading state when health data changes
+    LaunchedEffect(health) {
+        if (health != null) {
+            isLoading = false
+            Log.d("StrategyHealth", "Health loaded for $strategyId: ${health.healthStatus}")
+        }
+    }
+    
+    // Timeout: if no health after delay, show default state
+    LaunchedEffect(strategyId) {
+        kotlinx.coroutines.delay(2000)
+        if (health == null && isLoading) {
+            isLoading = false
+            Log.d("StrategyHealth", "No health data for $strategyId after timeout")
+        }
+    }
+    
+    // Always show indicator for running strategies
+    val healthStatus = health?.healthStatus
+    
+    val icon: String
+    val text: String
+    val color: androidx.compose.ui.graphics.Color
+    val bgColor: androidx.compose.ui.graphics.Color
+    
+    when {
+        isLoading -> {
+            icon = "⟳"
+            text = "Loading"
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+            bgColor = MaterialTheme.colorScheme.surfaceVariant
+        }
+        healthStatus == "execution_stale" -> {
+            icon = "⚠"
+            text = ""
+            color = MaterialTheme.colorScheme.error
+            bgColor = MaterialTheme.colorScheme.errorContainer
+        }
+        healthStatus == "task_dead" -> {
+            icon = "✗"
+            text = ""
+            color = MaterialTheme.colorScheme.error
+            bgColor = MaterialTheme.colorScheme.errorContainer
+        }
+        healthStatus == "no_execution_tracking" -> {
+            icon = "?"
+            text = ""
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+            bgColor = MaterialTheme.colorScheme.surfaceVariant
+        }
+        healthStatus == "no_recent_orders" -> {
+            icon = "⚠"
+            text = ""
+            color = MaterialTheme.colorScheme.errorContainer
+            bgColor = MaterialTheme.colorScheme.onErrorContainer
+        }
+        healthStatus == "healthy" -> {
+            icon = "✓"
+            text = ""
+            color = MaterialTheme.colorScheme.primary
+            bgColor = MaterialTheme.colorScheme.primaryContainer
+        }
+        else -> {
+            // Default: show indicator even if no data (assume healthy)
+            icon = "✓"
+            text = "OK"
+            color = MaterialTheme.colorScheme.primary
+            bgColor = MaterialTheme.colorScheme.primaryContainer
+        }
+    }
+    
+    // Simple icon-only health indicator - no border, no text, just colored icon
+    Log.d("StrategyHealth", "Rendering icon for $strategyId: isLoading=$isLoading, healthStatus=$healthStatus, icon=$icon")
+    
+    Box(
+        modifier = Modifier.size(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color = color
+            )
+        } else {
+            Text(
+                text = icon,
+                style = MaterialTheme.typography.titleMedium,
+                color = color,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun StrategyHealthDetailsSection(
+    strategyId: String,
+    strategiesViewModel: StrategiesViewModel
+) {
+    val strategyHealth by strategiesViewModel.strategyHealth.collectAsState()
+    val health = strategyHealth[strategyId]
+    
+    // Load health status when section is displayed
+    LaunchedEffect(strategyId) {
+        strategiesViewModel.loadStrategyHealth(strategyId)
+    }
+    
+    DetailSection("Execution Health Status") {
+        if (health != null) {
+            val statusText = when (health.healthStatus) {
+                "healthy" -> "✓ Healthy - Strategy is executing normally"
+                "execution_stale" -> "⚠ Stale - Last execution was too long ago"
+                "task_dead" -> "✗ Dead - Execution task has crashed"
+                "no_execution_tracking" -> "? No Tracking - Execution tracking not available"
+                "no_recent_orders" -> "⚠ No Orders - Strategy running but not placing orders"
+                else -> "? Unknown Status"
+            }
+            
+            DetailRow("Status", statusText)
+            
+            health.issues?.takeIf { it.isNotEmpty() }?.let { issues ->
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+                Text(
+                    text = "Issues:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+                issues.forEach { issue ->
+                    Text(
+                        text = "• $issue",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = Spacing.Medium, top = Spacing.Tiny)
+                    )
+                }
+            }
+            
+            health.executionStatus?.let { execStatus ->
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+                execStatus["last_execution_age_seconds"]?.let { ageSeconds ->
+                    val ageMinutes = (ageSeconds as? Number)?.toDouble()?.div(60) ?: 0.0
+                    DetailRow("Last Execution", "${String.format("%.1f", ageMinutes)} minutes ago")
+                }
+                execStatus["execution_stale"]?.let { stale ->
+                    if (stale == true) {
+                        DetailRow("Execution Status", "⚠ Stale", isPositive = false)
+                    }
+                }
+            }
+            
+            health.taskStatus?.let { taskStatus ->
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+                taskStatus["task_running"]?.let { running ->
+                    DetailRow("Task Running", if (running == true) "Yes" else "No", isPositive = running == true)
+                }
+                taskStatus["task_done"]?.let { done ->
+                    if (done == true) {
+                        DetailRow("Task Status", "✗ Task has exited", isPositive = false)
+                    }
+                }
+            }
+        } else {
+            DetailRow("Status", "Loading health status...")
+        }
+    }
+}
+
+@Composable
+fun StrategyRiskConfigSection(
+    strategyId: String,
+    strategyName: String,
+    viewModel: com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel
+) {
+    var showRiskConfigDialog by remember { mutableStateOf(false) }
+    val strategyRiskConfig by viewModel.strategyRiskConfig.collectAsState()
+    
+    // Load risk config when section is displayed
+    LaunchedEffect(strategyId) {
+        viewModel.loadStrategyRiskConfig(strategyId)
+    }
+    
+    val configExists = strategyRiskConfig != null
+    
+    val uiState by viewModel.uiState.collectAsState()
+    var isLoadingConfig by remember(strategyId) { mutableStateOf(true) }
+    
+    // Track loading state
+    LaunchedEffect(strategyId, uiState) {
+        if (uiState is RiskManagementUiState.Loading) {
+            isLoadingConfig = true
+        } else {
+            isLoadingConfig = false
+        }
+    }
+    
+    DetailSection("Risk Configuration") {
+        if (isLoadingConfig) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(Spacing.Small))
+                Text(
+                    text = "Loading risk configuration...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (configExists) {
+            strategyRiskConfig?.let { config ->
+                DetailRow("Status", "Configured", isPositive = true)
+                if (config.enabled == true) {
+                    DetailRow("Enabled", "Yes", isPositive = true)
+                }
+                config.maxDailyLossUsdt?.let {
+                    DetailRow("Max Daily Loss", FormatUtils.formatCurrency(it))
+                }
+                config.maxDailyLossPct?.let {
+                    DetailRow("Max Daily Loss %", "${String.format("%.2f", it * 100)}%")
+                }
+                config.maxWeeklyLossUsdt?.let {
+                    DetailRow("Max Weekly Loss", FormatUtils.formatCurrency(it))
+                }
+                config.maxWeeklyLossPct?.let {
+                    DetailRow("Max Weekly Loss %", "${String.format("%.2f", it * 100)}%")
+                }
+                config.maxDrawdownPct?.let {
+                    DetailRow("Max Drawdown", "${String.format("%.2f", it * 100)}%")
+                }
+            }
+            Button(
+                onClick = { showRiskConfigDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(Spacing.Small))
+                Text("Edit Risk Config")
+            }
+        } else {
+            DetailRow("Status", "Not Configured", isPositive = false)
+            Text(
+                text = "No custom risk configuration set. Using account-level limits.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = Spacing.Small)
+            )
+            Button(
+                onClick = { showRiskConfigDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(Spacing.Small))
+                Text("Configure Risk")
+            }
+        }
+    }
+    
+    // Show risk config dialog
+    if (showRiskConfigDialog) {
+        // Use the same dialog from RiskManagementScreen
+        com.binancebot.mobile.presentation.screens.risk.StrategyRiskConfigDialog(
+            strategyId = strategyId,
+            strategyName = strategyName,
+            onDismiss = { showRiskConfigDialog = false },
+            viewModel = viewModel
+        )
     }
 }
 

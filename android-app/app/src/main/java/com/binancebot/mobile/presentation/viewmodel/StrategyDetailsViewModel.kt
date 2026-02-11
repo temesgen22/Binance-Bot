@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import javax.inject.Inject
 
 @HiltViewModel
@@ -37,16 +39,29 @@ class StrategyDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = StrategyDetailsUiState.Loading
             
-            // Load strategy, stats, performance, and activity in parallel
-            val strategyResult = strategyRepository.getStrategy(strategyId)
-            val statsResult = strategyRepository.getStrategyStats(strategyId)
-            val performanceResult = performanceRepository.getStrategyPerformanceById(strategyId)
-            val activityResult = strategyRepository.getStrategyActivity(strategyId, limit = 50)
+            // Load strategy, performance, and activity in parallel
+            // Note: stats endpoint doesn't exist (returns 404), so we use performance data instead
+            val strategyDeferred = async { strategyRepository.getStrategy(strategyId) }
+            val performanceDeferred = async { performanceRepository.getStrategyPerformanceById(strategyId) }
+            val activityDeferred = async { strategyRepository.getStrategyActivity(strategyId, limit = 50) }
+            // Try to load stats, but don't fail if it doesn't exist (404 is expected)
+            val statsDeferred = async { 
+                try {
+                    strategyRepository.getStrategyStats(strategyId)
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            
+            val strategyResult = strategyDeferred.await()
+            val performanceResult = performanceDeferred.await()
+            val activityResult = activityDeferred.await()
+            val statsResult = statsDeferred.await()
             
             when {
                 strategyResult.isSuccess -> {
                     _strategy.value = strategyResult.getOrNull()
-                    _stats.value = statsResult.getOrNull()
+                    _stats.value = statsResult.getOrNull() // Will be null if endpoint doesn't exist
                     _performance.value = performanceResult.getOrNull()
                     _activity.value = activityResult.getOrNull() ?: emptyList()
                     _uiState.value = StrategyDetailsUiState.Success

@@ -116,6 +116,12 @@ fun BinanceBotNavGraph(
         composable(Screen.Settings.route) {
             SettingsScreen(navController = navController)
         }
+        composable("notification_settings") {
+            com.binancebot.mobile.presentation.screens.settings.NotificationSettingsScreen(navController = navController)
+        }
+        composable(Screen.Notifications.route) {
+            com.binancebot.mobile.presentation.screens.notifications.NotificationHistoryScreen(navController = navController)
+        }
         composable("help") {
             com.binancebot.mobile.presentation.screens.help.HelpScreen(navController = navController)
         }

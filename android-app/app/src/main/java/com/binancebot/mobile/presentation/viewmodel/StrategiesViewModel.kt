@@ -1,5 +1,6 @@
 package com.binancebot.mobile.presentation.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.domain.model.Strategy
@@ -25,8 +26,32 @@ class StrategiesViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
     
+    private val _strategyHealth = MutableStateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>>(emptyMap())
+    val strategyHealth: StateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>> = _strategyHealth.asStateFlow()
+    
     init {
         loadStrategies()
+    }
+    
+    fun loadStrategyHealth(strategyId: String) {
+        viewModelScope.launch {
+            try {
+                Log.d("StrategyHealth", "ViewModel: Loading health for $strategyId")
+                strategyRepository.getStrategyHealth(strategyId)
+                    .onSuccess { health ->
+                        Log.d("StrategyHealth", "ViewModel: Health loaded successfully for $strategyId: ${health.healthStatus}")
+                        _strategyHealth.value = _strategyHealth.value.toMutableMap().apply {
+                            put(strategyId, health)
+                        }
+                    }
+                    .onFailure { error ->
+                        // Log error but don't crash - health check is optional
+                        Log.e("StrategyHealth", "ViewModel: Failed to load health for $strategyId: ${error.message}")
+                    }
+            } catch (e: Exception) {
+                Log.e("StrategyHealth", "ViewModel: Exception loading health for $strategyId", e)
+            }
+        }
     }
     
     fun loadStrategies() {
@@ -101,7 +126,8 @@ class StrategiesViewModel @Inject constructor(
         leverage: Int,
         riskPerTrade: Double?,
         fixedAmount: Double?,
-        accountId: String
+        accountId: String,
+        params: Map<String, Any> = emptyMap()
     ) {
         viewModelScope.launch {
             _uiState.value = StrategiesUiState.Loading
@@ -113,7 +139,7 @@ class StrategiesViewModel @Inject constructor(
                 riskPerTrade = riskPerTrade,
                 fixedAmount = fixedAmount,
                 accountId = accountId,
-                params = emptyMap() // Basic params, can be extended later
+                params = params
             )
             
             strategyRepository.createStrategy(request)

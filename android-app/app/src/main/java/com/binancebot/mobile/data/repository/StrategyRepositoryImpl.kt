@@ -131,4 +131,17 @@ class StrategyRepositoryImpl @Inject constructor(
             }
         }
     }
+    
+    override suspend fun getStrategyHealth(strategyId: String): Result<com.binancebot.mobile.data.remote.dto.StrategyHealthDto> {
+        return retryApiCall {
+            val response = api.getStrategyHealth(strategyId)
+            response.toResult()
+        }.let {
+            when (it) {
+                is com.binancebot.mobile.util.ApiResult.Success -> Result.success(it.data)
+                is com.binancebot.mobile.util.ApiResult.Error -> Result.failure(Exception(it.message))
+                is com.binancebot.mobile.util.ApiResult.Exception -> Result.failure(it.throwable)
+            }
+        }
+    }
 }

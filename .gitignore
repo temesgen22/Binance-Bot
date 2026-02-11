@@ -74,3 +74,9 @@ dmypy.json
 # Android test cases (excluded from repository)
 tests/test_android_app_endpoints.py
 
+# Firebase service account key (sensitive - never commit)
+app/config/firebase-service-account.json
+**/firebase-service-account.json
+**/firebase-credentials.json
+**/google-services.json
+

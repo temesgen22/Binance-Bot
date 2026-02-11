@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,6 +34,70 @@ fun CreateStrategyScreen(
     var selectedAccountId by remember { mutableStateOf<String?>(null) }
     var showAccountDropdown by remember { mutableStateOf(false) }
     
+    // Strategy parameters - initialized with defaults based on strategy type
+    // Scalping/Reverse Scalping parameters
+    var emaFast by remember { mutableStateOf("8") }
+    var emaSlow by remember { mutableStateOf("21") }
+    var takeProfitPct by remember { mutableStateOf("0.004") }
+    var stopLossPct by remember { mutableStateOf("0.002") }
+    var intervalSeconds by remember { mutableStateOf("10") }
+    var klineInterval by remember { mutableStateOf("1m") }
+    var enableShort by remember { mutableStateOf(true) }
+    var minEmaSeparation by remember { mutableStateOf("0.0002") }
+    var enableHtfBias by remember { mutableStateOf(true) }
+    var cooldownCandles by remember { mutableStateOf("2") }
+    var trailingStopEnabled by remember { mutableStateOf(false) }
+    var trailingStopActivationPct by remember { mutableStateOf("0.0") }
+    var enableEmaCrossExit by remember { mutableStateOf(true) }
+    
+    // Range Mean Reversion parameters
+    var lookbackPeriod by remember { mutableStateOf("150") }
+    var buyZonePct by remember { mutableStateOf("0.2") }
+    var sellZonePct by remember { mutableStateOf("0.2") }
+    var emaFastPeriod by remember { mutableStateOf("20") }
+    var emaSlowPeriod by remember { mutableStateOf("50") }
+    var maxEmaSpreadPct by remember { mutableStateOf("0.005") }
+    var maxAtrMultiplier by remember { mutableStateOf("2.0") }
+    var rsiPeriod by remember { mutableStateOf("14") }
+    var rsiOversold by remember { mutableStateOf("40.0") }
+    var rsiOverbought by remember { mutableStateOf("60.0") }
+    var tpBufferPct by remember { mutableStateOf("0.001") }
+    var slBufferPct by remember { mutableStateOf("0.002") }
+    
+    // Initialize defaults when strategy type changes
+    LaunchedEffect(strategyType) {
+        when (strategyType) {
+            "scalping", "reverse_scalping" -> {
+                // Use current values or defaults
+                if (emaFast.isEmpty()) emaFast = "8"
+                if (emaSlow.isEmpty()) emaSlow = "21"
+                if (takeProfitPct.isEmpty()) takeProfitPct = "0.004"
+                if (stopLossPct.isEmpty()) stopLossPct = "0.002"
+                if (intervalSeconds.isEmpty()) intervalSeconds = "10"
+                if (klineInterval.isEmpty()) klineInterval = "1m"
+                if (minEmaSeparation.isEmpty()) minEmaSeparation = "0.0002"
+                if (cooldownCandles.isEmpty()) cooldownCandles = "2"
+                if (trailingStopActivationPct.isEmpty()) trailingStopActivationPct = "0.0"
+            }
+            "range_mean_reversion" -> {
+                // Use current values or defaults
+                if (lookbackPeriod.isEmpty()) lookbackPeriod = "150"
+                if (buyZonePct.isEmpty()) buyZonePct = "0.2"
+                if (sellZonePct.isEmpty()) sellZonePct = "0.2"
+                if (emaFastPeriod.isEmpty()) emaFastPeriod = "20"
+                if (emaSlowPeriod.isEmpty()) emaSlowPeriod = "50"
+                if (maxEmaSpreadPct.isEmpty()) maxEmaSpreadPct = "0.005"
+                if (maxAtrMultiplier.isEmpty()) maxAtrMultiplier = "2.0"
+                if (rsiPeriod.isEmpty()) rsiPeriod = "14"
+                if (rsiOversold.isEmpty()) rsiOversold = "40.0"
+                if (rsiOverbought.isEmpty()) rsiOverbought = "60.0"
+                if (tpBufferPct.isEmpty()) tpBufferPct = "0.001"
+                if (slBufferPct.isEmpty()) slBufferPct = "0.002"
+                if (klineInterval.isEmpty()) klineInterval = "5m"
+            }
+        }
+    }
+    
     val accounts by accountViewModel.accounts.collectAsState()
     val uiState by strategiesViewModel.uiState.collectAsState()
     
@@ -43,10 +108,15 @@ fun CreateStrategyScreen(
         }
     }
     
-    // Navigate back on success
+    // Navigate back on success (with delay to show success state)
     LaunchedEffect(uiState) {
         if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Success) {
-            navController.popBackStack()
+            // Only navigate if we actually created a strategy (not just loaded)
+            // Check if form was submitted
+            if (name.isNotBlank() && symbol.isNotBlank()) {
+                kotlinx.coroutines.delay(1000) // Longer delay to ensure user sees success
+                navController.popBackStack()
+            }
         }
     }
     
@@ -111,12 +181,47 @@ fun CreateStrategyScreen(
                     expanded = showStrategyTypeDropdown,
                     onDismissRequest = { showStrategyTypeDropdown = false }
                 ) {
-                    listOf("scalping", "range_mean_reversion").forEach { type ->
+                    listOf("scalping", "reverse_scalping", "range_mean_reversion").forEach { type ->
                         DropdownMenuItem(
                             text = { Text(type.replace("_", " ").replaceFirstChar { it.uppercase() }) },
                             onClick = {
                                 strategyType = type
                                 showStrategyTypeDropdown = false
+                                // Reset parameters to defaults when type changes
+                                when (type) {
+                                    "scalping", "reverse_scalping" -> {
+                                        emaFast = "8"
+                                        emaSlow = "21"
+                                        takeProfitPct = "0.004"
+                                        stopLossPct = "0.002"
+                                        intervalSeconds = "10"
+                                        klineInterval = "1m"
+                                        enableShort = true
+                                        minEmaSeparation = "0.0002"
+                                        enableHtfBias = true
+                                        cooldownCandles = "2"
+                                        trailingStopEnabled = false
+                                        trailingStopActivationPct = "0.0"
+                                        enableEmaCrossExit = true
+                                    }
+                                    "range_mean_reversion" -> {
+                                        lookbackPeriod = "150"
+                                        buyZonePct = "0.2"
+                                        sellZonePct = "0.2"
+                                        emaFastPeriod = "20"
+                                        emaSlowPeriod = "50"
+                                        maxEmaSpreadPct = "0.005"
+                                        maxAtrMultiplier = "2.0"
+                                        rsiPeriod = "14"
+                                        rsiOversold = "40.0"
+                                        rsiOverbought = "60.0"
+                                        tpBufferPct = "0.001"
+                                        slBufferPct = "0.002"
+                                        klineInterval = "5m"
+                                        enableShort = true
+                                        cooldownCandles = "2"
+                                    }
+                                }
                             }
                         )
                     }
@@ -189,6 +294,238 @@ fun CreateStrategyScreen(
                 supportingText = { Text("Optional: Overrides risk per trade if set") }
             )
             
+            // Strategy Parameters Section
+            HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+            Text(
+                text = "Strategy Parameters",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(vertical = Spacing.Small)
+            )
+            
+            // Show parameters based on strategy type
+            when (strategyType) {
+                "scalping", "reverse_scalping" -> {
+                    // EMA Scalping Parameters
+                    OutlinedTextField(
+                        value = emaFast,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) emaFast = it },
+                        label = { Text("EMA Fast Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = emaSlow,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) emaSlow = it },
+                        label = { Text("EMA Slow Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = takeProfitPct,
+                        onValueChange = { takeProfitPct = it },
+                        label = { Text("Take Profit % (e.g., 0.004 = 0.4%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = stopLossPct,
+                        onValueChange = { stopLossPct = it },
+                        label = { Text("Stop Loss % (e.g., 0.002 = 0.2%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = intervalSeconds,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) intervalSeconds = it },
+                        label = { Text("Interval Seconds") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = klineInterval,
+                        onValueChange = { klineInterval = it },
+                        label = { Text("Kline Interval (1m, 5m, 15m, etc.)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = enableShort,
+                            onCheckedChange = { enableShort = it }
+                        )
+                        Text("Enable Short Trading", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = minEmaSeparation,
+                        onValueChange = { minEmaSeparation = it },
+                        label = { Text("Min EMA Separation (0.0002 = 0.02%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = enableHtfBias,
+                            onCheckedChange = { enableHtfBias = it }
+                        )
+                        Text("Enable HTF Bias", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = cooldownCandles,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) cooldownCandles = it },
+                        label = { Text("Cooldown Candles") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = trailingStopEnabled,
+                            onCheckedChange = { trailingStopEnabled = it }
+                        )
+                        Text("Trailing Stop Enabled", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    if (trailingStopEnabled) {
+                        OutlinedTextField(
+                            value = trailingStopActivationPct,
+                            onValueChange = { trailingStopActivationPct = it },
+                            label = { Text("Trailing Stop Activation %") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = enableEmaCrossExit,
+                            onCheckedChange = { enableEmaCrossExit = it }
+                        )
+                        Text("Enable EMA Cross Exit", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                }
+                "range_mean_reversion" -> {
+                    // Range Mean Reversion Parameters
+                    OutlinedTextField(
+                        value = lookbackPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) lookbackPeriod = it },
+                        label = { Text("Lookback Period (candles)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = buyZonePct,
+                        onValueChange = { buyZonePct = it },
+                        label = { Text("Buy Zone % (0.2 = bottom 20%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = sellZonePct,
+                        onValueChange = { sellZonePct = it },
+                        label = { Text("Sell Zone % (0.2 = top 20%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = emaFastPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) emaFastPeriod = it },
+                        label = { Text("EMA Fast Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = emaSlowPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) emaSlowPeriod = it },
+                        label = { Text("EMA Slow Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = maxEmaSpreadPct,
+                        onValueChange = { maxEmaSpreadPct = it },
+                        label = { Text("Max EMA Spread %") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = maxAtrMultiplier,
+                        onValueChange = { maxAtrMultiplier = it },
+                        label = { Text("Max ATR Multiplier") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rsiPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) rsiPeriod = it },
+                        label = { Text("RSI Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rsiOversold,
+                        onValueChange = { rsiOversold = it },
+                        label = { Text("RSI Oversold Threshold") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rsiOverbought,
+                        onValueChange = { rsiOverbought = it },
+                        label = { Text("RSI Overbought Threshold") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = klineInterval,
+                        onValueChange = { klineInterval = it },
+                        label = { Text("Kline Interval (1m, 5m, 15m, etc.)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = tpBufferPct,
+                        onValueChange = { tpBufferPct = it },
+                        label = { Text("TP Buffer %") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = slBufferPct,
+                        onValueChange = { slBufferPct = it },
+                        label = { Text("SL Buffer %") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = enableShort,
+                            onCheckedChange = { enableShort = it }
+                        )
+                        Text("Enable Short Trading", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = cooldownCandles,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) cooldownCandles = it },
+                        label = { Text("Cooldown Candles") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            }
+            
             // Error Message
             if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Error) {
                 Card(
@@ -219,6 +556,35 @@ fun CreateStrategyScreen(
             Button(
                 onClick = {
                     selectedAccountId?.let { accountId ->
+                        // Build params map based on strategy type
+                        val params = buildParamsMap(
+                            strategyType = strategyType,
+                            emaFast = emaFast,
+                            emaSlow = emaSlow,
+                            takeProfitPct = takeProfitPct,
+                            stopLossPct = stopLossPct,
+                            intervalSeconds = intervalSeconds,
+                            klineInterval = klineInterval,
+                            enableShort = enableShort,
+                            minEmaSeparation = minEmaSeparation,
+                            enableHtfBias = enableHtfBias,
+                            cooldownCandles = cooldownCandles,
+                            trailingStopEnabled = trailingStopEnabled,
+                            trailingStopActivationPct = trailingStopActivationPct,
+                            enableEmaCrossExit = enableEmaCrossExit,
+                            lookbackPeriod = lookbackPeriod,
+                            buyZonePct = buyZonePct,
+                            sellZonePct = sellZonePct,
+                            emaFastPeriod = emaFastPeriod,
+                            emaSlowPeriod = emaSlowPeriod,
+                            maxEmaSpreadPct = maxEmaSpreadPct,
+                            maxAtrMultiplier = maxAtrMultiplier,
+                            rsiPeriod = rsiPeriod,
+                            rsiOversold = rsiOversold,
+                            rsiOverbought = rsiOverbought,
+                            tpBufferPct = tpBufferPct,
+                            slBufferPct = slBufferPct
+                        )
                         strategiesViewModel.createStrategy(
                             name = name.trim(),
                             symbol = symbol.trim().uppercase(),
@@ -226,7 +592,8 @@ fun CreateStrategyScreen(
                             leverage = leverage.toInt(),
                             riskPerTrade = riskPerTrade.toDoubleOrNull(),
                             fixedAmount = fixedAmount.toDoubleOrNull(),
-                            accountId = accountId
+                            accountId = accountId,
+                            params = params
                         )
                     }
                 },
@@ -243,6 +610,78 @@ fun CreateStrategyScreen(
                 Text("Create Strategy")
             }
         }
+    }
+}
+
+// Helper function to build params map based on strategy type
+fun buildParamsMap(
+    strategyType: String,
+    // Scalping/Reverse Scalping params
+    emaFast: String = "8",
+    emaSlow: String = "21",
+    takeProfitPct: String = "0.004",
+    stopLossPct: String = "0.002",
+    intervalSeconds: String = "10",
+    klineInterval: String = "1m",
+    enableShort: Boolean = true,
+    minEmaSeparation: String = "0.0002",
+    enableHtfBias: Boolean = true,
+    cooldownCandles: String = "2",
+    trailingStopEnabled: Boolean = false,
+    trailingStopActivationPct: String = "0.0",
+    enableEmaCrossExit: Boolean = true,
+    // Range Mean Reversion params
+    lookbackPeriod: String = "150",
+    buyZonePct: String = "0.2",
+    sellZonePct: String = "0.2",
+    emaFastPeriod: String = "20",
+    emaSlowPeriod: String = "50",
+    maxEmaSpreadPct: String = "0.005",
+    maxAtrMultiplier: String = "2.0",
+    rsiPeriod: String = "14",
+    rsiOversold: String = "40.0",
+    rsiOverbought: String = "60.0",
+    tpBufferPct: String = "0.001",
+    slBufferPct: String = "0.002"
+): Map<String, Any> {
+    return when (strategyType) {
+        "scalping", "reverse_scalping" -> {
+            mapOf<String, Any>(
+                "ema_fast" to (emaFast.toIntOrNull() ?: 8),
+                "ema_slow" to (emaSlow.toIntOrNull() ?: 21),
+                "take_profit_pct" to (takeProfitPct.toDoubleOrNull() ?: 0.004),
+                "stop_loss_pct" to (stopLossPct.toDoubleOrNull() ?: 0.002),
+                "interval_seconds" to (intervalSeconds.toIntOrNull() ?: 10),
+                "kline_interval" to klineInterval,
+                "enable_short" to enableShort,
+                "min_ema_separation" to (minEmaSeparation.toDoubleOrNull() ?: 0.0002),
+                "enable_htf_bias" to enableHtfBias,
+                "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2),
+                "trailing_stop_enabled" to trailingStopEnabled,
+                "trailing_stop_activation_pct" to (trailingStopActivationPct.toDoubleOrNull() ?: 0.0),
+                "enable_ema_cross_exit" to enableEmaCrossExit
+            )
+        }
+        "range_mean_reversion" -> {
+            mapOf<String, Any>(
+                "lookback_period" to (lookbackPeriod.toIntOrNull() ?: 150),
+                "buy_zone_pct" to (buyZonePct.toDoubleOrNull() ?: 0.2),
+                "sell_zone_pct" to (sellZonePct.toDoubleOrNull() ?: 0.2),
+                "ema_fast_period" to (emaFastPeriod.toIntOrNull() ?: 20),
+                "ema_slow_period" to (emaSlowPeriod.toIntOrNull() ?: 50),
+                "max_ema_spread_pct" to (maxEmaSpreadPct.toDoubleOrNull() ?: 0.005),
+                "max_atr_multiplier" to (maxAtrMultiplier.toDoubleOrNull() ?: 2.0),
+                "rsi_period" to (rsiPeriod.toIntOrNull() ?: 14),
+                "rsi_oversold" to (rsiOversold.toDoubleOrNull() ?: 40.0),
+                "rsi_overbought" to (rsiOverbought.toDoubleOrNull() ?: 60.0),
+                "tp_buffer_pct" to (tpBufferPct.toDoubleOrNull() ?: 0.001),
+                "sl_buffer_pct" to (slBufferPct.toDoubleOrNull() ?: 0.002),
+                "kline_interval" to klineInterval,
+                "enable_short" to enableShort,
+                "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2)
+            )
+        }
+        else -> emptyMap()
     }
 }
 

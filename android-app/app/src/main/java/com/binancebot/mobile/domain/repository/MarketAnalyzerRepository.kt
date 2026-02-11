@@ -43,3 +43,11 @@ interface MarketAnalyzerRepository {
 
 
 
+
+
+
+
+
+
+
+

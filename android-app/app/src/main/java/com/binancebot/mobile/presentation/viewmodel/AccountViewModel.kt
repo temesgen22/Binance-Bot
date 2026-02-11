@@ -44,18 +44,26 @@ class AccountViewModel @Inject constructor(
     }
     
     fun createAccount(
-        accountName: String,
-        apiKey: String,
-        apiSecret: String,
-        testnet: Boolean
+        accountId: String,
+        name: String? = null,
+        apiKey: String? = null,
+        apiSecret: String? = null,
+        testnet: Boolean = true,
+        paperTrading: Boolean = false,
+        paperBalance: Double? = null
     ) {
         viewModelScope.launch {
             _uiState.value = AccountUiState.Loading
             val request = com.binancebot.mobile.data.remote.dto.CreateAccountRequest(
-                accountName = accountName,
+                accountId = accountId,
+                name = name,
                 apiKey = apiKey,
                 apiSecret = apiSecret,
-                testnet = testnet
+                exchangePlatform = "binance",
+                testnet = testnet,
+                isDefault = false,
+                paperTrading = paperTrading,
+                paperBalance = paperBalance
             )
             
             repository.createAccount(request)

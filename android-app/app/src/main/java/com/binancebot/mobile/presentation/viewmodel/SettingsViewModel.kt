@@ -31,6 +31,16 @@ class SettingsViewModel @Inject constructor(
     val notificationsEnabled = preferencesManager.notificationsEnabled
     val language = preferencesManager.language
     
+    // Granular notification preferences
+    val tradesEnabled = preferencesManager.tradesEnabled
+    val alertsEnabled = preferencesManager.alertsEnabled
+    val strategyEnabled = preferencesManager.strategyEnabled
+    val systemEnabled = preferencesManager.systemEnabled
+    val soundEnabled = preferencesManager.soundEnabled
+    val vibrationEnabled = preferencesManager.vibrationEnabled
+    val tradePnLThreshold = preferencesManager.tradePnLThreshold
+    val alertPriority = preferencesManager.alertPriority
+    
     init {
         loadCurrentUser()
     }
@@ -86,6 +96,38 @@ class SettingsViewModel @Inject constructor(
     
     suspend fun setLanguage(lang: String) {
         preferencesManager.setLanguage(lang)
+    }
+    
+    suspend fun setTradesEnabled(enabled: Boolean) {
+        preferencesManager.setTradesEnabled(enabled)
+    }
+    
+    suspend fun setAlertsEnabled(enabled: Boolean) {
+        preferencesManager.setAlertsEnabled(enabled)
+    }
+    
+    suspend fun setStrategyEnabled(enabled: Boolean) {
+        preferencesManager.setStrategyEnabled(enabled)
+    }
+    
+    suspend fun setSystemEnabled(enabled: Boolean) {
+        preferencesManager.setSystemEnabled(enabled)
+    }
+    
+    suspend fun setSoundEnabled(enabled: Boolean) {
+        preferencesManager.setSoundEnabled(enabled)
+    }
+    
+    suspend fun setVibrationEnabled(enabled: Boolean) {
+        preferencesManager.setVibrationEnabled(enabled)
+    }
+    
+    suspend fun setTradePnLThreshold(threshold: Double) {
+        preferencesManager.setTradePnLThreshold(threshold)
+    }
+    
+    suspend fun setAlertPriority(priority: Int) {
+        preferencesManager.setAlertPriority(priority)
     }
 }
 

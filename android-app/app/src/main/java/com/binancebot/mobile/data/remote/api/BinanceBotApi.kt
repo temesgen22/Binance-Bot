@@ -80,6 +80,12 @@ interface BinanceBotApi {
     @GET("strategies/{strategy_id}/stats")
     suspend fun getStrategyStats(@Path("strategy_id") strategyId: String): Response<StrategyStatsDto>
     
+    @GET("strategies/{strategy_id}/health")
+    suspend fun getStrategyHealth(@Path("strategy_id") strategyId: String): Response<StrategyHealthDto>
+    
+    @GET("risk/status/strategy/{strategy_id}")
+    suspend fun getStrategyRiskStatus(@Path("strategy_id") strategyId: String): Response<StrategyRiskStatusDto>
+    
     @GET("strategies/{strategy_id}/activity")
     suspend fun getStrategyActivity(
         @Path("strategy_id") strategyId: String,
@@ -190,39 +196,44 @@ interface BinanceBotApi {
     
     // ========== Risk Management ==========
     
-    @GET("api/risk/status/portfolio")
+    @GET("risk/status/portfolio")
     suspend fun getPortfolioRiskStatus(
         @Query("account_id") accountId: String? = null
     ): Response<PortfolioRiskStatusDto>
     
-    @GET("api/risk/config")
+    @GET("risk/status/realtime")
+    suspend fun getRealtimeRiskStatus(
+        @Query("account_id") accountId: String? = null
+    ): Response<com.binancebot.mobile.data.remote.dto.RealTimeRiskStatusResponseDto>
+    
+    @GET("risk/config")
     suspend fun getRiskConfig(
         @Query("account_id") accountId: String? = null
     ): Response<RiskManagementConfigDto>
     
-    @POST("api/risk/config")
+    @POST("risk/config")
     suspend fun createRiskConfig(
         @Query("account_id") accountId: String? = null,
         @Body config: RiskManagementConfigDto
     ): Response<RiskManagementConfigDto>
     
-    @PUT("api/risk/config")
+    @PUT("risk/config")
     suspend fun updateRiskConfig(
         @Query("account_id") accountId: String? = null,
         @Body config: RiskManagementConfigDto
     ): Response<RiskManagementConfigDto>
     
-    @GET("api/risk/metrics/portfolio")
+    @GET("risk/metrics/portfolio")
     suspend fun getPortfolioRiskMetrics(
         @Query("account_id") accountId: String? = null
-    ): Response<PortfolioRiskMetricsDto>
+    ): Response<PortfolioRiskMetricsResponseDto>
     
-    @GET("api/risk/metrics/strategy/{strategy_id}")
+    @GET("risk/metrics/strategy/{strategy_id}")
     suspend fun getStrategyRiskMetrics(
         @Path("strategy_id") strategyId: String
     ): Response<StrategyRiskMetricsDto>
     
-    @GET("api/risk/enforcement/history")
+    @GET("risk/enforcement/history")
     suspend fun getEnforcementHistory(
         @Query("account_id") accountId: String? = null,
         @Query("event_type") eventType: String? = null,
@@ -230,15 +241,38 @@ interface BinanceBotApi {
         @Query("offset") offset: Int = 0
     ): Response<EnforcementHistoryDto>
     
-    @GET("api/risk/reports/daily")
+    @GET("risk/reports/daily")
     suspend fun getDailyRiskReport(
         @Query("account_id") accountId: String? = null
-    ): Response<RiskReportDto>
+    ): Response<RiskReportResponseDto>
     
-    @GET("api/risk/reports/weekly")
+    @GET("risk/reports/weekly")
     suspend fun getWeeklyRiskReport(
         @Query("account_id") accountId: String? = null
-    ): Response<RiskReportDto>
+    ): Response<RiskReportResponseDto>
+    
+    // Strategy Risk Config
+    @GET("risk/config/strategy/{strategy_id}")
+    suspend fun getStrategyRiskConfig(
+        @Path("strategy_id") strategyId: String
+    ): Response<StrategyRiskConfigDto>
+    
+    @POST("risk/config/strategy/{strategy_id}")
+    suspend fun createStrategyRiskConfig(
+        @Path("strategy_id") strategyId: String,
+        @Body config: StrategyRiskConfigDto
+    ): Response<StrategyRiskConfigDto>
+    
+    @PUT("risk/config/strategy/{strategy_id}")
+    suspend fun updateStrategyRiskConfig(
+        @Path("strategy_id") strategyId: String,
+        @Body config: StrategyRiskConfigDto
+    ): Response<StrategyRiskConfigDto>
+    
+    @DELETE("risk/config/strategy/{strategy_id}")
+    suspend fun deleteStrategyRiskConfig(
+        @Path("strategy_id") strategyId: String
+    ): Response<Unit>
     
     // ========== Backtesting ==========
     
@@ -301,4 +335,26 @@ interface BinanceBotApi {
         @Query("limit") limit: Int = 50,
         @Query("offset") offset: Int = 0
     ): Response<Map<String, Any>> // Returns {"history": [...], "total": ...}
+    
+    // ========== Notifications ==========
+    
+    @POST("notifications/fcm/register")
+    suspend fun registerFcmToken(@Body request: RegisterFcmTokenRequest): Response<RegisterFcmTokenResponse>
+    
+    @PUT("notifications/preferences")
+    suspend fun updateNotificationPreferences(@Body preferences: NotificationPreferencesDto): Response<NotificationPreferencesDto>
+    
+    @GET("notifications/history")
+    suspend fun getNotificationHistory(
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0,
+        @Query("category") category: String? = null,
+        @Query("type") type: String? = null
+    ): Response<NotificationHistoryResponseDto>
+    
+    @PUT("notifications/{notification_id}/read")
+    suspend fun markNotificationAsRead(@Path("notification_id") notificationId: String): Response<Unit>
+    
+    @DELETE("notifications/{notification_id}")
+    suspend fun deleteNotification(@Path("notification_id") notificationId: String): Response<Unit>
 }

@@ -3,6 +3,28 @@ package com.binancebot.mobile.data.remote.dto
 import com.google.gson.annotations.SerializedName
 
 /**
+ * Real-time Risk Status Response DTO (from /status/realtime endpoint)
+ */
+data class RealTimeRiskStatusResponseDto(
+    @SerializedName("account_id")
+    val accountId: String? = null,
+    @SerializedName("timestamp")
+    val timestamp: String? = null,
+    @SerializedName("risk_status")
+    val riskStatus: String? = null,
+    @SerializedName("current_exposure")
+    val currentExposure: Map<String, Any?>? = null,
+    @SerializedName("loss_limits")
+    val lossLimits: Map<String, Any?>? = null,
+    @SerializedName("drawdown")
+    val drawdown: Map<String, Any?>? = null,
+    @SerializedName("circuit_breakers")
+    val circuitBreakers: Map<String, Any?>? = null,
+    @SerializedName("recent_enforcement_events")
+    val recentEnforcementEvents: List<Map<String, Any?>>? = null
+)
+
+/**
  * Portfolio Risk Status DTO
  */
 data class PortfolioRiskStatusDto(
@@ -118,6 +140,18 @@ data class RiskManagementConfigDto(
 )
 
 /**
+ * Portfolio Risk Metrics Response Wrapper (matches API response structure)
+ */
+data class PortfolioRiskMetricsResponseDto(
+    @SerializedName("account_id")
+    val accountId: String? = null,
+    @SerializedName("metrics")
+    val metrics: PortfolioRiskMetricsDto? = null,
+    @SerializedName("calculated_at")
+    val calculatedAt: String? = null
+)
+
+/**
  * Portfolio Risk Metrics DTO
  */
 data class PortfolioRiskMetricsDto(
@@ -130,12 +164,18 @@ data class PortfolioRiskMetricsDto(
     // Balance Tracking
     @SerializedName("total_balance_usdt")
     val totalBalanceUsdt: Double? = null,
+    @SerializedName("current_balance")
+    val currentBalance: Double? = null,
+    @SerializedName("initial_balance")
+    val initialBalance: Double? = null,
     @SerializedName("available_balance_usdt")
     val availableBalanceUsdt: Double? = null,
     @SerializedName("used_margin_usdt")
     val usedMarginUsdt: Double? = null,
     @SerializedName("peak_balance_usdt")
     val peakBalanceUsdt: Double? = null,
+    @SerializedName("peak_balance")
+    val peakBalance: Double? = null,
     // Portfolio Metrics
     @SerializedName("total_exposure_usdt")
     val totalExposureUsdt: Double? = null,
@@ -149,10 +189,20 @@ data class PortfolioRiskMetricsDto(
     val weeklyPnLUsdt: Double? = null,
     @SerializedName("weekly_pnl_pct")
     val weeklyPnLPct: Double? = null,
+    @SerializedName("total_pnl")
+    val totalPnL: Double? = null,
+    @SerializedName("gross_profit")
+    val grossProfit: Double? = null,
+    @SerializedName("gross_loss")
+    val grossLoss: Double? = null,
     @SerializedName("current_drawdown_pct")
     val currentDrawdownPct: Double? = null,
+    @SerializedName("current_drawdown_usdt")
+    val currentDrawdownUsdt: Double? = null,
     @SerializedName("max_drawdown_pct")
     val maxDrawdownPct: Double? = null,
+    @SerializedName("max_drawdown_usdt")
+    val maxDrawdownUsdt: Double? = null,
     // Performance Metrics
     @SerializedName("sharpe_ratio")
     val sharpeRatio: Double? = null,
@@ -225,7 +275,51 @@ data class EnforcementHistoryDto(
 )
 
 /**
- * Risk Report DTO
+ * Risk Report Summary DTO (nested in response)
+ */
+data class RiskReportSummaryDto(
+    @SerializedName("total_trades")
+    val totalTrades: Int? = null,
+    @SerializedName("winning_trades")
+    val winningTrades: Int? = null,
+    @SerializedName("losing_trades")
+    val losingTrades: Int? = null,
+    @SerializedName("win_rate")
+    val winRate: Double? = null,
+    @SerializedName("total_pnl")
+    val totalPnL: Double? = null,
+    @SerializedName("gross_profit")
+    val grossProfit: Double? = null,
+    @SerializedName("gross_loss")
+    val grossLoss: Double? = null,
+    @SerializedName("profit_factor")
+    val profitFactor: Double? = null,
+    @SerializedName("max_drawdown_pct")
+    val maxDrawdownPct: Double? = null,
+    @SerializedName("sharpe_ratio")
+    val sharpeRatio: Double? = null
+)
+
+/**
+ * Risk Report Response DTO (wrapper for API response)
+ */
+data class RiskReportResponseDto(
+    @SerializedName("date")
+    val date: String? = null,
+    @SerializedName("week_start")
+    val weekStart: String? = null,
+    @SerializedName("week_end")
+    val weekEnd: String? = null,
+    @SerializedName("account_id")
+    val accountId: String? = null,
+    @SerializedName("summary")
+    val summary: RiskReportSummaryDto? = null,
+    @SerializedName("generated_at")
+    val generatedAt: String? = null
+)
+
+/**
+ * Risk Report DTO (flattened for UI)
  */
 data class RiskReportDto(
     @SerializedName("date")

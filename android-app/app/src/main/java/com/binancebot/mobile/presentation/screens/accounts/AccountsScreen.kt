@@ -75,8 +75,16 @@ fun AccountsScreen(
         if (showCreateDialog) {
             CreateAccountDialog(
                 onDismiss = { showCreateDialog = false },
-                onCreate = { name, apiKey, apiSecret, testnet ->
-                    viewModel.createAccount(name, apiKey, apiSecret, testnet)
+                onCreate = { accountId, name, apiKey, apiSecret, testnet, paperTrading, paperBalance ->
+                    viewModel.createAccount(
+                        accountId = accountId,
+                        name = name,
+                        apiKey = apiKey,
+                        apiSecret = apiSecret,
+                        testnet = testnet,
+                        paperTrading = paperTrading,
+                        paperBalance = paperBalance
+                    )
                     showCreateDialog = false
                 }
             )

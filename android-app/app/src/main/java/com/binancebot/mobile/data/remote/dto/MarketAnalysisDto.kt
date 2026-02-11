@@ -53,3 +53,11 @@ data class MarketAnalysisResponse(
 
 
 
+
+
+
+
+
+
+
+

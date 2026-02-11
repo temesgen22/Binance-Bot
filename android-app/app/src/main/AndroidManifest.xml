@@ -6,6 +6,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Notification permissions -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:name=".app.BinanceBotApplication"
@@ -39,6 +43,33 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        
+        <!-- Firebase Messaging Service -->
+        <service
+            android:name=".service.BinanceBotFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        
+        <!-- Notification Foreground Service -->
+        <service
+            android:name=".service.NotificationForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        
+        <!-- Notification Action Receiver -->
+        <receiver
+            android:name=".service.NotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.binancebot.mobile.service.NotificationActionReceiver.ACTION_VIEW_TRADE" />
+                <action android:name="com.binancebot.mobile.service.NotificationActionReceiver.ACTION_VIEW_STRATEGY" />
+                <action android:name="com.binancebot.mobile.service.NotificationActionReceiver.ACTION_DISMISS" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

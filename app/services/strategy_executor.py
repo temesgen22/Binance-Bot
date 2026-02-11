@@ -256,6 +256,7 @@ class StrategyExecutor:
                     await self.notifications.check_and_notify_pnl_threshold(
                         summary,
                         summary.unrealized_pnl,
+                        user_id=self.order_manager.user_id,
                     )
                 
                 # 7) Execute order based on synced state + fresh signal
@@ -348,6 +349,7 @@ class StrategyExecutor:
                         summary,
                         reason="Strategy cancelled",
                         final_pnl=final_pnl,
+                        user_id=self.order_manager.user_id,
                     )
                 )
             
@@ -389,6 +391,7 @@ class StrategyExecutor:
                         summary,
                         exc,
                         error_type=type(exc).__name__,
+                        user_id=self.order_manager.user_id,
                     )
                 )
         finally:
@@ -964,6 +967,7 @@ class StrategyExecutor:
                         order_response,
                         position_action="OPEN",
                         exit_reason=None,
+                        user_id=self.order_manager.user_id,
                     )
                 )
         elif is_closing_order:
@@ -1161,6 +1165,7 @@ class StrategyExecutor:
                         order_response,
                         position_action="CLOSE",
                         exit_reason=exit_reason,
+                        user_id=self.order_manager.user_id,
                     )
                 )
         else:
@@ -1178,6 +1183,7 @@ class StrategyExecutor:
                         order_response,
                         position_action="TRADE",
                         exit_reason=exit_reason,
+                        user_id=self.order_manager.user_id,
                     )
                 )
         

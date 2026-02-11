@@ -20,6 +20,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.viewmodel.AuthViewModel
+import com.binancebot.mobile.presentation.viewmodel.NotificationHistoryViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -163,21 +164,20 @@ fun SettingsScreen(
                     SettingsItem(
                         icon = Icons.Default.Notifications,
                         title = "Notifications",
-                        subtitle = "Enable push notifications",
+                        subtitle = "Manage notification preferences",
                         onClick = { 
-                            scope.launch {
-                                settingsViewModel.setNotificationsEnabled(!notificationsEnabled)
-                            }
+                            navController.navigate("notification_settings")
                         },
                         trailing = {
-                            Switch(
-                                checked = notificationsEnabled,
-                                onCheckedChange = { enabled ->
-                                    scope.launch {
-                                        settingsViewModel.setNotificationsEnabled(enabled)
-                                    }
-                                }
-                            )
+                            // Show notification badge with unread count
+                            val notificationViewModel: NotificationHistoryViewModel = hiltViewModel()
+                            val unreadCount by notificationViewModel.unreadCount.collectAsState()
+                            if (unreadCount > 0) {
+                                com.binancebot.mobile.presentation.components.NotificationBadge(
+                                    unreadCount = unreadCount,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
                         }
                     )
                     

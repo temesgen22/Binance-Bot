@@ -2,6 +2,7 @@ package com.binancebot.mobile.di
 
 import android.content.Context
 import androidx.room.Room
+import com.binancebot.mobile.data.local.dao.NotificationDao
 import com.binancebot.mobile.data.local.dao.StrategyDao
 import com.binancebot.mobile.data.local.dao.TradeDao
 import com.binancebot.mobile.data.local.database.AppDatabase
@@ -27,6 +28,7 @@ object DatabaseModule {
             AppDatabase::class.java,
             AppDatabase.DATABASE_NAME
         )
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration() // For development - remove in production
             .build()
     }
@@ -40,7 +42,15 @@ object DatabaseModule {
     fun provideTradeDao(database: AppDatabase): TradeDao {
         return database.tradeDao()
     }
+    
+    @Provides
+    fun provideNotificationDao(database: AppDatabase): NotificationDao {
+        return database.notificationDao()
+    }
 }
+
+
+
 
 
 

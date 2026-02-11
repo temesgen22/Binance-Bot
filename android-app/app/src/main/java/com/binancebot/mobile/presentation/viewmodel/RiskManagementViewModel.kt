@@ -36,6 +36,12 @@ class RiskManagementViewModel @Inject constructor(
     private val _riskConfig = MutableStateFlow<com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?>(null)
     val riskConfig: StateFlow<com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?> = _riskConfig.asStateFlow()
     
+    private val _allAccountConfigs = MutableStateFlow<Map<String, com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?>>(emptyMap())
+    val allAccountConfigs: StateFlow<Map<String, com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?>> = _allAccountConfigs.asStateFlow()
+    
+    private val _strategyRiskConfig = MutableStateFlow<com.binancebot.mobile.data.remote.dto.StrategyRiskConfigDto?>(null)
+    val strategyRiskConfig: StateFlow<com.binancebot.mobile.data.remote.dto.StrategyRiskConfigDto?> = _strategyRiskConfig.asStateFlow()
+    
     private val _uiState = MutableStateFlow<RiskManagementUiState>(RiskManagementUiState.Idle)
     val uiState: StateFlow<RiskManagementUiState> = _uiState.asStateFlow()
     
@@ -64,9 +70,11 @@ class RiskManagementViewModel @Inject constructor(
     }
     
     fun refresh(accountId: String? = null) {
+        // Force refresh status first, then other data
         loadPortfolioRiskStatus(accountId)
         loadPortfolioMetrics(accountId)
         loadRiskConfig(accountId)
+        loadAllStrategyMetrics(accountId)
     }
     
     fun loadPortfolioMetrics(accountId: String? = null) {
@@ -146,6 +154,11 @@ class RiskManagementViewModel @Inject constructor(
             riskManagementRepository.updateRiskConfig(accountId, config)
                 .onSuccess { updatedConfig ->
                     _riskConfig.value = updatedConfig
+                    // Update the all configs map
+                    val accountIdKey = accountId ?: "default"
+                    _allAccountConfigs.value = _allAccountConfigs.value.toMutableMap().apply {
+                        put(accountIdKey, updatedConfig)
+                    }
                     _uiState.value = RiskManagementUiState.Success
                 }
                 .onFailure { error ->
@@ -160,10 +173,106 @@ class RiskManagementViewModel @Inject constructor(
             riskManagementRepository.createRiskConfig(accountId, config)
                 .onSuccess { createdConfig ->
                     _riskConfig.value = createdConfig
+                    // Update the all configs map
+                    val accountIdKey = accountId ?: "default"
+                    _allAccountConfigs.value = _allAccountConfigs.value.toMutableMap().apply {
+                        put(accountIdKey, createdConfig)
+                    }
                     _uiState.value = RiskManagementUiState.Success
                 }
                 .onFailure { error ->
                     _uiState.value = RiskManagementUiState.Error(error.message ?: "Failed to create risk configuration")
+                }
+        }
+    }
+    
+    fun loadAllAccountConfigs(accountIds: List<String>) {
+        viewModelScope.launch {
+            _uiState.value = RiskManagementUiState.Loading
+            val configsMap = mutableMapOf<String, com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?>()
+            
+            // Load config for each account
+            accountIds.forEach { accountId ->
+                riskManagementRepository.getRiskConfig(accountId)
+                    .onSuccess { config ->
+                        configsMap[accountId] = config
+                    }
+                    .onFailure { 
+                        configsMap[accountId] = null // No config for this account
+                    }
+            }
+            
+            // Also load default
+            riskManagementRepository.getRiskConfig("default")
+                .onSuccess { config ->
+                    configsMap["default"] = config
+                }
+                .onFailure { 
+                    configsMap["default"] = null
+                }
+            
+            _allAccountConfigs.value = configsMap
+            _uiState.value = RiskManagementUiState.Success
+        }
+    }
+    
+    // Strategy Risk Config
+    fun loadStrategyRiskConfig(strategyId: String) {
+        viewModelScope.launch {
+            _uiState.value = RiskManagementUiState.Loading
+            riskManagementRepository.getStrategyRiskConfig(strategyId)
+                .onSuccess { config ->
+                    _strategyRiskConfig.value = config
+                    _uiState.value = RiskManagementUiState.Success
+                }
+                .onFailure { error ->
+                    // If 404, it means no config exists - this is OK, allow creation
+                    if (error.message?.contains("404") == true || error.message?.contains("Not Found") == true) {
+                        _strategyRiskConfig.value = null
+                        _uiState.value = RiskManagementUiState.Success // Treat 404 as success (no config exists)
+                    } else {
+                        _strategyRiskConfig.value = null
+                        _uiState.value = RiskManagementUiState.Error(error.message ?: "Failed to load strategy risk configuration")
+                    }
+                }
+        }
+    }
+    
+    fun createStrategyRiskConfig(config: com.binancebot.mobile.data.remote.dto.StrategyRiskConfigDto) {
+        viewModelScope.launch {
+            _uiState.value = RiskManagementUiState.Loading
+            riskManagementRepository.createStrategyRiskConfig(config)
+                .onSuccess {
+                    _uiState.value = RiskManagementUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = RiskManagementUiState.Error(error.message ?: "Failed to create strategy risk configuration")
+                }
+        }
+    }
+    
+    fun updateStrategyRiskConfig(strategyId: String, config: com.binancebot.mobile.data.remote.dto.StrategyRiskConfigDto) {
+        viewModelScope.launch {
+            _uiState.value = RiskManagementUiState.Loading
+            riskManagementRepository.updateStrategyRiskConfig(strategyId, config)
+                .onSuccess {
+                    _uiState.value = RiskManagementUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = RiskManagementUiState.Error(error.message ?: "Failed to update strategy risk configuration")
+                }
+        }
+    }
+    
+    fun deleteStrategyRiskConfig(strategyId: String) {
+        viewModelScope.launch {
+            _uiState.value = RiskManagementUiState.Loading
+            riskManagementRepository.deleteStrategyRiskConfig(strategyId)
+                .onSuccess {
+                    _uiState.value = RiskManagementUiState.Success
+                }
+                .onFailure { error ->
+                    _uiState.value = RiskManagementUiState.Error(error.message ?: "Failed to delete strategy risk configuration")
                 }
         }
     }

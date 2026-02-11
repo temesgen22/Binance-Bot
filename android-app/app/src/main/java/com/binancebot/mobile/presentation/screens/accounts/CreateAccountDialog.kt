@@ -16,22 +16,31 @@ import com.binancebot.mobile.presentation.theme.Spacing
 @Composable
 fun CreateAccountDialog(
     onDismiss: () -> Unit,
-    onCreate: (String, String, String, Boolean) -> Unit
+    onCreate: (String, String?, String?, String?, Boolean, Boolean, Double?) -> Unit
 ) {
+    var accountId by remember { mutableStateOf("") }
     var accountName by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
-    var testnet by remember { mutableStateOf(false) }
+    var testnet by remember { mutableStateOf(true) }
+    var paperTrading by remember { mutableStateOf(false) }
+    var paperBalance by remember { mutableStateOf("10000") }
     var showApiSecret by remember { mutableStateOf(false) }
     
     // Reset state when dialog is dismissed
     val resetState = {
+        accountId = ""
         accountName = ""
         apiKey = ""
         apiSecret = ""
-        testnet = false
+        testnet = true
+        paperTrading = false
+        paperBalance = "10000"
         showApiSecret = false
     }
+    
+    // When paper trading is enabled, API keys become optional
+    val isApiKeyRequired = !paperTrading
     
     AlertDialog(
         onDismissRequest = {
@@ -47,48 +56,104 @@ fun CreateAccountDialog(
                 verticalArrangement = Arrangement.spacedBy(Spacing.Medium)
             ) {
                 OutlinedTextField(
+                    value = accountId,
+                    onValueChange = { accountId = it.lowercase().replace(" ", "_") },
+                    label = { Text("Account ID *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = { Text("Unique identifier (lowercase, alphanumeric, underscores)") },
+                    isError = accountId.isBlank() || !accountId.matches(Regex("^[a-z0-9_-]+$"))
+                )
+                
+                OutlinedTextField(
                     value = accountName,
                     onValueChange = { accountName = it },
-                    label = { Text("Account Name *") },
+                    label = { Text("Account Name (Optional)") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    isError = accountName.isBlank()
+                    supportingText = { Text("Display name for the account") }
                 )
                 
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    label = { Text("API Key *") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    isError = apiKey.isBlank()
-                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
                 
-                OutlinedTextField(
-                    value = apiSecret,
-                    onValueChange = { apiSecret = it },
-                    label = { Text("API Secret *") },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = if (showApiSecret) {
-                        androidx.compose.ui.text.input.VisualTransformation.None
-                    } else {
-                        androidx.compose.ui.text.input.PasswordVisualTransformation()
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { showApiSecret = !showApiSecret }) {
-                            Icon(
-                                imageVector = if (showApiSecret) {
-                                    Icons.Default.Visibility
-                                } else {
-                                    Icons.Default.VisibilityOff
-                                },
-                                contentDescription = if (showApiSecret) "Hide" else "Show"
-                            )
-                        }
-                    },
-                    isError = apiSecret.isBlank()
-                )
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = paperTrading,
+                        onCheckedChange = { paperTrading = it }
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Paper Trading",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
+                        Text(
+                            text = "Simulated trading (no real API keys needed)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                if (paperTrading) {
+                    OutlinedTextField(
+                        value = paperBalance,
+                        onValueChange = { if (it.all { char -> char.isDigit() || char == '.' }) paperBalance = it },
+                        label = { Text("Initial Paper Balance (USDT)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = { Text("Default: 10000 USDT") }
+                    )
+                }
+                
+                if (!paperTrading) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
+                    Text(
+                        text = "API Credentials (Required for Live Trading)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+                    
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        label = { Text("API Key *") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = isApiKeyRequired && apiKey.isBlank()
+                    )
+                    
+                    OutlinedTextField(
+                        value = apiSecret,
+                        onValueChange = { apiSecret = it },
+                        label = { Text("API Secret *") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (showApiSecret) {
+                            androidx.compose.ui.text.input.VisualTransformation.None
+                        } else {
+                            androidx.compose.ui.text.input.PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showApiSecret = !showApiSecret }) {
+                                Icon(
+                                    imageVector = if (showApiSecret) {
+                                        Icons.Default.Visibility
+                                    } else {
+                                        Icons.Default.VisibilityOff
+                                    },
+                                    contentDescription = if (showApiSecret) "Hide" else "Show"
+                                )
+                            }
+                        },
+                        isError = isApiKeyRequired && apiSecret.isBlank()
+                    )
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -96,22 +161,46 @@ fun CreateAccountDialog(
                 ) {
                     Checkbox(
                         checked = testnet,
-                        onCheckedChange = { testnet = it }
+                        onCheckedChange = { testnet = it },
+                        enabled = !paperTrading // Testnet only applies to live trading
                     )
-                    Text(
-                        text = "Testnet Account",
-                        modifier = Modifier.padding(start = Spacing.Small)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Testnet Account",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
+                        Text(
+                            text = if (paperTrading) "Not applicable for paper trading" else "Use Binance testnet",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    onCreate(accountName.trim(), apiKey.trim(), apiSecret.trim(), testnet)
+                    val accountIdValue = accountId.trim().ifBlank { accountName.trim().lowercase().replace(" ", "_") }
+                    val nameValue = accountName.trim().takeIf { it.isNotBlank() }
+                    val apiKeyValue = apiKey.trim().takeIf { it.isNotBlank() }
+                    val apiSecretValue = apiSecret.trim().takeIf { it.isNotBlank() }
+                    val paperBalanceValue = if (paperTrading) paperBalance.toDoubleOrNull() ?: 10000.0 else null
+                    
+                    onCreate(
+                        accountIdValue,
+                        nameValue,
+                        apiKeyValue,
+                        apiSecretValue,
+                        testnet,
+                        paperTrading,
+                        paperBalanceValue
+                    )
                     resetState()
                 },
-                enabled = accountName.isNotBlank() && apiKey.isNotBlank() && apiSecret.isNotBlank()
+                enabled = accountId.isNotBlank() && accountId.matches(Regex("^[a-z0-9_-]+$")) &&
+                        (!isApiKeyRequired || (apiKey.isNotBlank() && apiSecret.isNotBlank()))
             ) {
                 Text("Add Account")
             }

@@ -12,22 +12,31 @@ fun StatusBadge(
     status: String,
     modifier: Modifier = Modifier
 ) {
-    val (backgroundColor, textColor) = when (status.lowercase()) {
-        "running" -> Pair(
+    val (backgroundColor, textColor, displayText) = when (status.lowercase()) {
+        "running" -> Triple(
             SuccessGreen.copy(alpha = 0.2f),
-            SuccessGreen
+            SuccessGreen,
+            "RUNNING"
         )
-        "stopped" -> Pair(
+        "stopped" -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
-            MaterialTheme.colorScheme.onSurfaceVariant
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "STOPPED"
         )
-        "error" -> Pair(
+        "stopped_by_risk" -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            "STOPPED BY RISK"
+        )
+        "error" -> Triple(
             ErrorRed.copy(alpha = 0.2f),
-            ErrorRed
+            ErrorRed,
+            "ERROR"
         )
-        else -> Pair(
+        else -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
-            MaterialTheme.colorScheme.onSurfaceVariant
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            status.replaceFirstChar { it.uppercase() }
         )
     }
     
@@ -37,7 +46,7 @@ fun StatusBadge(
         color = backgroundColor
     ) {
         Text(
-            text = status.replaceFirstChar { it.uppercase() },
+            text = displayText,
             style = MaterialTheme.typography.labelSmall,
             color = textColor,
             modifier = Modifier.padding(horizontal = Spacing.Small, vertical = Spacing.Tiny)

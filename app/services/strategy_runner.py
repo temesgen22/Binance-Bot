@@ -1099,7 +1099,11 @@ class StrategyRunner:
         # Send notification that strategy started
         if self.notifications:
             asyncio.create_task(
-                self.notifications.notify_strategy_started(summary, reason="Strategy started manually")
+                self.notifications.notify_strategy_started(
+                    summary, 
+                    reason="Strategy started manually",
+                    user_id=self.user_id,
+                )
             )
         
         return summary
@@ -1273,6 +1277,7 @@ class StrategyRunner:
                     summary, 
                     reason="Strategy stopped manually",
                     final_pnl=final_pnl,
+                    user_id=self.user_id,
                 )
             )
         

@@ -29,6 +29,7 @@ sealed class Screen(
     object TestAccounts : Screen("test_accounts", "Test Accounts", Icons.Default.Security)
     object AutoTuning : Screen("auto_tuning", "Auto-Tuning", Icons.Default.Tune)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+    object Notifications : Screen("notifications", "Notifications", Icons.Default.Notifications)
 }
 
 

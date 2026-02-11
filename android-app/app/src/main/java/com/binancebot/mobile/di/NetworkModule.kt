@@ -68,7 +68,7 @@ object NetworkModule {
     fun provideGson(): Gson {
         return GsonBuilder()
             .setLenient()  // Allow lenient parsing for more flexible JSON handling
-            .serializeNulls()  // Include null values in serialization
+            // Don't serialize null values (backend doesn't accept null for optional fields)
             .create()
     }
     
