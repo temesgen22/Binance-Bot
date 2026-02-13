@@ -251,25 +251,25 @@ interface BinanceBotApi {
         @Query("account_id") accountId: String? = null
     ): Response<RiskReportResponseDto>
     
-    // Strategy Risk Config
-    @GET("risk/config/strategy/{strategy_id}")
+    // Strategy Risk Config (backend path uses plural: strategies)
+    @GET("risk/config/strategies/{strategy_id}")
     suspend fun getStrategyRiskConfig(
         @Path("strategy_id") strategyId: String
     ): Response<StrategyRiskConfigDto>
     
-    @POST("risk/config/strategy/{strategy_id}")
+    @POST("risk/config/strategies/{strategy_id}")
     suspend fun createStrategyRiskConfig(
         @Path("strategy_id") strategyId: String,
         @Body config: StrategyRiskConfigDto
     ): Response<StrategyRiskConfigDto>
     
-    @PUT("risk/config/strategy/{strategy_id}")
+    @PUT("risk/config/strategies/{strategy_id}")
     suspend fun updateStrategyRiskConfig(
         @Path("strategy_id") strategyId: String,
         @Body config: StrategyRiskConfigDto
     ): Response<StrategyRiskConfigDto>
     
-    @DELETE("risk/config/strategy/{strategy_id}")
+    @DELETE("risk/config/strategies/{strategy_id}")
     suspend fun deleteStrategyRiskConfig(
         @Path("strategy_id") strategyId: String
     ): Response<Unit>

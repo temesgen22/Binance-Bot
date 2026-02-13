@@ -297,6 +297,10 @@ fun ReportsScreen(
                                         } else {
                                             expandedStrategyIds + strategyReport.strategyId
                                         }
+                                    },
+                                    onViewFullTradeHistory = {
+                                        viewModel.setSelectedStrategyReport(strategyReport)
+                                        navController.navigate("report_strategy_trades/${strategyReport.strategyId}")
                                     }
                                 )
                             }
@@ -618,7 +622,8 @@ private fun MetricCard(
 private fun StrategyReportCard(
     strategyReport: StrategyReportDto,
     isExpanded: Boolean,
-    onToggleExpand: () -> Unit
+    onToggleExpand: () -> Unit,
+    onViewFullTradeHistory: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
@@ -780,16 +785,29 @@ private fun StrategyReportCard(
                     // Trade History (if available)
                     if (strategyReport.trades.isNotEmpty()) {
                         HorizontalDivider()
-                        Text(
-                            text = "Recent Trades (${strategyReport.trades.size})",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Recent Trades (${strategyReport.trades.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            TextButton(onClick = onViewFullTradeHistory) {
+                                Text("View full table")
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    Icons.Default.OpenInNew,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                         strategyReport.trades.take(5).forEach { trade ->
                             TradeRow(trade = trade)
                         }
-                        
                         if (strategyReport.trades.size > 5) {
                             Text(
                                 text = "... and ${strategyReport.trades.size - 5} more trades",

@@ -422,6 +422,11 @@ class StrategyExecutor:
             risk: Risk manager
             executor: Order executor
         """
+        # CRITICAL: Capture previous state BEFORE execute_order (order_manager updates summary on fill)
+        prev_side = summary.position_side
+        prev_size = summary.position_size
+        prev_entry = summary.entry_price
+        
         # Execute the order
         # Bug #4: Get klines for dynamic sizing (ATR calculation)
         # Try to get klines from strategy if available, otherwise None
@@ -474,11 +479,7 @@ class StrategyExecutor:
         if not order_response:
             return  # Order was skipped (e.g., risk blocked, insufficient balance)
         
-        # ✅ CRITICAL: Capture previous state BEFORE mutation for position_instance_id generation
-        prev_side = summary.position_side
-        prev_size = summary.position_size
-        prev_entry = summary.entry_price
-        
+        # Previous state was captured before execute_order (summary is mutated inside execute_order)
         # ✅ DEBUG: Log previous state for diagnosis
         logger.debug(
             f"[{summary.id}] Position state before order: prev_side={prev_side}, "
@@ -944,6 +945,23 @@ class StrategyExecutor:
                 summary.entry_price = order_response.avg_price or order_response.price
                 summary.position_size = order_response.executed_qty
                 summary.position_side = "SHORT"
+        
+        # Persist position state to DB so reconciliation does not see Database=0 vs Binance
+        try:
+            updates = {
+                "position_size": summary.position_size,
+                "position_side": summary.position_side,
+                "entry_price": summary.entry_price,
+            }
+            if is_opening_order and position_instance_id is not None:
+                updates["position_instance_id"] = position_instance_id
+            self.state_manager.update_strategy_in_db(
+                summary.id,
+                save_to_redis=True,
+                **updates
+            )
+        except Exception as e:
+            logger.debug(f"[{summary.id}] Failed to persist position state to DB: {e}")
         
         # Log position detection for debugging
         logger.debug(

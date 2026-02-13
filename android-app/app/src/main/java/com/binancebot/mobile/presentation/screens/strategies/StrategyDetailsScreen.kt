@@ -1,5 +1,9 @@
 package com.binancebot.mobile.presentation.screens.strategies
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +25,7 @@ import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsUiState
 import com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel
+import com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import java.util.Locale
 
@@ -30,13 +35,15 @@ fun StrategyDetailsScreen(
     strategyId: String,
     navController: NavController,
     viewModel: StrategyDetailsViewModel = hiltViewModel(),
-    riskManagementViewModel: RiskManagementViewModel = hiltViewModel()
+    riskManagementViewModel: RiskManagementViewModel = hiltViewModel(),
+    strategiesViewModel: StrategiesViewModel = hiltViewModel()
 ) {
     val strategy by viewModel.strategy.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val performance by viewModel.performance.collectAsState()
     val activity by viewModel.activity.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+    val actionInProgress by viewModel.actionInProgress.collectAsState()
     
     LaunchedEffect(strategyId) {
         viewModel.loadStrategyDetails(strategyId)
@@ -81,6 +88,12 @@ fun StrategyDetailsScreen(
             }
             else -> {
                 strategy?.let { strat ->
+                    // Load account-level risk config when strategy (and thus accountId) is available
+                    LaunchedEffect(strat.accountId) {
+                        riskManagementViewModel.loadRiskConfig(strat.accountId)
+                    }
+                    val accountRiskConfig by riskManagementViewModel.riskConfig.collectAsState()
+                    val accountRiskForThisStrategy = accountRiskConfig?.takeIf { it.accountId == strat.accountId }
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -123,6 +136,7 @@ fun StrategyDetailsScreen(
                                 HorizontalDivider()
                                 
                                 // Quick Actions
+                                val isActionLoading = actionInProgress == strategyId
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
@@ -131,22 +145,42 @@ fun StrategyDetailsScreen(
                                         Button(
                                             onClick = { viewModel.stopStrategy(strategyId) },
                                             modifier = Modifier.weight(1f),
+                                            enabled = !isActionLoading,
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = MaterialTheme.colorScheme.error
                                             )
                                         ) {
-                                            Icon(Icons.Default.Stop, null, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
-                                            Text("Stop")
+                                            if (isActionLoading) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    color = MaterialTheme.colorScheme.onError,
+                                                    strokeWidth = 2.dp
+                                                )
+                                                Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                                            } else {
+                                                Icon(Icons.Default.Stop, null, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                                            }
+                                            Text(if (isActionLoading) "Stopping..." else "Stop")
                                         }
                                     } else {
                                         Button(
                                             onClick = { viewModel.startStrategy(strategyId) },
-                                            modifier = Modifier.weight(1f)
+                                            modifier = Modifier.weight(1f),
+                                            enabled = !isActionLoading
                                         ) {
-                                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
-                                            Text("Start")
+                                            if (isActionLoading) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                    strokeWidth = 2.dp
+                                                )
+                                                Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                                            } else {
+                                                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                                            }
+                                            Text(if (isActionLoading) "Starting..." else "Start")
                                         }
                                     }
                                 }
@@ -211,14 +245,69 @@ fun StrategyDetailsScreen(
                             AutoTuningSection(performance = perf)
                         }
                         
-                        // Risk Configuration (from performance data if available)
-                        performance?.let { perf ->
-                            com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
-                                strategyId = strategyId,
-                                strategyName = strategy?.name ?: strategyId,
-                                viewModel = riskManagementViewModel
-                            )
+                        // Execution Health (collapsible, for running strategies only)
+                        if (strat.isRunning) {
+                            var expandedExecutionHealth by remember { mutableStateOf(false) }
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { expandedExecutionHealth = !expandedExecutionHealth },
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(Spacing.CardPadding)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Execution Health",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Icon(
+                                            imageVector = if (expandedExecutionHealth) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                            contentDescription = if (expandedExecutionHealth) "Collapse" else "Expand"
+                                        )
+                                    }
+                                    AnimatedVisibility(
+                                        visible = expandedExecutionHealth,
+                                        enter = expandVertically(),
+                                        exit = shrinkVertically()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = Spacing.Small)
+                                        ) {
+                                            HorizontalDivider()
+                                            StrategyHealthDetailsSection(
+                                                strategyId = strategyId,
+                                                strategiesViewModel = strategiesViewModel
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        
+                        // Account Risk Configuration (for this strategy's account)
+                        com.binancebot.mobile.presentation.screens.strategies.AccountRiskConfigSection(
+                            accountId = strat.accountId,
+                            riskConfig = accountRiskForThisStrategy,
+                            isLoading = false
+                        )
+                        
+                        // Strategy Risk Configuration (strategy-level overrides; always show when strategy is loaded)
+                        com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
+                            strategyId = strategyId,
+                            strategyName = strat.name,
+                            viewModel = riskManagementViewModel
+                        )
                         
                         // Activity History
                         ActivityHistorySection(activity = activity)

@@ -604,7 +604,7 @@ class TestSyncPositionStateTrailingStop:
         # Verify trailing stop entry price matches Binance entry price
         # TrailingStopManager stores entry_price internally, verify via TP/SL calculation
         # TP should be at entry * (1 + take_profit_pct) = 100.0 * 1.005 = 100.5
-        tp_price, sl_price = strategy.trailing_stop.update(100.0)
+        tp_price, sl_price, _ = strategy.trailing_stop.update(100.0)
         expected_tp = 100.0 * 1.005  # 100.5
         expected_sl = 100.0 * 0.997  # 99.7
         assert abs(tp_price - expected_tp) < 0.01, (
@@ -669,7 +669,7 @@ class TestSyncPositionStateTrailingStop:
         
         # Verify trailing stop was rebuilt with new entry price
         assert strategy.trailing_stop is not None
-        tp_price, sl_price = strategy.trailing_stop.update(101.0)
+        tp_price, sl_price, _ = strategy.trailing_stop.update(101.0)
         expected_tp = 101.0 * 1.005  # 101.505
         expected_sl = 101.0 * 0.997  # 100.697
         assert abs(tp_price - expected_tp) < 0.01, (

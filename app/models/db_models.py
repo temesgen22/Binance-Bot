@@ -405,6 +405,28 @@ class Trade(Base):
     )
 
 
+class TrailingStopUpdate(Base):
+    """One row per trailing-stop level update (TP/SL moved) for a position."""
+    __tablename__ = "trailing_stop_updates"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(PGUUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False, index=True)
+    position_instance_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    entry_order_id = Column(BigInteger, nullable=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    position_side = Column(String(10), nullable=False, index=True)
+    update_sequence = Column(Integer, nullable=False)
+    best_price = Column(Numeric(20, 8), nullable=False)
+    tp_price = Column(Numeric(20, 8), nullable=False)
+    sl_price = Column(Numeric(20, 8), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("position_instance_id", "update_sequence", name="uq_trailing_stop_updates_pos_seq"),
+        Index("idx_trailing_stop_updates_strategy", "strategy_id", "created_at"),
+    )
+
+
 class TradePair(Base):
     """Entry/Exit trade matching for PnL calculation."""
     __tablename__ = "trade_pairs"

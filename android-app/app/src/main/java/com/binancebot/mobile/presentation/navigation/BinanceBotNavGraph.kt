@@ -17,6 +17,8 @@ import com.binancebot.mobile.presentation.screens.strategies.StrategiesScreen
 import com.binancebot.mobile.presentation.screens.trades.TradesScreen
 import com.binancebot.mobile.presentation.screens.marketanalyzer.MarketAnalyzerScreen
 import com.binancebot.mobile.presentation.navigation.Screen
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.binancebot.mobile.presentation.viewmodel.ReportsViewModel
 
 @Composable
 fun BinanceBotNavGraph(
@@ -82,6 +84,24 @@ fun BinanceBotNavGraph(
         }
         composable(Screen.Reports.route) {
             ReportsScreen(navController = navController)
+        }
+        composable("report_strategy_trades/{strategyId}") { backStackEntry ->
+            val strategyId = backStackEntry.arguments?.getString("strategyId") ?: ""
+            val reportsEntry = try {
+                navController.getBackStackEntry(Screen.Reports.route)
+            } catch (_: Exception) {
+                null
+            }
+            val viewModel: ReportsViewModel = if (reportsEntry != null) {
+                hiltViewModel(reportsEntry)
+            } else {
+                hiltViewModel()
+            }
+            com.binancebot.mobile.presentation.screens.reports.StrategyReportDetailScreen(
+                strategyId = strategyId,
+                navController = navController,
+                viewModel = viewModel
+            )
         }
         composable(Screen.RiskManagement.route) {
             RiskManagementScreen(navController = navController)

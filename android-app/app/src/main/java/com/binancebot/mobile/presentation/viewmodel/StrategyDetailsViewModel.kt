@@ -35,6 +35,9 @@ class StrategyDetailsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<StrategyDetailsUiState>(StrategyDetailsUiState.Idle)
     val uiState: StateFlow<StrategyDetailsUiState> = _uiState.asStateFlow()
     
+    private val _actionInProgress = MutableStateFlow<String?>(null)
+    val actionInProgress: StateFlow<String?> = _actionInProgress.asStateFlow()
+    
     fun loadStrategyDetails(strategyId: String) {
         viewModelScope.launch {
             _uiState.value = StrategyDetailsUiState.Loading
@@ -81,6 +84,7 @@ class StrategyDetailsViewModel @Inject constructor(
     
     fun startStrategy(strategyId: String) {
         viewModelScope.launch {
+            _actionInProgress.value = strategyId
             strategyRepository.startStrategy(strategyId)
                 .onSuccess {
                     loadStrategyDetails(strategyId) // Reload to get updated status
@@ -88,11 +92,13 @@ class StrategyDetailsViewModel @Inject constructor(
                 .onFailure { error ->
                     _uiState.value = StrategyDetailsUiState.Error(error.message ?: "Failed to start strategy")
                 }
+            _actionInProgress.value = null
         }
     }
     
     fun stopStrategy(strategyId: String) {
         viewModelScope.launch {
+            _actionInProgress.value = strategyId
             strategyRepository.stopStrategy(strategyId)
                 .onSuccess {
                     loadStrategyDetails(strategyId) // Reload to get updated status
@@ -100,6 +106,7 @@ class StrategyDetailsViewModel @Inject constructor(
                 .onFailure { error ->
                     _uiState.value = StrategyDetailsUiState.Error(error.message ?: "Failed to stop strategy")
                 }
+            _actionInProgress.value = null
         }
     }
 }

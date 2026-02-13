@@ -16,8 +16,18 @@ Example (Long Position):
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from dataclasses import dataclass
+from typing import Literal, Optional, Tuple
 from loguru import logger
+
+
+@dataclass
+class TrailUpdateEvent:
+    """Emitted when TrailingStopManager actually updates TP/SL levels (for DB recording)."""
+    best_price: float
+    tp_price: float
+    sl_price: float
+    position_side: Literal["LONG", "SHORT"]
 
 
 class TrailingStopManager:
@@ -92,7 +102,7 @@ class TrailingStopManager:
             f"activation_price={self.activation_price:.8f}, activated={self.activated}"
         )
     
-    def update(self, current_price: float) -> tuple[float, float]:
+    def update(self, current_price: float) -> Tuple[float, float, Optional[TrailUpdateEvent]]:
         """
         Update trailing stop levels based on current price.
         
@@ -108,10 +118,10 @@ class TrailingStopManager:
             current_price: Current market price
             
         Returns:
-            Tuple of (updated_tp_price, updated_sl_price)
+            Tuple of (updated_tp_price, updated_sl_price, optional TrailUpdateEvent when levels were updated)
         """
         if not self.enabled:
-            return (self.current_tp, self.current_sl)
+            return (self.current_tp, self.current_sl, None)
         
         # Check if activation threshold is reached
         if not self.activated:
@@ -134,7 +144,7 @@ class TrailingStopManager:
         
         # Only trail if activated
         if not self.activated:
-            return (self.current_tp, self.current_sl)
+            return (self.current_tp, self.current_sl, None)
         
         should_update = False
         
@@ -149,6 +159,7 @@ class TrailingStopManager:
                 self.best_price = current_price
                 should_update = True
         
+        trail_event: Optional[TrailUpdateEvent] = None
         if should_update:
             # Recalculate TP/SL based on best price, maintaining percentages
             if self.position_type == "LONG":
@@ -165,6 +176,12 @@ class TrailingStopManager:
                 if new_tp > self.current_tp and new_sl > self.current_sl:
                     self.current_tp = new_tp
                     self.current_sl = new_sl
+                    trail_event = TrailUpdateEvent(
+                        best_price=self.best_price,
+                        tp_price=self.current_tp,
+                        sl_price=self.current_sl,
+                        position_side="LONG",
+                    )
                     logger.debug(
                         f"TrailingStop LONG updated: best={self.best_price:.8f}, "
                         f"tp={self.current_tp:.8f}, sl={self.current_sl:.8f}"
@@ -173,12 +190,18 @@ class TrailingStopManager:
                 if new_tp < self.current_tp and new_sl < self.current_sl:
                     self.current_tp = new_tp
                     self.current_sl = new_sl
+                    trail_event = TrailUpdateEvent(
+                        best_price=self.best_price,
+                        tp_price=self.current_tp,
+                        sl_price=self.current_sl,
+                        position_side="SHORT",
+                    )
                     logger.debug(
                         f"TrailingStop SHORT updated: best={self.best_price:.8f}, "
                         f"tp={self.current_tp:.8f}, sl={self.current_sl:.8f}"
                     )
         
-        return (self.current_tp, self.current_sl)
+        return (self.current_tp, self.current_sl, trail_event)
     
     def check_exit(self, current_price: float) -> Optional[Literal["TP", "SL"]]:
         """

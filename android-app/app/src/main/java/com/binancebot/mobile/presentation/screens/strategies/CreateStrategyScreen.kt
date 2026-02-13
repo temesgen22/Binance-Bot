@@ -13,10 +13,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.binancebot.mobile.presentation.navigation.Screen
 import com.binancebot.mobile.domain.model.Account
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.viewmodel.AccountViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel
+import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
+import kotlinx.coroutines.flow.MutableStateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +36,7 @@ fun CreateStrategyScreen(
     var fixedAmount by remember { mutableStateOf("") }
     var selectedAccountId by remember { mutableStateOf<String?>(null) }
     var showAccountDropdown by remember { mutableStateOf(false) }
+    var isCopyMode by remember { mutableStateOf(false) }
     
     // Strategy parameters - initialized with defaults based on strategy type
     // Scalping/Reverse Scalping parameters
@@ -108,22 +112,86 @@ fun CreateStrategyScreen(
         }
     }
     
-    // Navigate back on success (with delay to show success state)
-    LaunchedEffect(uiState) {
-        if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Success) {
-            // Only navigate if we actually created a strategy (not just loaded)
-            // Check if form was submitted
-            if (name.isNotBlank() && symbol.isNotBlank()) {
-                kotlinx.coroutines.delay(1000) // Longer delay to ensure user sees success
-                navController.popBackStack()
+    val snackbarHostState = remember { SnackbarHostState() }
+    
+    // Parent ViewModels (if strategies is in back stack - e.g. navigated from Copy)
+    val strategiesBackEntry = remember(navController) { navController.getBackStackEntry(Screen.Strategies.route) }
+    val parentStrategiesViewModel: StrategiesViewModel? = strategiesBackEntry?.let { hiltViewModel(it) }
+    val performanceViewModel: com.binancebot.mobile.presentation.viewmodel.StrategyPerformanceViewModel? =
+        strategiesBackEntry?.let { hiltViewModel(it) }
+    val strategyToCopyFlow = parentStrategiesViewModel?.strategyToCopy
+        ?: remember { MutableStateFlow<StrategyPerformanceDto?>(null) }
+    val strategyToCopy by strategyToCopyFlow.collectAsState()
+    
+    // Pre-fill form when copying from existing strategy
+    LaunchedEffect(strategyToCopy) {
+        strategyToCopy?.let { perf ->
+            name = "Copy of ${perf.strategyName}"
+            symbol = perf.symbol
+            strategyType = perf.strategyType
+            leverage = perf.leverage.toString()
+            riskPerTrade = String.format("%.4f", perf.riskPerTrade)
+            fixedAmount = perf.fixedAmount?.toString() ?: ""
+            selectedAccountId = perf.accountId
+            klineInterval = (perf.params["kline_interval"] as? String) ?: when (perf.strategyType) {
+                "range_mean_reversion" -> "5m"
+                else -> "1m"
             }
+            enableShort = (perf.params["enable_short"] as? Boolean) ?: true
+            cooldownCandles = (perf.params["cooldown_candles"] as? Number)?.toString() ?: "2"
+            when (perf.strategyType) {
+                "scalping", "reverse_scalping" -> {
+                    emaFast = (perf.params["ema_fast"] as? Number)?.toString() ?: "8"
+                    emaSlow = (perf.params["ema_slow"] as? Number)?.toString() ?: "21"
+                    takeProfitPct = (perf.params["take_profit_pct"] as? Number)?.toString() ?: "0.004"
+                    stopLossPct = (perf.params["stop_loss_pct"] as? Number)?.toString() ?: "0.002"
+                    intervalSeconds = (perf.params["interval_seconds"] as? Number)?.toString() ?: "10"
+                    minEmaSeparation = (perf.params["min_ema_separation"] as? Number)?.toString() ?: "0.0002"
+                    enableHtfBias = (perf.params["enable_htf_bias"] as? Boolean) ?: true
+                    trailingStopEnabled = (perf.params["trailing_stop_enabled"] as? Boolean) ?: false
+                    trailingStopActivationPct = (perf.params["trailing_stop_activation_pct"] as? Number)?.toString() ?: "0.0"
+                    enableEmaCrossExit = (perf.params["enable_ema_cross_exit"] as? Boolean) ?: true
+                }
+                "range_mean_reversion" -> {
+                    lookbackPeriod = (perf.params["lookback_period"] as? Number)?.toString() ?: "150"
+                    buyZonePct = (perf.params["buy_zone_pct"] as? Number)?.toString() ?: "0.2"
+                    sellZonePct = (perf.params["sell_zone_pct"] as? Number)?.toString() ?: "0.2"
+                    emaFastPeriod = (perf.params["ema_fast_period"] as? Number)?.toString() ?: "20"
+                    emaSlowPeriod = (perf.params["ema_slow_period"] as? Number)?.toString() ?: "50"
+                    maxEmaSpreadPct = (perf.params["max_ema_spread_pct"] as? Number)?.toString() ?: "0.005"
+                    maxAtrMultiplier = (perf.params["max_atr_multiplier"] as? Number)?.toString() ?: "2.0"
+                    rsiPeriod = (perf.params["rsi_period"] as? Number)?.toString() ?: "14"
+                    rsiOversold = (perf.params["rsi_oversold"] as? Number)?.toString() ?: "40.0"
+                    rsiOverbought = (perf.params["rsi_overbought"] as? Number)?.toString() ?: "60.0"
+                    tpBufferPct = (perf.params["tp_buffer_pct"] as? Number)?.toString() ?: "0.001"
+                    slBufferPct = (perf.params["sl_buffer_pct"] as? Number)?.toString() ?: "0.002"
+                }
+                else -> {}
+            }
+            isCopyMode = true
+            parentStrategiesViewModel?.clearStrategyToCopy()
+        }
+    }
+    
+    // Show success Snackbar and navigate back on create success
+    LaunchedEffect(uiState) {
+        if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.CreateSuccess) {
+            snackbarHostState.showSnackbar(
+                message = "Strategy created successfully",
+                duration = SnackbarDuration.Short
+            )
+            kotlinx.coroutines.delay(1500)
+            performanceViewModel?.loadPerformance()
+            strategiesViewModel.clearCreateSuccess()
+            navController.popBackStack()
         }
     }
     
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Create Strategy") },
+                title = { Text(if (isCopyMode) "Copy Strategy" else "Create Strategy") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -546,12 +614,14 @@ fun CreateStrategyScreen(
             Spacer(modifier = Modifier.height(Spacing.Medium))
             
             // Create Button
+            val isLoading = uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Loading ||
+                    uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.CreateSuccess
             val isValid = name.isNotBlank() &&
                     symbol.isNotBlank() &&
                     leverage.toIntOrNull()?.let { it in 1..50 } == true &&
                     selectedAccountId != null &&
                     (riskPerTrade.toDoubleOrNull() != null || fixedAmount.toDoubleOrNull() != null) &&
-                    uiState !is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Loading
+                    !isLoading
             
             Button(
                 onClick = {
@@ -600,14 +670,14 @@ fun CreateStrategyScreen(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = isValid
             ) {
-                if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.Loading) {
+                if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         color = MaterialTheme.colorScheme.onPrimary
                     )
                     Spacer(modifier = Modifier.width(Spacing.Small))
                 }
-                Text("Create Strategy")
+                Text(if (uiState is com.binancebot.mobile.presentation.viewmodel.StrategiesUiState.CreateSuccess) "Success!" else "Create Strategy")
             }
         }
     }

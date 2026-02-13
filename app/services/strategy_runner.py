@@ -40,6 +40,45 @@ if TYPE_CHECKING:
     from app.services.trade_service import TradeService
 
 
+async def _run_completed_trade_on_manual_close(
+    user_id: "UUID",
+    strategy_id: str,
+    exit_trade_id: "UUID",
+    exit_order_id: int,
+    exit_quantity: float,
+    exit_price: float,
+    position_side: str,
+    exit_reason: str,
+) -> None:
+    """Run completed-trade creation for a manual close in background (same as executor on signal close)."""
+    from app.services.completed_trade_helper import create_completed_trades_on_position_close
+    try:
+        completed_trade_ids = await asyncio.to_thread(
+            create_completed_trades_on_position_close,
+            user_id,
+            strategy_id,
+            exit_trade_id,
+            exit_order_id,
+            exit_quantity,
+            exit_price,
+            position_side,
+            exit_reason,
+        )
+        if completed_trade_ids:
+            logger.info(
+                f"Manual close: created {len(completed_trade_ids)} completed trade(s) for exit_order_id={exit_order_id}"
+            )
+        else:
+            logger.warning(
+                f"Manual close: no completed trades created for exit_order_id={exit_order_id} (check entry/exit match)"
+            )
+    except Exception as e:
+        logger.error(
+            f"Manual close: failed to create completed trades for exit_order_id={exit_order_id}: {e}",
+            exc_info=True,
+        )
+
+
 class StrategyRunner:
     def __init__(
         self,
@@ -896,6 +935,14 @@ class StrategyRunner:
             account_client,
             kline_manager=self.kline_manager
         )
+        # Inject trailing-stop update recorder for live/paper (records each TP/SL level update in DB)
+        if self.strategy_service and self.user_id:
+            from app.services.trailing_stop_update_service import TrailingStopUpdateService
+            trail_recorder = TrailingStopUpdateService(
+                self.strategy_service.db_service,
+                self.user_id,
+            )
+            strategy.set_trail_recorder(trail_recorder)
         
         # Subscribe to WebSocket stream (non-blocking - don't fail strategy start if this fails)
         websocket_subscribed = False
@@ -1165,16 +1212,37 @@ class StrategyRunner:
                     # Save to database if TradeService is available (multi-user mode)
                     if self.trade_service and self.user_id:
                         try:
-                            # Get strategy UUID from database
+                            # Get strategy UUID from database (and position_instance_id for correct matching)
                             if self.strategy_service:
                                 db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
                                 if db_strategy:
-                                    self.trade_service.save_trade(
+                                    # CRITICAL: Set exit_reason on order so save_trade infers position_side correctly
+                                    # (BUY + exit_reason -> SHORT, SELL + exit_reason -> LONG). Without this the
+                                    # Trade row gets wrong position_side and completed-trade matching breaks.
+                                    order_to_save = close_order
+                                    if not getattr(close_order, "exit_reason", None) or close_order.exit_reason == "UNKNOWN":
+                                        order_to_save = close_order.model_copy(update={"exit_reason": "MANUAL"})
+                                    exit_trade = self.trade_service.save_trade(
                                         user_id=self.user_id,
                                         strategy_id=db_strategy.id,
-                                        order=close_order
+                                        order=order_to_save,
+                                        position_instance_id=db_strategy.position_instance_id,
                                     )
-                                    logger.debug(f"Saved closing trade {close_order.order_id} to database")
+                                    logger.debug(f"Saved closing trade {close_order.order_id} to database (position_side={position_side}, exit_reason=MANUAL)")
+                                    # Create completed trade (entry+exit matched) in background (same as executor on signal close)
+                                    if exit_trade:
+                                        asyncio.create_task(
+                                            _run_completed_trade_on_manual_close(
+                                                self.user_id,
+                                                str(db_strategy.id),
+                                                exit_trade.id,
+                                                close_order.order_id,
+                                                float(close_order.executed_qty or 0),
+                                                float(close_order.avg_price or close_order.price or 0),
+                                                position_side,
+                                                "MANUAL",
+                                            )
+                                        )
                         except Exception as e:
                             logger.warning(f"Failed to save closing trade to database: {e}")
         except Exception as exc:

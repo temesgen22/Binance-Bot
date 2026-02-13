@@ -3031,12 +3031,13 @@ async def get_strategy_risk_status(
                     is_stopped_by_risk = True
                     circuit_breaker_active = True
             
-            # CRITICAL: If daily_loss_allowed is False but daily_loss_usdt >= 0, this is a bug
-            # Force it to True to prevent false blocking
-            if not daily_loss_allowed and daily_loss_usdt >= 0:
+            # CRITICAL: If daily_loss_allowed is False but daily_loss_usdt >= 0, this MIGHT be a bug
+            # EXCEPTION: If account is breached, daily_loss_allowed=False is intentional (account-level override)
+            # Only force correction if it's truly a bug (not caused by account-level breach)
+            if not daily_loss_allowed and daily_loss_usdt >= 0 and account_risk_status != "breach":
                 logger.error(
-                    f"BUG DETECTED: Strategy {strategy_id} has daily_loss_allowed=False but daily_loss_usdt={daily_loss_usdt:.2f} >= 0. "
-                    f"This should never happen. Forcing daily_loss_allowed=True"
+                    f"BUG DETECTED: Strategy {strategy_id} has daily_loss_allowed=False but daily_loss_usdt={daily_loss_usdt:.2f} >= 0 "
+                    f"(account_risk_status={account_risk_status}). This should never happen. Forcing daily_loss_allowed=True"
                 )
                 daily_loss_allowed = True
                 risk_checks["daily_loss"]["allowed"] = True
@@ -3059,6 +3060,12 @@ async def get_strategy_risk_status(
                         f"Forcing can_trade=True"
                     )
                     can_trade = True
+            elif not daily_loss_allowed and daily_loss_usdt >= 0 and account_risk_status == "breach":
+                # This is expected - account is breached, so daily_loss_allowed=False is intentional
+                logger.debug(
+                    f"Strategy {strategy_id}: daily_loss_allowed=False due to account breach "
+                    f"(account_risk_status={account_risk_status}, daily_loss_usdt={daily_loss_usdt:.2f}). This is expected."
+                )
             
             # Circuit breaker check
             risk_checks["circuit_breaker"] = {

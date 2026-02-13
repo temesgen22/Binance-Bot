@@ -1,6 +1,7 @@
 package com.binancebot.mobile.presentation.viewmodel
 
 import android.util.Log
+import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.domain.model.Strategy
@@ -28,6 +29,17 @@ class StrategiesViewModel @Inject constructor(
     
     private val _strategyHealth = MutableStateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>>(emptyMap())
     val strategyHealth: StateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>> = _strategyHealth.asStateFlow()
+    
+    private val _strategyToCopy = MutableStateFlow<StrategyPerformanceDto?>(null)
+    val strategyToCopy: StateFlow<StrategyPerformanceDto?> = _strategyToCopy.asStateFlow()
+    
+    fun setStrategyToCopy(performance: StrategyPerformanceDto?) {
+        _strategyToCopy.value = performance
+    }
+    
+    fun clearStrategyToCopy() {
+        _strategyToCopy.value = null
+    }
     
     init {
         loadStrategies()
@@ -83,27 +95,40 @@ class StrategiesViewModel @Inject constructor(
         }
     }
     
+    private val _actionInProgress = MutableStateFlow<Set<String>>(emptySet())
+    val actionInProgress: StateFlow<Set<String>> = _actionInProgress.asStateFlow()
+    
+    /** Trigger for the Strategies screen to refresh performance list (so Start/Stop button updates). */
+    private val _refreshPerformanceTrigger = MutableStateFlow(0)
+    val refreshPerformanceTrigger: StateFlow<Int> = _refreshPerformanceTrigger.asStateFlow()
+    
     fun startStrategy(strategyId: String) {
         viewModelScope.launch {
+            _actionInProgress.value = _actionInProgress.value + strategyId
             strategyRepository.startStrategy(strategyId)
                 .onSuccess {
-                    loadStrategies() // Reload to get updated status
+                    loadStrategies()
+                    _refreshPerformanceTrigger.value += 1
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to start strategy")
                 }
+            _actionInProgress.value = _actionInProgress.value - strategyId
         }
     }
     
     fun stopStrategy(strategyId: String) {
         viewModelScope.launch {
+            _actionInProgress.value = _actionInProgress.value + strategyId
             strategyRepository.stopStrategy(strategyId)
                 .onSuccess {
-                    loadStrategies() // Reload to get updated status
+                    loadStrategies()
+                    _refreshPerformanceTrigger.value += 1
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to stop strategy")
                 }
+            _actionInProgress.value = _actionInProgress.value - strategyId
         }
     }
     
@@ -117,6 +142,10 @@ class StrategiesViewModel @Inject constructor(
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to delete strategy")
                 }
         }
+    }
+    
+    fun clearCreateSuccess() {
+        _uiState.value = StrategiesUiState.Idle
     }
     
     fun createStrategy(
@@ -144,8 +173,7 @@ class StrategiesViewModel @Inject constructor(
             
             strategyRepository.createStrategy(request)
                 .onSuccess {
-                    _uiState.value = StrategiesUiState.Success
-                    loadStrategies() // Reload to show new strategy
+                    _uiState.value = StrategiesUiState.CreateSuccess
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to create strategy")
@@ -198,5 +226,6 @@ sealed class StrategiesUiState {
     object Idle : StrategiesUiState()
     object Loading : StrategiesUiState()
     object Success : StrategiesUiState()
+    object CreateSuccess : StrategiesUiState()
     data class Error(val message: String) : StrategiesUiState()
 }

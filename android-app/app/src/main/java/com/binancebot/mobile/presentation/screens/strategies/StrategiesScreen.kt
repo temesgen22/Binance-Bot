@@ -54,6 +54,7 @@ fun StrategiesScreen(
     val performanceList by performanceViewModel.performanceList.collectAsState()
     val performanceUiState by performanceViewModel.uiState.collectAsState()
     val accounts by accountViewModel.accounts.collectAsState()
+    val actionInProgress by strategiesViewModel.actionInProgress.collectAsState()
     val currentRoute = navController.currentDestination?.route
     
     // Filter and search state
@@ -66,7 +67,6 @@ fun StrategiesScreen(
     var showAdvancedFilters by remember { mutableStateOf(false) }
     var expandedStrategyId by remember { mutableStateOf<String?>(null) }
     var showDeleteDialog by remember { mutableStateOf<String?>(null) }
-    var showEditDialog by remember { mutableStateOf<String?>(null) }
     
     // Date filters
     var startDate by remember { mutableStateOf<String?>(null) }
@@ -88,6 +88,22 @@ fun StrategiesScreen(
             endDate = endDate,
             accountId = filterAccount
         )
+    }
+    
+    // After start/stop success, refresh performance list so Start/Stop button updates
+    val refreshPerformanceTrigger by strategiesViewModel.refreshPerformanceTrigger.collectAsState()
+    LaunchedEffect(refreshPerformanceTrigger) {
+        if (refreshPerformanceTrigger > 0) {
+            performanceViewModel.loadPerformance(
+                strategyName = searchQuery.takeIf { it.isNotBlank() },
+                symbol = filterSymbol.takeIf { it.isNotBlank() },
+                status = filterStatus,
+                rankBy = rankBy,
+                startDate = startDate,
+                endDate = endDate,
+                accountId = filterAccount
+            )
+        }
     }
     
     Scaffold(
@@ -405,10 +421,14 @@ fun StrategiesScreen(
                                         },
                                         onStart = { strategiesViewModel.startStrategy(performance.strategyId) },
                                         onStop = { strategiesViewModel.stopStrategy(performance.strategyId) },
-                                        onEdit = { showEditDialog = performance.strategyId },
+                                        onCopy = {
+                                            strategiesViewModel.setStrategyToCopy(performance)
+                                            navController.navigate("create_strategy")
+                                        },
                                         onDelete = { showDeleteDialog = performance.strategyId },
                                         onDetails = { navController.navigate("strategy_details/${performance.strategyId}") },
-                                        strategiesViewModel = strategiesViewModel
+                                        strategiesViewModel = strategiesViewModel,
+                                        isActionLoading = performance.strategyId in actionInProgress
                                     )
                                 }
                             }
@@ -577,10 +597,11 @@ fun EnhancedStrategyCard(
     onExpandToggle: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onEdit: () -> Unit,
+    onCopy: () -> Unit,
     onDelete: () -> Unit,
     onDetails: () -> Unit,
-    strategiesViewModel: StrategiesViewModel
+    strategiesViewModel: StrategiesViewModel,
+    isActionLoading: Boolean = false
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -741,25 +762,45 @@ fun EnhancedStrategyCard(
                     Button(
                         onClick = onStop,
                         modifier = Modifier.weight(1f),
+                        enabled = !isActionLoading,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error
                         )
                     ) {
-                        Icon(Icons.Default.Stop, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
-                        Text("Stop")
+                        if (isActionLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onError,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                        } else {
+                            Icon(Icons.Default.Stop, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                        }
+                        Text(if (isActionLoading) "Stopping..." else "Stop")
                     }
                 } else if (performance.status != "stopped_by_risk") {
                     Button(
                         onClick = onStart,
                         modifier = Modifier.weight(1f),
+                        enabled = !isActionLoading,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
-                        Text("Start")
+                        if (isActionLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                        } else {
+                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(Spacing.ExtraSmall))
+                        }
+                        Text(if (isActionLoading) "Starting..." else "Start")
                     }
                 } else {
                     // Show disabled button for stopped_by_risk
@@ -776,8 +817,8 @@ fun EnhancedStrategyCard(
                         Text("Stopped by Risk")
                     }
                 }
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, "Edit", tint = MaterialTheme.colorScheme.primary)
+                IconButton(onClick = onCopy) {
+                    Icon(Icons.Default.ContentCopy, "Copy", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error)
@@ -1245,7 +1286,7 @@ fun StrategyRiskConfigSection(
         }
     }
     
-    DetailSection("Risk Configuration") {
+    DetailSection("Strategy Level Risk Configuration") {
         if (isLoadingConfig) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1323,6 +1364,69 @@ fun StrategyRiskConfigSection(
             onDismiss = { showRiskConfigDialog = false },
             viewModel = viewModel
         )
+    }
+}
+
+/**
+ * Displays account-level risk configuration (read-only).
+ * Used on Strategy Details to show the account limits that apply when no strategy-level config exists.
+ */
+@Composable
+fun AccountRiskConfigSection(
+    accountId: String,
+    riskConfig: com.binancebot.mobile.data.remote.dto.RiskManagementConfigDto?,
+    isLoading: Boolean
+) {
+    DetailSection("Account Risk Configuration") {
+        if (isLoading) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(Spacing.Small))
+                Text(
+                    text = "Loading account risk configuration...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (riskConfig != null) {
+            DetailRow("Account", accountId)
+            DetailRow("Status", "Configured", isPositive = true)
+            riskConfig.maxPortfolioExposureUsdt?.let {
+                DetailRow("Max Portfolio Exposure", FormatUtils.formatCurrency(it))
+            }
+            riskConfig.maxPortfolioExposurePct?.let {
+                DetailRow("Max Portfolio Exposure %", "${String.format("%.2f", it)}%")
+            }
+            riskConfig.maxDailyLossUsdt?.let {
+                DetailRow("Max Daily Loss", FormatUtils.formatCurrency(it))
+            }
+            riskConfig.maxDailyLossPct?.let {
+                DetailRow("Max Daily Loss %", "${String.format("%.2f", if (it <= 1) it * 100 else it)}%")
+            }
+            riskConfig.maxWeeklyLossUsdt?.let {
+                DetailRow("Max Weekly Loss", FormatUtils.formatCurrency(it))
+            }
+            riskConfig.maxWeeklyLossPct?.let {
+                DetailRow("Max Weekly Loss %", "${String.format("%.2f", if (it <= 1) it * 100 else it)}%")
+            }
+            riskConfig.maxDrawdownPct?.let {
+                DetailRow("Max Drawdown", "${String.format("%.2f", if (it <= 1) it * 100 else it)}%")
+            }
+            if (riskConfig.circuitBreakerEnabled) {
+                DetailRow("Circuit Breaker", "Enabled", isPositive = true)
+            }
+        } else {
+            DetailRow("Status", "Not Configured", isPositive = false)
+            Text(
+                text = "No risk configuration for this account. Strategy will use default behavior.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = Spacing.Small)
+            )
+        }
     }
 }
 

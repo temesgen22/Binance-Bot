@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, Optional, TYPE_CHECKING
+from typing import Literal, Protocol, Optional, TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -56,6 +56,11 @@ class Strategy(ABC):
         self.client = client
         self.kline_manager = kline_manager  # Store kline_manager
         self._stopped = asyncio.Event()
+        self.trail_recorder: Optional[Any] = None  # TrailingStopUpdateService for recording trail updates
+
+    def set_trail_recorder(self, recorder: Any) -> None:
+        """Set optional recorder for trailing-stop level updates (used by runner for live/paper)."""
+        self.trail_recorder = recorder
 
     @staticmethod
     def parse_bool_param(value: bool | int | str | None, default: bool = False) -> bool:

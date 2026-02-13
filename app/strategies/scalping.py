@@ -138,7 +138,16 @@ class EmaScalpingStrategy(Strategy):
         
         if self.position == "LONG":
             if self.trailing_stop_enabled and self.trailing_stop is not None:
-                tp_price, sl_price = self.trailing_stop.update(live_price)
+                tp_price, sl_price, trail_event = self.trailing_stop.update(live_price)
+                if trail_event and getattr(self, "trail_recorder", None):
+                    self.trail_recorder.record_trail_update(
+                        self.context.id,
+                        self.context.symbol,
+                        "LONG",
+                        trail_event.best_price,
+                        trail_event.tp_price,
+                        trail_event.sl_price,
+                    )
                 exit_reason = self.trailing_stop.check_exit(live_price)
                 if exit_reason == "TP":
                     logger.info(
@@ -214,7 +223,16 @@ class EmaScalpingStrategy(Strategy):
                     )
         elif self.position == "SHORT":
             if self.trailing_stop_enabled and self.trailing_stop is not None:
-                tp_price, sl_price = self.trailing_stop.update(live_price)
+                tp_price, sl_price, trail_event = self.trailing_stop.update(live_price)
+                if trail_event and getattr(self, "trail_recorder", None):
+                    self.trail_recorder.record_trail_update(
+                        self.context.id,
+                        self.context.symbol,
+                        "SHORT",
+                        trail_event.best_price,
+                        trail_event.tp_price,
+                        trail_event.sl_price,
+                    )
                 exit_reason = self.trailing_stop.check_exit(live_price)
                 if exit_reason == "TP":
                     logger.info(

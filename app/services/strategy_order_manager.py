@@ -201,7 +201,15 @@ class StrategyOrderManager:
                 conflicting_strategy = None
                 if self.strategy_service and self.user_id:
                     # Check database for running strategies with same symbol+account
-                    all_strategies = await self.strategy_service.async_list_strategies(self.user_id)
+                    try:
+                        all_strategies = await self.strategy_service.async_list_strategies(self.user_id)
+                    except RuntimeError as list_exc:
+                        if "list_strategies() with Session" in str(list_exc):
+                            all_strategies = await asyncio.to_thread(
+                                self.strategy_service.list_strategies, self.user_id
+                            )
+                        else:
+                            raise
                     for other_strategy in all_strategies:
                         # Skip current strategy
                         if other_strategy.id == summary.id:
@@ -677,37 +685,38 @@ class StrategyOrderManager:
         # This prevents race conditions where multiple strategies try to close the same position
         if reduce_only_override:
             try:
-                # Re-check position state from Binance right before executing reduce_only order
+                # Use get_open_position (works for both BinanceClient and PaperBinanceClient)
                 position_info = await asyncio.to_thread(
-                    account_client.futures_position_information,
-                    symbol=signal.symbol
+                    account_client.get_open_position,
+                    signal.symbol
                 )
-                
-                if position_info:
-                    position_amt = float(position_info.get("positionAmt", 0))
-                    # If position is already closed (positionAmt == 0), skip order execution
-                    if abs(position_amt) == 0:
-                        logger.warning(
-                            f"[{summary.id}] Position for {signal.symbol} already closed (positionAmt={position_amt}). "
-                            f"Skipping reduce_only order execution to avoid 'ReduceOnly Order is rejected' error."
-                        )
-                        # Return a mock order response indicating the position was already closed
-                        from app.models.order import OrderResponse
-                        from datetime import datetime, timezone
-                        return OrderResponse(
-                            order_id=0,  # No order was placed
-                            symbol=signal.symbol,
-                            side=signal.action,
-                            status="CANCELLED",
-                            executed_qty=0.0,
-                            avg_price=0.0,
-                            commission=0.0,
-                            timestamp=datetime.now(timezone.utc),
-                            leverage=None,
-                            notional=0.0,
-                            initial_margin=None,
-                            margin_type="CROSSED"
-                        )
+                if position_info is None:
+                    position_amt = 0.0
+                else:
+                    pos_amt = position_info.get("positionAmt", 0)
+                    position_amt = float(pos_amt) if pos_amt is not None else 0.0
+                # If position is already closed (positionAmt == 0 or no position), skip order execution
+                if abs(position_amt) < 0.0001:
+                    logger.warning(
+                        f"[{summary.id}] Position for {signal.symbol} already closed (positionAmt={position_amt}). "
+                        f"Skipping reduce_only order execution to avoid 'ReduceOnly Order is rejected' error."
+                    )
+                    from app.models.order import OrderResponse
+                    from datetime import datetime, timezone
+                    return OrderResponse(
+                        order_id=0,  # No order was placed
+                        symbol=signal.symbol,
+                        side=signal.action,
+                        status="CANCELLED",
+                        executed_qty=0.0,
+                        avg_price=0.0,
+                        commission=0.0,
+                        timestamp=datetime.now(timezone.utc),
+                        leverage=None,
+                        notional=0.0,
+                        initial_margin=None,
+                        margin_type="CROSSED"
+                    )
             except Exception as pos_check_exc:
                 # Log warning but continue - if position check fails, let Binance reject the order
                 logger.warning(

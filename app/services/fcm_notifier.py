@@ -2,7 +2,7 @@
 Firebase Cloud Messaging (FCM) Notifier for push notifications.
 
 This service handles sending push notifications to Android mobile devices
-via Firebase Cloud Messaging.
+via Firebase Cloud Messaging. get
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from uuid import UUID
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-
+#fire fire
 # Firebase imports (optional - gracefully handle if not installed)
 try:
     import firebase_admin
