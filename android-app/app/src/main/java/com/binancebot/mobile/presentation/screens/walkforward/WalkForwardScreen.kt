@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.components.ErrorHandler
 import com.binancebot.mobile.presentation.theme.Spacing
+import com.binancebot.mobile.presentation.util.BacktestStrategyDefaults
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.WalkForwardViewModel
 import com.binancebot.mobile.presentation.viewmodel.WalkForwardUiState
@@ -108,10 +109,7 @@ fun NewWalkForwardTab(
     result: com.binancebot.mobile.data.remote.dto.WalkForwardResultDto?,
     onRetry: () -> Unit = {}
 ) {
-    val strategiesViewModel: com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel = hiltViewModel()
-    val strategies by strategiesViewModel.strategies.collectAsState()
-    
-    var selectedStrategy by remember { mutableStateOf<com.binancebot.mobile.domain.model.Strategy?>(null) }
+    var selectedStrategyType by remember { mutableStateOf<String?>(null) }
     var symbol by remember { mutableStateOf("BTCUSDT") }
     var startDate by remember { mutableStateOf("") }
     var endDate by remember { mutableStateOf("") }
@@ -123,11 +121,10 @@ fun NewWalkForwardTab(
     var riskPerTrade by remember { mutableStateOf("0.01") }
     var initialBalance by remember { mutableStateOf("1000.0") }
     var showAdvancedOptions by remember { mutableStateOf(false) }
-    var expandedStrategyDropdown by remember { mutableStateOf(false) }
+    var expandedStrategyTypeDropdown by remember { mutableStateOf(false) }
     var expandedWindowTypeDropdown by remember { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
-        strategiesViewModel.loadStrategies()
         viewModel.loadHistory()
     }
     
@@ -182,17 +179,19 @@ fun NewWalkForwardTab(
                     }
                 )
                 
-                // Strategy Selection
+                // Strategy Type Selection (same options as web app)
                 ExposedDropdownMenuBox(
-                    expanded = expandedStrategyDropdown && uiState !is WalkForwardUiState.Running,
-                    onExpandedChange = { 
+                    expanded = expandedStrategyTypeDropdown && uiState !is WalkForwardUiState.Running,
+                    onExpandedChange = {
                         if (uiState !is WalkForwardUiState.Running) {
-                            expandedStrategyDropdown = !expandedStrategyDropdown
+                            expandedStrategyTypeDropdown = !expandedStrategyTypeDropdown
                         }
                     }
                 ) {
                     OutlinedTextField(
-                        value = selectedStrategy?.let { "${it.name} (${it.strategyType})" } ?: "",
+                        value = selectedStrategyType?.let { type ->
+                            BacktestStrategyDefaults.STRATEGY_TYPES.find { it.first == type }?.second ?: type
+                        } ?: "",
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Strategy Type") },
@@ -201,21 +200,20 @@ fun NewWalkForwardTab(
                             .menuAnchor(),
                         enabled = uiState !is WalkForwardUiState.Running,
                         trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedStrategyDropdown)
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedStrategyTypeDropdown)
                         },
-                        placeholder = { Text("Select strategy") }
+                        placeholder = { Text("Select strategy type") }
                     )
                     ExposedDropdownMenu(
-                        expanded = expandedStrategyDropdown,
-                        onDismissRequest = { expandedStrategyDropdown = false }
+                        expanded = expandedStrategyTypeDropdown,
+                        onDismissRequest = { expandedStrategyTypeDropdown = false }
                     ) {
-                        strategies.forEach { strategy ->
+                        BacktestStrategyDefaults.STRATEGY_TYPES.forEach { (type, displayName) ->
                             DropdownMenuItem(
-                                text = { Text("${strategy.name} (${strategy.strategyType})") },
+                                text = { Text(displayName) },
                                 onClick = {
-                                    selectedStrategy = strategy
-                                    symbol = strategy.symbol
-                                    expandedStrategyDropdown = false
+                                    selectedStrategyType = type
+                                    expandedStrategyTypeDropdown = false
                                 }
                             )
                         }
@@ -377,10 +375,10 @@ fun NewWalkForwardTab(
                 Spacer(modifier = Modifier.height(Spacing.Medium))
                 Button(
                     onClick = {
-                        selectedStrategy?.let { strategy ->
+                        selectedStrategyType?.let { strategyType ->
                             viewModel.startWalkForwardAnalysis(
                                 symbol = symbol,
-                                strategyType = strategy.strategyType,
+                                strategyType = strategyType,
                                 startTime = startDate,
                                 endTime = endDate,
                                 trainingPeriodDays = trainingPeriodDays.toIntOrNull() ?: 30,
@@ -390,15 +388,15 @@ fun NewWalkForwardTab(
                                 leverage = leverage.toIntOrNull() ?: 5,
                                 riskPerTrade = riskPerTrade.toDoubleOrNull() ?: 0.01,
                                 initialBalance = initialBalance.toDoubleOrNull() ?: 1000.0,
-                                params = emptyMap()
+                                params = BacktestStrategyDefaults.getDefaultParams(strategyType)
                             )
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selectedStrategy != null && 
-                             symbol.isNotBlank() && 
-                             startDate.isNotBlank() && 
-                             endDate.isNotBlank() && 
+                    enabled = selectedStrategyType != null &&
+                             symbol.isNotBlank() &&
+                             startDate.isNotBlank() &&
+                             endDate.isNotBlank() &&
                              uiState !is WalkForwardUiState.Running &&
                              uiState !is WalkForwardUiState.Loading
                 ) {

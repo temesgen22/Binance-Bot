@@ -266,11 +266,12 @@ class TestFCMNotifierMethods:
         
         assert result == True
         mock_notifier.send_to_user.assert_called_once()
-        
-        # Verify the call arguments
+        # send_to_user(user_id, title, body, data, db, channel_id=...)
+        # Title is passed as 2nd positional arg (index 1); kwargs only has channel_id
+        call_pos = mock_notifier.send_to_user.call_args[0]
         call_kwargs = mock_notifier.send_to_user.call_args[1]
-        assert "Strategy Stopped" in call_kwargs.get('title', '')
-        assert "strategies_channel" in call_kwargs.get('channel_id', '')
+        assert call_pos[1] == "Strategy Stopped", f"Expected title as 2nd positional, got call_args[0]={call_pos}"
+        assert call_kwargs.get("channel_id") == "strategies_channel"
         print("✅ notify_strategy_stopped works correctly")
 
 

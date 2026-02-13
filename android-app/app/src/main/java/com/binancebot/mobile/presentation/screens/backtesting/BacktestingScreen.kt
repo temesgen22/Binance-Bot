@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.components.ErrorHandler
 import com.binancebot.mobile.presentation.theme.Spacing
+import com.binancebot.mobile.presentation.util.BacktestStrategyDefaults
 import com.binancebot.mobile.presentation.viewmodel.BacktestingViewModel
 import com.binancebot.mobile.presentation.viewmodel.BacktestingUiState
 
@@ -134,10 +135,8 @@ fun NewBacktestTab(
     onRetry: () -> Unit = {}
 ) {
     val currentResult by viewModel.currentBacktestResult.collectAsState()
-    val strategiesViewModel: com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel = hiltViewModel()
-    val strategies by strategiesViewModel.strategies.collectAsState()
     
-    var selectedStrategy by remember { mutableStateOf<com.binancebot.mobile.domain.model.Strategy?>(null) }
+    var selectedStrategyType by remember { mutableStateOf<String?>(null) }
     var symbol by remember { mutableStateOf("BTCUSDT") }
     var startDate by remember { mutableStateOf("") }
     var endDate by remember { mutableStateOf("") }
@@ -145,11 +144,10 @@ fun NewBacktestTab(
     var riskPerTrade by remember { mutableStateOf("0.01") }
     var initialBalance by remember { mutableStateOf("1000.0") }
     var showAdvancedOptions by remember { mutableStateOf(false) }
-    var expandedStrategyDropdown by remember { mutableStateOf(false) }
+    var expandedStrategyTypeDropdown by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
-        strategiesViewModel.loadStrategies()
         viewModel.loadBacktestHistory()
     }
     
@@ -189,7 +187,7 @@ fun NewBacktestTab(
                     }
                 )
                 
-                // Strategy Selection
+                // Strategy Type Selection (same options as web app)
                 Text(
                     text = "Strategy Type",
                     style = MaterialTheme.typography.labelMedium,
@@ -197,33 +195,34 @@ fun NewBacktestTab(
                     modifier = Modifier.padding(top = Spacing.Small)
                 )
                 ExposedDropdownMenuBox(
-                    expanded = expandedStrategyDropdown,
-                    onExpandedChange = { expandedStrategyDropdown = !expandedStrategyDropdown }
+                    expanded = expandedStrategyTypeDropdown,
+                    onExpandedChange = { expandedStrategyTypeDropdown = !expandedStrategyTypeDropdown }
                 ) {
                     OutlinedTextField(
-                        value = selectedStrategy?.let { "${it.name} (${it.strategyType})" } ?: "",
+                        value = selectedStrategyType?.let { type ->
+                            BacktestStrategyDefaults.STRATEGY_TYPES.find { it.first == type }?.second ?: type
+                        } ?: "",
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Select Strategy") },
+                        label = { Text("Select Strategy Type") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .menuAnchor(),
                         trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedStrategyDropdown)
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedStrategyTypeDropdown)
                         },
-                        placeholder = { Text("Choose a strategy to backtest") }
+                        placeholder = { Text("Choose a strategy type to backtest") }
                     )
                     ExposedDropdownMenu(
-                        expanded = expandedStrategyDropdown,
-                        onDismissRequest = { expandedStrategyDropdown = false }
+                        expanded = expandedStrategyTypeDropdown,
+                        onDismissRequest = { expandedStrategyTypeDropdown = false }
                     ) {
-                        strategies.forEach { strategy ->
+                        BacktestStrategyDefaults.STRATEGY_TYPES.forEach { (type, displayName) ->
                             DropdownMenuItem(
-                                text = { Text("${strategy.name} (${strategy.strategyType})") },
+                                text = { Text(displayName) },
                                 onClick = {
-                                    selectedStrategy = strategy
-                                    symbol = strategy.symbol
-                                    expandedStrategyDropdown = false
+                                    selectedStrategyType = type
+                                    expandedStrategyTypeDropdown = false
                                 }
                             )
                         }
@@ -321,24 +320,24 @@ fun NewBacktestTab(
                 Spacer(modifier = Modifier.height(Spacing.Medium))
                 Button(
                     onClick = {
-                        selectedStrategy?.let { strategy ->
+                        selectedStrategyType?.let { strategyType ->
                             viewModel.runBacktest(
                                 symbol = symbol,
-                                strategyType = strategy.strategyType,
+                                strategyType = strategyType,
                                 startTime = startDate,
                                 endTime = endDate,
                                 leverage = leverage.toIntOrNull() ?: 5,
                                 riskPerTrade = riskPerTrade.toDoubleOrNull() ?: 0.01,
                                 initialBalance = initialBalance.toDoubleOrNull() ?: 1000.0,
-                                params = emptyMap() // Could extract from strategy.params if available
+                                params = BacktestStrategyDefaults.getDefaultParams(strategyType)
                             )
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selectedStrategy != null && 
-                             symbol.isNotBlank() && 
-                             startDate.isNotBlank() && 
-                             endDate.isNotBlank() && 
+                    enabled = selectedStrategyType != null &&
+                             symbol.isNotBlank() &&
+                             startDate.isNotBlank() &&
+                             endDate.isNotBlank() &&
                              uiState !is BacktestingUiState.Loading
                 ) {
                     if (uiState is BacktestingUiState.Loading) {
