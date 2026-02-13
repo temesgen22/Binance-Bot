@@ -252,7 +252,8 @@ class TestFCMNotifierMethods:
             risk_per_trade=0.01,
             params={},
             created_at=datetime.now(timezone.utc).isoformat(),
-            account_id="test-account"
+            account_id="test-account",
+            last_signal=None,
         )
         
         result = await mock_notifier.notify_strategy_stopped(

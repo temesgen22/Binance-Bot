@@ -479,6 +479,41 @@
                 padding: 8px;
             }
         }
+
+        .trail-view-link {
+            color: #667eea;
+            cursor: pointer;
+            text-decoration: underline;
+            font-size: 0.9em;
+        }
+        .trail-view-link:hover {
+            color: #764ba2;
+        }
+        .trail-detail-row td {
+            background: #f0f4ff;
+            padding: 12px;
+            vertical-align: top;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .trail-detail-row .trail-history-inner {
+            font-size: 0.85em;
+        }
+        .trail-history-table {
+            width: 100%;
+            max-width: 500px;
+            border-collapse: collapse;
+            margin-top: 8px;
+        }
+        .trail-history-table th {
+            background: #e0e7ff;
+            padding: 6px 8px;
+            text-align: left;
+            font-size: 0.85em;
+        }
+        .trail-history-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #e9ecef;
+        }
     </style>
 </head>
 <body>
@@ -896,23 +931,30 @@
                                     </div>
                                 </div>
                             </div>
-                            ${createTradesTable(strategy.trades)}
+                            ${createTradesTable(strategy.trades, index)}
                         ` : '<p>No completed trades yet.</p>'}
                     </div>
                 </div>
             `;
         }
 
-        function createTradesTable(trades) {
+        function createTradesTable(trades, strategyIndex) {
+            const stratIdx = strategyIndex != null ? strategyIndex : 0;
+            const colCount = 18;
             let html = '<table class="trades-table"><thead><tr>';
             html += '<th>Trade ID</th><th>Symbol</th><th>Side</th><th>Entry Time</th><th>Entry Price</th>';
             html += '<th>Exit Time</th><th>Exit Price</th><th>Quantity</th><th>Leverage</th>';
             html += '<th>Fee Paid</th><th>Funding Fee</th><th>Initial Margin</th><th>Margin Type</th><th>Notional Value</th>';
-            html += '<th>PnL (USD)</th><th>PnL (%)</th><th>Exit Reason</th>';
+            html += '<th>PnL (USD)</th><th>PnL (%)</th><th>Exit Reason</th><th>Trail #</th>';
             html += '</tr></thead><tbody>';
 
-            trades.forEach(trade => {
+            trades.forEach((trade, tradeIdx) => {
                 const pnlClass = trade.pnl_usd >= 0 ? 'positive' : 'negative';
+                const trailHistory = trade.trailing_stop_history;
+                const trailCount = (trailHistory && trailHistory.length) ? trailHistory.length : 0;
+                const trailDisplay = trailCount > 0 ? trailCount : '—';
+                const detailRowId = `trail-detail-${stratIdx}-${tradeIdx}`;
+
                 html += '<tr>';
                 html += `<td>${trade.trade_id}</td>`;
                 html += `<td><strong>${trade.symbol}</strong></td>`;
@@ -931,7 +973,29 @@
                 html += `<td class="${pnlClass}"><strong>${formatCurrency(trade.pnl_usd)}</strong></td>`;
                 html += `<td class="${pnlClass}"><strong>${formatPercent(trade.pnl_pct)}</strong></td>`;
                 html += `<td>${trade.exit_reason || 'N/A'}</td>`;
+                html += '<td>';
+                if (trailCount > 0) {
+                    html += `<span class="trail-view-link" onclick="var r=document.getElementById('${detailRowId}'); r.style.display=r.style.display==='none'?'table-row':'none';">View (${trailCount})</span>`;
+                } else {
+                    html += trailDisplay;
+                }
+                html += '</td>';
                 html += '</tr>';
+
+                if (trailCount > 0) {
+                    let inner = '<div class="trail-history-inner"><strong>Trailing stop updates</strong><table class="trail-history-table"><thead><tr><th>#</th><th>Time</th><th>Best price</th><th>TP price</th><th>SL price</th></tr></thead><tbody>';
+                    trailHistory.forEach(item => {
+                        inner += '<tr>';
+                        inner += `<td>${item.update_sequence != null ? item.update_sequence : '—'}</td>`;
+                        inner += `<td>${formatDate(item.created_at)}</td>`;
+                        inner += `<td>$${formatPrice(item.best_price)}</td>`;
+                        inner += `<td>$${formatPrice(item.tp_price)}</td>`;
+                        inner += `<td>$${formatPrice(item.sl_price)}</td>`;
+                        inner += '</tr>';
+                    });
+                    inner += '</tbody></table></div>';
+                    html += `<tr id="${detailRowId}" class="trail-detail-row" style="display: none;"><td colspan="${colCount}">${inner}</td></tr>`;
+                }
             });
 
             html += '</tbody></table>';

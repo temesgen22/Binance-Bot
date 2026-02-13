@@ -869,10 +869,28 @@ private fun TradeRow(trade: TradeReportDto) {
                 )
             }
             Column {
-                Text(
-                    text = trade.exitReason ?: "Open",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = trade.exitReason ?: "Open",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (trade.trailingStopHistory.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer
+                        ) {
+                            Text(
+                                text = "Trail (${trade.trailingStopHistory.size})",
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = trade.exitTime?.take(10) ?: trade.entryTime?.take(10) ?: "",
                     style = MaterialTheme.typography.labelSmall,

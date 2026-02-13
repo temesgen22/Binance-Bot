@@ -2,6 +2,20 @@ package com.binancebot.mobile.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
 
+/** One trailing-stop level update (TP/SL move) for a position. */
+data class TrailingStopUpdateDto(
+    @SerializedName("update_sequence")
+    val updateSequence: Int,
+    @SerializedName("best_price")
+    val bestPrice: Double,
+    @SerializedName("tp_price")
+    val tpPrice: Double,
+    @SerializedName("sl_price")
+    val slPrice: Double,
+    @SerializedName("created_at")
+    val createdAt: String? = null
+)
+
 data class TradeReportDto(
     @SerializedName("trade_id")
     val tradeId: String,
@@ -42,7 +56,9 @@ data class TradeReportDto(
     @SerializedName("entry_order_id")
     val entryOrderId: Long? = null,
     @SerializedName("exit_order_id")
-    val exitOrderId: Long? = null
+    val exitOrderId: Long? = null,
+    @SerializedName("trailing_stop_history")
+    val trailingStopHistory: List<TrailingStopUpdateDto> = emptyList()
 )
 
 data class StrategyReportDto(

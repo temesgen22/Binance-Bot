@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
 from app.api.deps import get_strategy_runner, get_binance_client, get_current_user, get_database_service
-from app.models.report import StrategyReport, TradeReport, TradingReport
+from app.models.report import StrategyReport, TradeReport, TradingReport, TrailingStopUpdateItem
 from app.models.order import OrderResponse
 from app.models.strategy import StrategySummary
 from app.models.db_models import User
@@ -178,10 +178,30 @@ def _get_completed_trades_from_database(
         
         # Execute query
         completed_trades = query.all()
-        
+        from app.models.db_models import TrailingStopUpdate
+
         # Convert to TradeReport
         trade_reports = []
         for ct in completed_trades:
+            # Fetch trailing stop history for this trade when position_instance_id is set
+            trailing_stop_history: List[TrailingStopUpdateItem] = []
+            if ct.position_instance_id is not None:
+                updates = (
+                    db_service.db.query(TrailingStopUpdate)
+                    .filter(TrailingStopUpdate.position_instance_id == ct.position_instance_id)
+                    .order_by(TrailingStopUpdate.update_sequence.asc())
+                    .all()
+                )
+                for u in updates:
+                    trailing_stop_history.append(
+                        TrailingStopUpdateItem(
+                            update_sequence=u.update_sequence,
+                            best_price=float(u.best_price),
+                            tp_price=float(u.tp_price),
+                            sl_price=float(u.sl_price),
+                            created_at=u.created_at,
+                        )
+                    )
             trade_report = TradeReport(
                 trade_id=str(ct.entry_order_id),  # Use entry_order_id as trade_id
                 strategy_id=strategy_id,
@@ -203,6 +223,7 @@ def _get_completed_trades_from_database(
                 notional_value=float(ct.notional_value) if ct.notional_value else None,
                 entry_order_id=ct.entry_order_id,
                 exit_order_id=ct.exit_order_id,
+                trailing_stop_history=trailing_stop_history,
             )
             trade_reports.append(trade_report)
         

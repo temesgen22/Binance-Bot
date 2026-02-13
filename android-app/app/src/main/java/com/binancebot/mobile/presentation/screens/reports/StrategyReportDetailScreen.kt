@@ -1,6 +1,7 @@
 package com.binancebot.mobile.presentation.screens.reports
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.*
@@ -8,6 +9,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,8 +24,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.data.remote.dto.StrategyReportDto
 import com.binancebot.mobile.data.remote.dto.TradeReportDto
+import com.binancebot.mobile.data.remote.dto.TrailingStopUpdateDto
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
+import com.binancebot.mobile.presentation.viewmodel.ReportsUiState
 import com.binancebot.mobile.presentation.viewmodel.ReportsViewModel
 
 private fun formatWinRate(winRate: Double): String {
@@ -43,8 +48,20 @@ fun StrategyReportDetailScreen(
     viewModel: ReportsViewModel = hiltViewModel()
 ) {
     val strategyReport by viewModel.selectedStrategyReport.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
     val report = strategyReport
+
+    // When opened from Strategy Details, selectedStrategyReport is null; load report for this strategy.
+    LaunchedEffect(strategyId) {
+        if (report == null) {
+            viewModel.loadAndSelectStrategyReport(strategyId)
+        }
+    }
+
     if (report == null) {
+        val isLoading = uiState is ReportsUiState.Loading
+        val isError = uiState is ReportsUiState.Error
+        val errorMessage = (uiState as? ReportsUiState.Error)?.message
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -63,11 +80,19 @@ fun StrategyReportDetailScreen(
                     .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "Open this screen from Reports by tapping \"View full table\" on a strategy.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                when {
+                    isLoading -> CircularProgressIndicator()
+                    isError -> Text(
+                        text = errorMessage ?: "Failed to load trade history",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    else -> Text(
+                        text = "No report data for this strategy.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         return
@@ -235,8 +260,71 @@ private fun SummaryChip(label: String, value: String) {
 }
 
 @Composable
+private fun TrailingStopHistoryBlock(
+    tradeId: String,
+    history: List<TrailingStopUpdateDto>,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RectangleShape
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Trailing stop (${history.size} updates)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+            if (expanded) {
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("#", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(24.dp))
+                        Text("Time", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(140.dp))
+                        Text("Best", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
+                        Text("TP", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
+                        Text("SL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
+                    }
+                    history.forEach { u ->
+                        Row(
+                            modifier = Modifier.padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("${u.updateSequence}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(24.dp))
+                            Text(u.createdAt?.take(19) ?: "—", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(140.dp))
+                            Text("%.4f".format(u.bestPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+                            Text("%.4f".format(u.tpPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+                            Text("%.4f".format(u.slPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FullTradesTable(trades: List<TradeReportDto>) {
     val horizontalScrollState = rememberScrollState()
+    var expandedTradeIds by remember { mutableStateOf(setOf<String>()) }
     val columnHeaders = listOf(
         "Trade ID" to ColWidthNarrow,
         "Symbol" to ColWidthNarrow,
@@ -302,35 +390,51 @@ private fun FullTradesTable(trades: List<TradeReportDto>) {
                         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     shape = RectangleShape
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TableCell(ColWidthNarrow, trade.tradeId.take(8) + "…")
-                        TableCell(ColWidthNarrow, trade.symbol)
-                        TableCell(ColWidthNarrow, trade.side)
-                        TableCell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
-                        TableCell(ColWidthNarrow, "%.4f".format(trade.entryPrice))
-                        TableCell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
-                        TableCell(ColWidthNarrow, trade.exitPrice?.let { "%.4f".format(it) } ?: "—")
-                        TableCell(ColWidthNarrow, "%.4f".format(trade.quantity))
-                        TableCell(ColWidthNarrow, "${trade.leverage}x")
-                        TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
-                        TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))
-                        TableCell(
-                            ColWidthNarrow,
-                            FormatUtils.formatCurrency(trade.pnlUsd),
-                            if (trade.pnlUsd >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                        )
-                        TableCell(ColWidthNarrow, "%.2f%%".format(trade.pnlPct))
-                        TableCell(ColWidthWide, trade.exitReason ?: "—")
-                        TableCell(ColWidthNarrow, trade.initialMargin?.let { FormatUtils.formatCurrency(it) } ?: "—")
-                        TableCell(ColWidthNarrow, trade.marginType ?: "—")
-                        TableCell(ColWidthNarrow, trade.notionalValue?.let { FormatUtils.formatCurrency(it) } ?: "—")
-                        TableCell(ColWidthNarrow, trade.entryOrderId?.toString() ?: "—")
-                        TableCell(ColWidthNarrow, trade.exitOrderId?.toString() ?: "—")
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TableCell(ColWidthNarrow, trade.tradeId.take(8) + "…")
+                            TableCell(ColWidthNarrow, trade.symbol)
+                            TableCell(ColWidthNarrow, trade.side)
+                            TableCell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
+                            TableCell(ColWidthNarrow, "%.4f".format(trade.entryPrice))
+                            TableCell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
+                            TableCell(ColWidthNarrow, trade.exitPrice?.let { "%.4f".format(it) } ?: "—")
+                            TableCell(ColWidthNarrow, "%.4f".format(trade.quantity))
+                            TableCell(ColWidthNarrow, "${trade.leverage}x")
+                            TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
+                            TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))
+                            TableCell(
+                                ColWidthNarrow,
+                                FormatUtils.formatCurrency(trade.pnlUsd),
+                                if (trade.pnlUsd >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                            TableCell(ColWidthNarrow, "%.2f%%".format(trade.pnlPct))
+                            TableCell(ColWidthWide, trade.exitReason ?: "—")
+                            TableCell(ColWidthNarrow, trade.initialMargin?.let { FormatUtils.formatCurrency(it) } ?: "—")
+                            TableCell(ColWidthNarrow, trade.marginType ?: "—")
+                            TableCell(ColWidthNarrow, trade.notionalValue?.let { FormatUtils.formatCurrency(it) } ?: "—")
+                            TableCell(ColWidthNarrow, trade.entryOrderId?.toString() ?: "—")
+                            TableCell(ColWidthNarrow, trade.exitOrderId?.toString() ?: "—")
+                        }
+                        if (trade.trailingStopHistory.isNotEmpty()) {
+                            TrailingStopHistoryBlock(
+                                tradeId = trade.tradeId,
+                                history = trade.trailingStopHistory,
+                                expanded = trade.tradeId in expandedTradeIds,
+                                onToggle = {
+                                    expandedTradeIds = if (trade.tradeId in expandedTradeIds) {
+                                        expandedTradeIds - trade.tradeId
+                                    } else {
+                                        expandedTradeIds + trade.tradeId
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
                 if (index < trades.size - 1) {

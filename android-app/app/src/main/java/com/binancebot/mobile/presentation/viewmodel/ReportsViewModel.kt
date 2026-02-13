@@ -52,6 +52,27 @@ class ReportsViewModel @Inject constructor(
                 }
         }
     }
+
+    /**
+     * Load trading report filtered by strategy and select that strategy's report for the detail screen.
+     * Use when opening trade history from Strategy Details (so selectedStrategyReport is not pre-set).
+     */
+    fun loadAndSelectStrategyReport(strategyId: String) {
+        viewModelScope.launch {
+            _uiState.value = ReportsUiState.Loading
+            reportsRepository.getTradingReport(strategyId = strategyId)
+                .onSuccess { report ->
+                    _tradingReport.value = report
+                    val strategyReport = report.strategies.find { it.strategyId == strategyId }
+                    _selectedStrategyReport.value = strategyReport
+                    _uiState.value = ReportsUiState.Success
+                }
+                .onFailure { error ->
+                    _selectedStrategyReport.value = null
+                    _uiState.value = ReportsUiState.Error(error.message ?: "Failed to load trade history")
+                }
+        }
+    }
 }
 
 sealed class ReportsUiState {

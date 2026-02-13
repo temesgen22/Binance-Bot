@@ -8,6 +8,15 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class TrailingStopUpdateItem(BaseModel):
+    """One trailing-stop level update (TP/SL move) for a position."""
+    update_sequence: int = Field(description="Order of this update (1, 2, ...)")
+    best_price: float = Field(description="Best price seen (long: high, short: low)")
+    tp_price: float = Field(description="Take-profit price after update")
+    sl_price: float = Field(description="Stop-loss price after update")
+    created_at: Optional[datetime] = Field(default=None, description="When the update was recorded")
+
+
 class TradeReport(BaseModel):
     """Detailed trade report with entry/exit information and Binance trade parameters."""
     
@@ -33,6 +42,12 @@ class TradeReport(BaseModel):
     notional_value: Optional[float] = Field(default=None, description="Notional value (quantity * price) in quote currency from Binance")
     entry_order_id: Optional[int] = Field(default=None, description="Entry order ID from Binance")
     exit_order_id: Optional[int] = Field(default=None, description="Exit order ID from Binance")
+
+    # Trailing stop history (when trailing stop enabled and position had updates)
+    trailing_stop_history: List[TrailingStopUpdateItem] = Field(
+        default_factory=list,
+        description="Chronological list of trailing-stop TP/SL updates for this trade (if trailing stop was used)"
+    )
 
 
 class StrategyReport(BaseModel):
