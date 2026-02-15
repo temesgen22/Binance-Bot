@@ -714,15 +714,30 @@
                     return;
                 }
 
-                // Load metrics for each strategy
+                // Load metrics for all strategies in parallel (faster than sequential)
                 let html = '<table><tr><th>Strategy</th><th>Total Trades</th><th>Win Rate</th><th>Total PnL</th><th>Profit Factor</th><th>Sharpe Ratio</th><th>Max DD</th></tr>';
                 let hasData = false;
-                
-                for (const strategy of strategies) {
+                const results = await Promise.allSettled(
+                    strategies.map(strategy =>
+                        authFetch(`${API_BASE}/api/risk/metrics/strategy/${strategy.id}`).then(async (metricsResponse) => ({
+                            strategy,
+                            ok: metricsResponse.ok,
+                            data: metricsResponse.ok ? await metricsResponse.json() : null,
+                            status: metricsResponse.status,
+                            errorText: metricsResponse.ok ? null : await metricsResponse.text()
+                        }))
+                    )
+                );
+                results.forEach((result, index) => {
+                    const strategy = strategies[index];
+                    if (result.status !== 'fulfilled') {
+                        hasData = true;
+                        html += `<tr><td>${strategy.name || strategy.id}</td><td colspan="6" style="text-align: center; color: #f44336;">Error: ${result.reason?.message || 'Unknown'}</td></tr>`;
+                        return;
+                    }
+                    const { strategy, ok, data: metricsData, status, errorText } = result.value;
                     try {
-                        const metricsResponse = await authFetch(`${API_BASE}/api/risk/metrics/strategy/${strategy.id}`);
-                        if (metricsResponse.ok) {
-                            const metricsData = await metricsResponse.json();
+                        if (ok && metricsData) {
                             if (metricsData.metrics) {
                                 const m = metricsData.metrics;
                                 hasData = true;
@@ -738,7 +753,6 @@
                                     </tr>
                                 `;
                             } else if (metricsData.message) {
-                                // Strategy has no trades yet
                                 hasData = true;
                                 html += `
                                     <tr>
@@ -748,28 +762,20 @@
                                 `;
                             }
                         } else {
-                            // Response not OK - log the error
-                            const errorText = await metricsResponse.text();
-                            console.error(`Error loading metrics for strategy ${strategy.id}: ${metricsResponse.status} ${errorText}`);
+                            if (errorText) console.error(`Error loading metrics for strategy ${strategy.id}: ${status} ${errorText}`);
                             hasData = true;
                             html += `
                                 <tr>
                                     <td>${strategy.name || strategy.id}</td>
-                                    <td colspan="6" style="text-align: center; color: #f44336;">Error loading metrics (${metricsResponse.status})</td>
+                                    <td colspan="6" style="text-align: center; color: #f44336;">Error loading metrics (${status || 'network'})</td>
                                 </tr>
                             `;
                         }
-                    } catch (error) {
-                        console.error(`Error loading metrics for strategy ${strategy.id}:`, error);
+                    } catch (e) {
                         hasData = true;
-                        html += `
-                            <tr>
-                                <td>${strategy.name || strategy.id}</td>
-                                <td colspan="6" style="text-align: center; color: #f44336;">Error: ${error.message}</td>
-                            </tr>
-                        `;
+                        html += `<tr><td>${strategy.name || strategy.id}</td><td colspan="6" style="text-align: center; color: #f44336;">Error: ${e.message}</td></tr>`;
                     }
-                }
+                });
                 
                 if (!hasData) {
                     html += '<tr><td colspan="7" style="text-align: center; color: #666;">No metrics available for any strategies</td></tr>';

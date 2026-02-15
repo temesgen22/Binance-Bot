@@ -765,9 +765,7 @@
                 updateOverallStats(data);
                 // Load risk status for all strategies
                 loadRiskStatusForStrategies(data.strategies);
-                // Load health status for running strategies
-                loadHealthStatusForStrategies(data.strategies);
-                // Load health status for running strategies
+                // Load health status for running strategies (once)
                 loadHealthStatusForStrategies(data.strategies);
             } catch (error) {
                 console.error('Error loading data:', error);

@@ -26,6 +26,15 @@ object FormatUtils {
     fun formatNumber(value: Double, decimals: Int = 2): String {
         return String.format(Locale.getDefault(), "%.${decimals}f", value)
     }
+
+    /**
+     * Format price with full precision (up to 8 decimals), trailing zeros removed.
+     * Matches Binance-style display so prices are not cut.
+     */
+    fun formatPrice(price: Double): String {
+        val s = String.format(Locale.US, "%.8f", price)
+        return s.trimEnd('0').trimEnd('.')
+    }
     
     /**
      * Format ISO date string to readable format

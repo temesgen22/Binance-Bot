@@ -4,6 +4,13 @@ Dynamic Trailing Stop Loss Manager
 A reusable component that dynamically adjusts take profit and stop loss levels
 as price moves favorably, maintaining constant risk/reward percentages.
 
+Activation:
+- When activation_pct is 0%: trailing is active from the start. The first TP/SL
+  update happens when price moves past the initial best price (entry) in the
+  favorable direction (LONG: price > entry; SHORT: price < entry).
+- When activation_pct > 0%: trailing only starts after price reaches the
+  activation threshold (entry ± activation_pct). Until then, TP/SL stay at entry-based levels.
+
 Example (Long Position):
 - Entry: 100,000
 - Initial TP: 105,000 (+5%)
@@ -64,8 +71,10 @@ class TrailingStopManager:
             stop_loss_pct: Stop loss percentage (e.g., 0.02 for 2%)
             position_type: "LONG" or "SHORT"
             enabled: Whether trailing stop is enabled (default: True)
-            activation_pct: Percentage price must move before trailing activates (e.g., 0.01 = 1%)
-                           If 0, trailing starts immediately. Default: 0.0
+            activation_pct: Percentage price must move before trailing activates (e.g., 0.01 = 1%).
+                           If 0, trailing is active from the start: the first TP/SL update happens
+                           when price moves past the initial best price (entry) in the favorable
+                           direction. Default: 0.0
         """
         self.entry_price = entry_price
         self.take_profit_pct = take_profit_pct
@@ -80,8 +89,9 @@ class TrailingStopManager:
         else:  # SHORT
             self.activation_price = entry_price * (1 - activation_pct)
         
-        # Track if activation threshold has been reached
-        self.activated = activation_pct == 0.0  # If 0, activate immediately
+        # Track if activation threshold has been reached. If 0%, trailing works from the start
+        # (first update when price moves past entry in favorable direction).
+        self.activated = activation_pct == 0.0
         
         # Initialize TP/SL from entry price
         if position_type == "LONG":

@@ -299,9 +299,9 @@ private fun TrailingStopHistoryBlock(
                     ) {
                         Text("#", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(24.dp))
                         Text("Time", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(140.dp))
-                        Text("Best", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
-                        Text("TP", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
-                        Text("SL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp))
+                        Text("Best", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
+                        Text("TP", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
+                        Text("SL", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
                     }
                     history.forEach { u ->
                         Row(
@@ -310,9 +310,9 @@ private fun TrailingStopHistoryBlock(
                         ) {
                             Text("${u.updateSequence}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(24.dp))
                             Text(u.createdAt?.take(19) ?: "—", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(140.dp))
-                            Text("%.4f".format(u.bestPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
-                            Text("%.4f".format(u.tpPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
-                            Text("%.4f".format(u.slPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+                            Text(FormatUtils.formatPrice(u.bestPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(88.dp))
+                            Text(FormatUtils.formatPrice(u.tpPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(88.dp))
+                            Text(FormatUtils.formatPrice(u.slPrice), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(88.dp))
                         }
                     }
                 }
@@ -400,11 +400,11 @@ private fun FullTradesTable(trades: List<TradeReportDto>) {
                             TableCell(ColWidthNarrow, trade.tradeId.take(8) + "…")
                             TableCell(ColWidthNarrow, trade.symbol)
                             TableCell(ColWidthNarrow, trade.side)
-                            TableCell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
-                            TableCell(ColWidthNarrow, "%.4f".format(trade.entryPrice))
-                            TableCell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
-                            TableCell(ColWidthNarrow, trade.exitPrice?.let { "%.4f".format(it) } ?: "—")
-                            TableCell(ColWidthNarrow, "%.4f".format(trade.quantity))
+                        TableCell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
+                        TableCell(ColWidthWide, FormatUtils.formatPrice(trade.entryPrice))
+                        TableCell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
+                        TableCell(ColWidthWide, trade.exitPrice?.let { FormatUtils.formatPrice(it) } ?: "—")
+                        TableCell(ColWidthWide, FormatUtils.formatPrice(trade.quantity))
                             TableCell(ColWidthNarrow, "${trade.leverage}x")
                             TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
                             TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))

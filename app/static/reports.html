@@ -344,10 +344,32 @@
             color: #FF9800;
         }
 
+        .trades-table-scroll-wrapper {
+            overflow-x: auto;
+            overflow-y: visible;
+            margin-top: 15px;
+            border-radius: 8px;
+            -webkit-overflow-scrolling: touch;
+            box-shadow: inset -8px 0 8px -8px rgba(0,0,0,0.1);
+        }
+        .trades-table-scroll-wrapper::-webkit-scrollbar {
+            height: 10px;
+        }
+        .trades-table-scroll-wrapper::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .trades-table-scroll-wrapper::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+        .trades-table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
         .trades-table {
             width: 100%;
+            min-width: 1600px;
             border-collapse: collapse;
-            margin-top: 15px;
             background: white;
             border-radius: 8px;
             overflow: hidden;
@@ -999,7 +1021,7 @@
             });
 
             html += '</tbody></table>';
-            return html;
+            return '<div class="trades-table-scroll-wrapper">' + html + '</div>';
         }
 
         function clearFilters() {
