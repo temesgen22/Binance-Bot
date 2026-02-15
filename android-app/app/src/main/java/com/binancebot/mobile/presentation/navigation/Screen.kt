@@ -30,6 +30,7 @@ sealed class Screen(
     object AutoTuning : Screen("auto_tuning", "Auto-Tuning", Icons.Default.Tune)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
     object Notifications : Screen("notifications", "Notifications", Icons.Default.Notifications)
+    object PriceAlerts : Screen("price_alerts", "Price Alerts", Icons.Default.NotificationsActive)
 }
 
 

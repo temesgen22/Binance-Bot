@@ -114,6 +114,13 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                     data = data
                 )
             }
+            "price_alert" -> {
+                notificationManager.showPriceAlertNotification(
+                    title = title,
+                    message = message,
+                    data = data
+                )
+            }
             "strategy" -> {
                 notificationManager.showStrategyNotification(
                     title = title,
@@ -159,6 +166,13 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                     alertType = data["alert_type"],
                     category = category,
                     actionUrl = data["action_url"],
+                    data = data
+                )
+            }
+            "price_alert" -> {
+                notificationManager.showPriceAlertNotification(
+                    title = notification.title ?: "Price Alert",
+                    message = notification.body ?: "",
                     data = data
                 )
             }

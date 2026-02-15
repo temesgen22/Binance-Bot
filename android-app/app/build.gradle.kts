@@ -18,7 +18,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.binancebot.mobile.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -61,6 +61,18 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    // Workaround for "Could not find or load main class .M;C:\...\Microsoft" on Windows:
+    // run unit tests with one worker and explicit JVM args so bad env vars (e.g. JAVA_TOOL_OPTIONS)
+    // don't corrupt the test worker command line.
+    testOptions {
+        unitTests {
+            all {
+                it.maxParallelForks = 1
+                it.jvmArgs("-Xmx1024m", "-Dfile.encoding=UTF-8")
+            }
         }
     }
 }
@@ -140,10 +152,16 @@ dependencies {
     
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.7.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("app.cash.turbine:turbine:1.0.0")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
+    testImplementation("io.mockk:mockk:1.13.8")
+    testImplementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
@@ -158,4 +176,3 @@ dependencies {
 kapt {
     correctErrorTypes = true
 }
-

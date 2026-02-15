@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binance Bot - Price Alerts</title>
+    <link rel="stylesheet" href="/static/common.css">
+    <script src="/static/auth.js"></script>
+    <script src="/static/common.js"></script>
+    <style>
+        .container { max-width: 1200px; }
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .filter-chips {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .filter-chips button {
+            padding: 8px 16px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .filter-chips button.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: transparent;
+        }
+        .filter-chips button:hover:not(.active) {
+            border-color: #667eea;
+            color: #667eea;
+        }
+        .btn { padding: 12px 24px; border: none; border-radius: 6px; font-size: 1em; font-weight: 600; cursor: pointer; transition: all 0.3s; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-sm { padding: 6px 12px; font-size: 0.9em; }
+        .content { padding: 25px; }
+        .alerts-table-wrapper { overflow-x: auto; }
+        .alerts-table {
+            width: 100%;
+            min-width: 800px;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .alerts-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 14px;
+            text-align: left;
+            font-weight: 600;
+        }
+        .alerts-table td { padding: 14px; border-bottom: 1px solid #e9ecef; }
+        .alerts-table tr:hover { background: #f8f9fa; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 600; }
+        .badge-enabled { background: #d4edda; color: #155724; }
+        .badge-disabled { background: #f8d7da; color: #721c24; }
+        .actions-cell { display: flex; gap: 8px; flex-wrap: wrap; }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 440px;
+            width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .modal h3 { margin: 0 0 20px 0; color: #333; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 6px; font-weight: 600; color: #555; }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .form-row { display: flex; align-items: center; gap: 10px; }
+        .form-row input[type="checkbox"] { width: auto; }
+        .modal-actions { margin-top: 24px; display: flex; gap: 12px; justify-content: flex-end; }
+        .error-msg { color: #dc3545; font-size: 0.9em; margin-top: 8px; }
+        .empty-state { text-align: center; padding: 48px 24px; color: #666; }
+        .empty-state p { margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button class="menu-toggle" aria-label="Toggle menu" aria-expanded="false">☰</button>
+            <h1>🔔 Price Alerts</h1>
+            <p>Get notified when price crosses your target (Binance-style)</p>
+            <div class="nav-links">
+                <a href="/">📋 Log Viewer</a>
+                <a href="/dashboard">📊 Dashboard</a>
+                <a href="/strategies">🏆 Strategies</a>
+                <a href="/trades">💰 Trades</a>
+                <a href="/reports">📊 Reports</a>
+                <a href="/risk-management">🛡️ Risk Management</a>
+                <a href="/price-alerts">🔔 Price Alerts</a>
+                <a href="/market-analyzer">📈 Market Analyzer</a>
+                <a href="/backtesting">🔬 Backtesting</a>
+                <a href="/static/settings.html">⚙️ Settings</a>
+                <span id="user-info"></span>
+                <a href="#" onclick="logout(); return false;" class="logout-link">🚪 Logout</a>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="toolbar">
+                <div class="filter-chips">
+                    <button type="button" class="filter-btn active" data-filter="">All</button>
+                    <button type="button" class="filter-btn" data-filter="true">Enabled</button>
+                    <button type="button" class="filter-btn" data-filter="false">Disabled</button>
+                </div>
+                <button type="button" class="btn btn-primary" id="btnAddAlert">+ Add alert</button>
+            </div>
+
+            <div id="alertsLoading" class="loading" style="display: none;">Loading alerts…</div>
+            <div id="alertsError" class="error-msg" style="display: none;"></div>
+            <div id="alertsEmpty" class="empty-state" style="display: none;">
+                <p>No price alerts yet. Create one to get notified when price crosses your target.</p>
+                <button type="button" class="btn btn-primary" onclick="openCreateModal()">Add alert</button>
+            </div>
+            <div class="alerts-table-wrapper" id="alertsTableWrap" style="display: none;">
+                <table class="alerts-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Type</th>
+                            <th>Target price</th>
+                            <th>Status</th>
+                            <th>Last price</th>
+                            <th>Triggered at</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="alertsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <h3 id="modalTitle">Add price alert</h3>
+            <form id="alertForm">
+                <input type="hidden" id="alertId" value="">
+                <div class="form-group">
+                    <label for="symbol">Symbol</label>
+                    <input type="text" id="symbol" placeholder="e.g. BTCUSDT" required maxlength="20">
+                </div>
+                <div class="form-group">
+                    <label for="alertType">Alert type</label>
+                    <select id="alertType" required>
+                        <option value="PRICE_RISES_ABOVE">Rises above</option>
+                        <option value="PRICE_DROPS_BELOW">Drops below</option>
+                        <option value="PRICE_REACHES">Reaches</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="targetPrice">Target price</label>
+                    <input type="number" id="targetPrice" step="any" min="0.00000001" placeholder="0" required>
+                </div>
+                <div class="form-group form-row">
+                    <input type="checkbox" id="triggerOnce" checked>
+                    <label for="triggerOnce">Trigger once (disable after first alert)</label>
+                </div>
+                <div id="formError" class="error-msg" style="display: none;"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="btnModalCancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btnModalSubmit">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            if (!requireAuth()) return;
+
+            const tbody = document.getElementById('alertsTableBody');
+            const tableWrap = document.getElementById('alertsTableWrap');
+            const alertsLoading = document.getElementById('alertsLoading');
+            const alertsError = document.getElementById('alertsError');
+            const alertsEmpty = document.getElementById('alertsEmpty');
+            const modalOverlay = document.getElementById('modalOverlay');
+            const modalTitle = document.getElementById('modalTitle');
+            const alertForm = document.getElementById('alertForm');
+            const alertId = document.getElementById('alertId');
+            const symbolInput = document.getElementById('symbol');
+            const alertTypeInput = document.getElementById('alertType');
+            const targetPriceInput = document.getElementById('targetPrice');
+            const triggerOnceInput = document.getElementById('triggerOnce');
+            const formError = document.getElementById('formError');
+
+            let currentFilter = '';
+
+            function showLoading(show) {
+                alertsLoading.style.display = show ? 'block' : 'none';
+                alertsError.style.display = 'none';
+                alertsEmpty.style.display = 'none';
+                tableWrap.style.display = show ? 'none' : (tbody.querySelector('tr') ? 'block' : 'none');
+            }
+
+            function showError(msg) {
+                alertsLoading.style.display = 'none';
+                alertsError.textContent = msg;
+                alertsError.style.display = 'block';
+                alertsEmpty.style.display = 'none';
+                tableWrap.style.display = 'none';
+            }
+
+            function renderAlerts(alerts) {
+                tbody.innerHTML = '';
+                if (!alerts || alerts.length === 0) {
+                    tableWrap.style.display = 'none';
+                    alertsEmpty.style.display = 'block';
+                    return;
+                }
+                tableWrap.style.display = 'block';
+                alertsEmpty.style.display = 'none';
+                const fmt = (n) => n == null ? '—' : Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 });
+                const typeLabel = (t) => ({ PRICE_RISES_ABOVE: 'Rises above', PRICE_DROPS_BELOW: 'Drops below', PRICE_REACHES: 'Reaches' })[t] || t;
+                const dateFmt = (d) => !d ? '—' : new Date(d).toLocaleString();
+                alerts.forEach(a => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML =
+                        '<td>' + (a.symbol || '') + '</td>' +
+                        '<td>' + typeLabel(a.alert_type) + '</td>' +
+                        '<td>' + fmt(a.target_price) + '</td>' +
+                        '<td><span class="badge ' + (a.enabled ? 'badge-enabled">Enabled' : 'badge-disabled">Disabled') + '</span></td>' +
+                        '<td>' + fmt(a.last_price) + '</td>' +
+                        '<td>' + dateFmt(a.triggered_at) + '</td>' +
+                        '<td class="actions-cell">' +
+                        '<button type="button" class="btn btn-sm btn-secondary" data-action="edit" data-id="' + a.id + '">Edit</button>' +
+                        '<button type="button" class="btn btn-sm btn-secondary" data-action="toggle" data-id="' + a.id + '" data-enabled="' + a.enabled + '">' + (a.enabled ? 'Disable' : 'Enable') + '</button>' +
+                        '<button type="button" class="btn btn-sm btn-danger" data-action="delete" data-id="' + a.id + '">Delete</button>' +
+                        '</td>';
+                    tbody.appendChild(tr);
+                });
+                tbody.querySelectorAll('[data-action="edit"]').forEach(btn => {
+                    btn.addEventListener('click', () => openEditModal(btn.getAttribute('data-id')));
+                });
+                tbody.querySelectorAll('[data-action="toggle"]').forEach(btn => {
+                    btn.addEventListener('click', () => toggleAlert(btn.getAttribute('data-id'), btn.getAttribute('data-enabled') === 'true'));
+                });
+                tbody.querySelectorAll('[data-action="delete"]').forEach(btn => {
+                    btn.addEventListener('click', () => deleteAlert(btn.getAttribute('data-id')));
+                });
+            }
+
+            async function loadAlerts() {
+                showLoading(true);
+                try {
+                    let url = '/api/price-alerts';
+                    if (currentFilter !== '') url += '?enabled=' + currentFilter;
+                    const res = await authFetch(url);
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        const detail = err.detail;
+                        const msg = Array.isArray(detail)
+                            ? detail.map(function(d) { return d.msg || d.message; }).filter(Boolean).join('; ')
+                            : (detail && typeof detail === 'object' ? detail.message : detail);
+                        throw new Error(msg || res.statusText || 'Failed to load alerts');
+                    }
+                    const data = await res.json();
+                    renderAlerts(data.alerts || []);
+                } catch (e) {
+                    showError(e.message || 'Failed to load alerts');
+                } finally {
+                    showLoading(false);
+                }
+            }
+
+            window.openCreateModal = function() {
+                alertId.value = '';
+                symbolInput.value = '';
+                alertTypeInput.value = 'PRICE_RISES_ABOVE';
+                targetPriceInput.value = '';
+                triggerOnceInput.checked = true;
+                modalTitle.textContent = 'Add price alert';
+                formError.style.display = 'none';
+                modalOverlay.classList.add('show');
+            };
+
+            async function openEditModal(id) {
+                try {
+                    const res = await authFetch('/api/price-alerts/' + id);
+                    if (!res.ok) throw new Error('Failed to load alert');
+                    const a = await res.json();
+                    alertId.value = a.id;
+                    symbolInput.value = a.symbol || '';
+                    alertTypeInput.value = a.alert_type || 'PRICE_RISES_ABOVE';
+                    targetPriceInput.value = a.target_price ?? '';
+                    triggerOnceInput.checked = a.trigger_once !== false;
+                    modalTitle.textContent = 'Edit price alert';
+                    formError.style.display = 'none';
+                    modalOverlay.classList.add('show');
+                } catch (e) {
+                    alert(e.message || 'Failed to load alert');
+                }
+            }
+
+            function closeModal() {
+                modalOverlay.classList.remove('show');
+            }
+
+            alertForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                formError.style.display = 'none';
+                const symbol = (symbolInput.value || '').trim().toUpperCase();
+                const targetPrice = parseFloat(targetPriceInput.value);
+                if (!symbol) {
+                    formError.textContent = 'Symbol is required';
+                    formError.style.display = 'block';
+                    return;
+                }
+                if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+                    formError.textContent = 'Target price must be a positive number';
+                    formError.style.display = 'block';
+                    return;
+                }
+                const id = alertId.value;
+                const body = {
+                    symbol: symbol,
+                    alert_type: alertTypeInput.value,
+                    target_price: targetPrice,
+                    trigger_once: triggerOnceInput.checked
+                };
+                try {
+                    const url = id ? '/api/price-alerts/' + id : '/api/price-alerts';
+                    const method = id ? 'PATCH' : 'POST';
+                    const res = await authFetch(url, {
+                        method: method,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(id ? { symbol: body.symbol, alert_type: body.alert_type, target_price: body.target_price, trigger_once: body.trigger_once } : body)
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        const detail = err.detail;
+                        const msg = Array.isArray(detail)
+                            ? detail.map(function(d) { return d.msg || d.message; }).filter(Boolean).join('; ')
+                            : (detail && typeof detail === 'object' ? detail.message : detail);
+                        throw new Error(msg || res.statusText || 'Save failed');
+                    }
+                    closeModal();
+                    loadAlerts();
+                } catch (err) {
+                    formError.textContent = err.message || 'Save failed';
+                    formError.style.display = 'block';
+                }
+            });
+
+            document.getElementById('btnModalCancel').addEventListener('click', closeModal);
+            modalOverlay.addEventListener('click', function(e) {
+                if (e.target === modalOverlay) closeModal();
+            });
+
+            async function toggleAlert(id, currentlyEnabled) {
+                try {
+                    const res = await authFetch('/api/price-alerts/' + id, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: !currentlyEnabled })
+                    });
+                    if (!res.ok) throw new Error('Update failed');
+                    loadAlerts();
+                } catch (e) {
+                    alert(e.message || 'Failed to update');
+                }
+            }
+
+            async function deleteAlert(id) {
+                if (!confirm('Delete this price alert?')) return;
+                try {
+                    const res = await authFetch('/api/price-alerts/' + id, { method: 'DELETE' });
+                    if (!res.ok) throw new Error('Delete failed');
+                    loadAlerts();
+                } catch (e) {
+                    alert(e.message || 'Failed to delete');
+                }
+            }
+
+            document.getElementById('btnAddAlert').addEventListener('click', openCreateModal);
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentFilter = this.getAttribute('data-filter') || '';
+                    loadAlerts();
+                });
+            });
+
+            document.addEventListener('DOMContentLoaded', loadAlerts);
+        })();
+    </script>
+</body>
+</html>

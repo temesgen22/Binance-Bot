@@ -397,72 +397,11 @@ private fun FullTradesTable(trades: List<TradeReportDto>) {
                                 .padding(horizontal = 8.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TableCell(ColWidthNarrow, trade.tradeId.take(8) + "…")
-                            TableCell(ColWidthNarrow, trade.symbol)
-                            TableCell(ColWidthNarrow, trade.side)
-                        TableCell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
-                        TableCell(ColWidthWide, FormatUtils.formatPrice(trade.entryPrice))
-                        TableCell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
-                        TableCell(ColWidthWide, trade.exitPrice?.let { FormatUtils.formatPrice(it) } ?: "—")
-                        TableCell(ColWidthWide, FormatUtils.formatPrice(trade.quantity))
-                            TableCell(ColWidthNarrow, "${trade.leverage}x")
-                            TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
-                            TableCell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))
-                            TableCell(
-                                ColWidthNarrow,
-                                FormatUtils.formatCurrency(trade.pnlUsd),
-                                if (trade.pnlUsd >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                            )
-                            TableCell(ColWidthNarrow, "%.2f%%".format(trade.pnlPct))
-                            TableCell(ColWidthWide, trade.exitReason ?: "—")
-                            TableCell(ColWidthNarrow, trade.initialMargin?.let { FormatUtils.formatCurrency(it) } ?: "—")
-                            TableCell(ColWidthNarrow, trade.marginType ?: "—")
-                            TableCell(ColWidthNarrow, trade.notionalValue?.let { FormatUtils.formatCurrency(it) } ?: "—")
-                            TableCell(ColWidthNarrow, trade.entryOrderId?.toString() ?: "—")
-                            TableCell(ColWidthNarrow, trade.exitOrderId?.toString() ?: "—")
-                        }
-                        if (trade.trailingStopHistory.isNotEmpty()) {
-                            TrailingStopHistoryBlock(
-                                tradeId = trade.tradeId,
-                                history = trade.trailingStopHistory,
-                                expanded = trade.tradeId in expandedTradeIds,
-                                onToggle = {
-                                    expandedTradeIds = if (trade.tradeId in expandedTradeIds) {
-                                        expandedTradeIds - trade.tradeId
-                                    } else {
-                                        expandedTradeIds + trade.tradeId
-                                    }
-                                }
-                            )
+                            //TODO: Add content
                         }
                     }
                 }
-                if (index < trades.size - 1) {
-                    HorizontalDivider(modifier = Modifier.padding(start = 8.dp, end = 8.dp))
-                }
             }
         }
-    }
-}
-
-@Composable
-private fun RowScope.TableCell(
-    width: androidx.compose.ui.unit.Dp,
-    value: String,
-    color: Color = MaterialTheme.colorScheme.onSurface
-) {
-    Box(
-        modifier = Modifier
-            .width(width)
-            .padding(horizontal = 4.dp),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            color = color,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }

@@ -76,6 +76,7 @@ class User(Base):
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
     fcm_tokens = relationship("FCMToken", back_populates="user", cascade="all, delete-orphan")
+    price_alerts = relationship("PriceAlert", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("username ~ '^[a-z0-9_-]+$'", name="users_username_check"),
@@ -200,6 +201,32 @@ class FCMToken(Base):
         Index("idx_fcm_tokens_user_device", "user_id", "device_id", unique=True),
         Index("idx_fcm_tokens_active", "is_active"),
         Index("idx_fcm_tokens_client_type", "client_type"),
+    )
+
+
+class PriceAlert(Base):
+    """User price alert for push notifications when price crosses a threshold (Binance-style)."""
+    __tablename__ = "price_alerts"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    symbol = Column(String(20), nullable=False, index=True)  # e.g. BTCUSDT
+    alert_type = Column(String(32), nullable=False)  # PRICE_RISES_ABOVE, PRICE_DROPS_BELOW, PRICE_REACHES
+    target_price = Column(Numeric(20, 8), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    last_price = Column(Numeric(20, 8), nullable=True)  # NULL on create; Option B: skip first run
+    trigger_once = Column(Boolean, nullable=False, default=True)
+    triggered_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="price_alerts")
+
+    __table_args__ = (
+        Index("idx_price_alerts_enabled", "enabled"),
+        Index("idx_price_alerts_enabled_symbol", "enabled", "symbol"),
     )
 
 

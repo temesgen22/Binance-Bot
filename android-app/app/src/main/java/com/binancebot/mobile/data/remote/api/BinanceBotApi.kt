@@ -357,4 +357,26 @@ interface BinanceBotApi {
     
     @DELETE("notifications/{notification_id}")
     suspend fun deleteNotification(@Path("notification_id") notificationId: String): Response<Unit>
+    
+    // ========== Price Alerts ==========
+    
+    @GET("price-alerts")
+    suspend fun getPriceAlerts(
+        @Query("enabled") enabled: Boolean? = null
+    ): Response<PriceAlertListResponse>
+    
+    @GET("price-alerts/{id}")
+    suspend fun getPriceAlert(@Path("id") id: String): Response<PriceAlertDto>
+    
+    @POST("price-alerts")
+    suspend fun createPriceAlert(@Body request: CreatePriceAlertRequest): Response<PriceAlertDto>
+    
+    @PATCH("price-alerts/{id}")
+    suspend fun updatePriceAlert(
+        @Path("id") id: String,
+        @Body request: UpdatePriceAlertRequest
+    ): Response<PriceAlertDto>
+    
+    @DELETE("price-alerts/{id}")
+    suspend fun deletePriceAlert(@Path("id") id: String): Response<Unit>
 }

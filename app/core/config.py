@@ -150,6 +150,23 @@ class Settings(BaseSettings):
         description="Enable Firebase Cloud Messaging for push notifications"
     )
 
+    # Price alert checker (Binance-style push)
+    price_alert_check_interval_seconds: int = Field(
+        default=60,
+        alias="PRICE_ALERT_CHECK_INTERVAL_SECONDS",
+        description="Interval in seconds for the price alert checker loop (default: 60)",
+    )
+    price_alert_cooldown_seconds: int = Field(
+        default=300,
+        alias="PRICE_ALERT_COOLDOWN_SECONDS",
+        description="Minimum seconds between triggers for recurring alerts (default: 300)",
+    )
+    price_alert_max_per_user: Optional[int] = Field(
+        default=50,
+        alias="PRICE_ALERT_MAX_PER_USER",
+        description="Max price alerts per user (default: 50)",
+    )
+
     @field_validator("base_symbols", mode="after")
     @classmethod
     def parse_base_symbols(cls, v: Union[str, List[str]]) -> List[str]:

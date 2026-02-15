@@ -21,6 +21,11 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Holds pending deep link from notification tap so NavController can navigate after app is ready. */
+object PendingDeepLink {
+    val route = mutableStateOf<String?>(null)
+}
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     
@@ -93,12 +98,14 @@ class MainActivity : ComponentActivity() {
         val tradeId = intent.getStringExtra("trade_id")
         val strategyId = intent.getStringExtra("strategy_id")
         val notificationId = intent.getStringExtra("notification_id")
-        
-        // Deep link will be handled by navigation when app is running
-        // Store in shared preferences or use a StateFlow for navigation
-        if (deepLink != null || tradeId != null || strategyId != null) {
-            // Navigation will be handled by BinanceBotNavGraph
-            // This is a placeholder - actual navigation should be done via NavController
+        if (deepLink != null) {
+            PendingDeepLink.route.value = deepLink
+        }
+        if (tradeId != null) {
+            PendingDeepLink.route.value = Screen.Trades.route
+        }
+        if (strategyId != null) {
+            PendingDeepLink.route.value = "strategy_details/$strategyId"
         }
     }
 }
@@ -136,6 +143,17 @@ fun BinanceBotApp(tokenManager: TokenManager) {
             // Could show a loading indicator here
         }
     } else {
+        val pendingRoute by PendingDeepLink.route
+        LaunchedEffect(pendingRoute) {
+            pendingRoute?.let { route ->
+                navController.navigate(route) {
+                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+                PendingDeepLink.route.value = null
+            }
+        }
         BinanceBotNavGraph(
             navController = navController,
             startDestination = startDestination!!

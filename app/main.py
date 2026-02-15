@@ -30,6 +30,7 @@ from app.api.routes.auto_tuning import router as auto_tuning_router
 from app.api.routes.risk_metrics import router as risk_metrics_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.notifications import router as notifications_router
+from app.api.routes.price_alerts import router as price_alerts_router
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -418,6 +419,18 @@ def create_app() -> FastAPI:
                 except Exception as exc:
                     logger.warning(f"Failed to start service monitor: {exc}")
             
+            # Start price alert checker (requires FCM and DB)
+            if db_init_success and fcm_notifier:
+                try:
+                    from app.services.price_alert_checker import price_alert_worker
+                    task = asyncio.create_task(
+                        price_alert_worker(fcm_notifier, testnet=settings.binance_testnet)
+                    )
+                    app.state.background_tasks.append(task)
+                    logger.info("✅ Price alert worker started")
+                except Exception as exc:
+                    logger.warning(f"Price alert worker not started: {exc}")
+            
             logger.info("✅ FastAPI application startup completed successfully")
             logger.info("🌐 Server is ready to accept requests on port 8000")
         except Exception as startup_exc:
@@ -706,6 +719,7 @@ def create_app() -> FastAPI:
     app.include_router(risk_metrics_router)  # Risk metrics and monitoring API
     app.include_router(dashboard_router)  # Dashboard overview API
     app.include_router(notifications_router)  # FCM token management for push notifications
+    app.include_router(price_alerts_router)  # Price alerts (Binance-style push)
     
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)
@@ -811,6 +825,17 @@ def create_app() -> FastAPI:
     async def dashboard_gui_slash():
         """Serve the Dashboard page (with trailing slash)."""
         return await _serve_gui_file("dashboard.html", "Trading Dashboard")
+    
+    # GUI route for price alerts
+    @app.get("/price-alerts", tags=["gui"], include_in_schema=False)
+    async def price_alerts_gui():
+        """Serve the Price Alerts GUI (without trailing slash)."""
+        return await _serve_gui_file("price-alerts.html", "Price Alerts")
+    
+    @app.get("/price-alerts/", tags=["gui"], include_in_schema=False)
+    async def price_alerts_gui_slash():
+        """Serve the Price Alerts GUI (with trailing slash)."""
+        return await _serve_gui_file("price-alerts.html", "Price Alerts")
     
     # Diagnostic endpoint to check if register.html exists (for debugging)
     @app.get("/debug/check-register-file", tags=["debug"], include_in_schema=False)

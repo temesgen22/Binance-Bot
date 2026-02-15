@@ -37,6 +37,7 @@ class NotificationManager @Inject constructor(
         private const val CHANNEL_ID_ALERTS = "alerts_channel"
         private const val CHANNEL_ID_STRATEGIES = "strategies_channel"
         private const val CHANNEL_ID_SYSTEM = "system_channel"
+        private const val CHANNEL_ID_PRICE_ALERTS = "price_alerts_channel"
         
         private const val NOTIFICATION_ID_TRADE = 1000
         private const val NOTIFICATION_ID_ALERT = 2000
@@ -95,10 +96,21 @@ class NotificationManager @Inject constructor(
                 description = "System notifications"
             }
             
+            // Price Alerts Channel (Binance-style price cross notifications)
+            val priceAlertsChannel = NotificationChannel(
+                CHANNEL_ID_PRICE_ALERTS,
+                "Price Alerts",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "When price crosses your target"
+                enableVibration(true)
+            }
+            
             notificationManager.createNotificationChannel(tradesChannel)
             notificationManager.createNotificationChannel(alertsChannel)
             notificationManager.createNotificationChannel(strategiesChannel)
             notificationManager.createNotificationChannel(systemChannel)
+            notificationManager.createNotificationChannel(priceAlertsChannel)
         }
     }
     
@@ -204,6 +216,7 @@ class NotificationManager @Inject constructor(
         val deepLink = actionUrl ?: when (alertType) {
             "risk_alert" -> Screen.RiskManagement.route
             "strategy_alert" -> Screen.Strategies.route
+            "price_alert" -> Screen.PriceAlerts.route
             else -> null
         }
         
@@ -276,6 +289,58 @@ class NotificationManager @Inject constructor(
         
         NotificationManagerCompat.from(context).notify(
             NOTIFICATION_ID_ALERT + (alertType?.hashCode() ?: 0),
+            builder.build()
+        )
+    }
+    
+    /**
+     * Show price alert notification (Binance-style: price crossed target).
+     * Uses price_alerts_channel and deep link to Price Alerts screen.
+     */
+    fun showPriceAlertNotification(
+        title: String,
+        message: String,
+        data: Map<String, String>? = null
+    ) {
+        val notificationId = UUID.randomUUID().toString()
+        val deepLink = Screen.PriceAlerts.route
+        scope.launch {
+            notificationDao.insertNotification(
+                NotificationEntity(
+                    id = notificationId,
+                    type = "price_alert",
+                    category = "price_alert",
+                    title = title,
+                    message = message,
+                    timestamp = System.currentTimeMillis(),
+                    read = false,
+                    data = data?.let { Gson().toJson(it) },
+                    actionUrl = deepLink,
+                    priority = NotificationCompat.PRIORITY_DEFAULT
+                )
+            )
+        }
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            putExtra("deep_link", deepLink)
+            putExtra("notification_id", notificationId)
+            putExtra("type", "price_alert")
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId.hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_PRICE_ALERTS)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        NotificationManagerCompat.from(context).notify(
+            notificationId.hashCode().and(0x7FFFFFFF),
             builder.build()
         )
     }

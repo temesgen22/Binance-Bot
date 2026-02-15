@@ -142,6 +142,18 @@ fun BinanceBotNavGraph(
         composable(Screen.Notifications.route) {
             com.binancebot.mobile.presentation.screens.notifications.NotificationHistoryScreen(navController = navController)
         }
+        composable(Screen.PriceAlerts.route) {
+            com.binancebot.mobile.presentation.screens.pricealerts.PriceAlertsScreen(navController = navController)
+        }
+        composable("price_alert_form") {
+            com.binancebot.mobile.presentation.screens.pricealerts.PriceAlertFormScreen(navController = navController)
+        }
+        composable("price_alert_form/{alertId}") { backStackEntry ->
+            com.binancebot.mobile.presentation.screens.pricealerts.PriceAlertFormScreen(
+                navController = navController,
+                viewModel = androidx.hilt.navigation.compose.hiltViewModel(backStackEntry)
+            )
+        }
         composable("help") {
             com.binancebot.mobile.presentation.screens.help.HelpScreen(navController = navController)
         }

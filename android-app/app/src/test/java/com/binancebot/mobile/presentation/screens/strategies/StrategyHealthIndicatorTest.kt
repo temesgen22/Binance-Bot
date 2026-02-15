@@ -6,10 +6,13 @@ import androidx.compose.ui.test.onNodeWithText
 import com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.JUnit4
 
 /**
  * Test case to validate StrategyHealthIndicator visibility and functionality
  */
+@RunWith(JUnit4::class)
 class StrategyHealthIndicatorTest {
     
     @get:Rule

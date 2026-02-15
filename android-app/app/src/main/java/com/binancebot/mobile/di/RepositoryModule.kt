@@ -98,4 +98,10 @@ abstract class RepositoryModule {
     abstract fun bindAutoTuningRepository(
         autoTuningRepositoryImpl: AutoTuningRepositoryImpl
     ): AutoTuningRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindPriceAlertsRepository(
+        priceAlertsRepositoryImpl: PriceAlertsRepositoryImpl
+    ): PriceAlertsRepository
 }

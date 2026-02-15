@@ -215,6 +215,17 @@ fun NavigationDrawer(
                 modifier = Modifier.padding(horizontal = Spacing.Small)
             )
                 
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.NotificationsActive, contentDescription = null) },
+                    label = { Text(Screen.PriceAlerts.title) },
+                    selected = currentRoute == Screen.PriceAlerts.route,
+                    onClick = {
+                        onNavigate(Screen.PriceAlerts.route)
+                        onClose()
+                    },
+                    modifier = Modifier.padding(horizontal = Spacing.Small)
+                )
+                
                 Divider(modifier = Modifier.padding(vertical = Spacing.Small))
                 
                 NavigationDrawerItem(
