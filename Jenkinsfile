@@ -205,6 +205,12 @@ pipeline {
                   exit 1
                 fi
 
+                # Avoid "container name already in use" by stopping and removing api container before recreate
+                echo "🛑 Stopping and removing API container (if any)..."
+                docker compose -f "$COMPOSE_FILE" stop api 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" rm -f api 2>/dev/null || true
+                docker rm -f binance-bot-api 2>/dev/null || true
+
                 echo "🐳 Deploying containers..."
                 docker compose -f "$COMPOSE_FILE" up -d --build
 

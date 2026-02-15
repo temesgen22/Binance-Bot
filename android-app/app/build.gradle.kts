@@ -65,13 +65,21 @@ android {
     }
 
     // Workaround for "Could not find or load main class .M;C:\...\Microsoft" on Windows:
-    // run unit tests with one worker and explicit JVM args so bad env vars (e.g. JAVA_TOOL_OPTIONS)
-    // don't corrupt the test worker command line.
+    // System PATH can contain entries with spaces (e.g. "C:\Program Files\Microsoft...") that get
+    // mis-parsed when Gradle forks the test JVM. Override PATH for test workers to a minimal value.
     testOptions {
         unitTests {
             all {
                 it.maxParallelForks = 1
                 it.jvmArgs("-Xmx1024m", "-Dfile.encoding=UTF-8")
+                val javaHome = System.getenv("JAVA_HOME") ?: ""
+                val systemRoot = System.getenv("SystemRoot") ?: "C:\\Windows"
+                val minimalPath = listOfNotNull(
+                    "$systemRoot\\system32",
+                    "$systemRoot",
+                    if (javaHome.isNotEmpty()) "$javaHome\\bin" else null
+                ).joinToString(";")
+                it.environment("PATH", minimalPath)
             }
         }
     }

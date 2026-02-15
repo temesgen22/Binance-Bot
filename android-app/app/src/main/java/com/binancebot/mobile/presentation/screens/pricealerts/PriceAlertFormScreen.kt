@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.binancebot.mobile.presentation.viewmodel.PriceAlertFormUiState
+import com.binancebot.mobile.presentation.viewmodel.PriceAlertFormViewModel
 
 private val alertTypes = listOf(
     "PRICE_RISES_ABOVE" to "Rises above",
@@ -103,7 +104,7 @@ fun PriceAlertFormScreen(
                 ) {
                     OutlinedTextField(
                         value = symbol,
-                        onValueChange = { viewModel.setSymbol(it) },
+                        onValueChange = { s -> viewModel.setSymbol(s) },
                         label = { Text("Symbol") },
                         placeholder = { Text("e.g. BTCUSDT") },
                         modifier = Modifier.fillMaxWidth(),
@@ -117,7 +118,7 @@ fun PriceAlertFormScreen(
                     ) {
                         OutlinedTextField(
                             value = selectedLabel,
-                            onValueChange = {},
+                            onValueChange = { _ -> },
                             readOnly = true,
                             label = { Text("Alert type") },
                             modifier = Modifier
@@ -142,7 +143,7 @@ fun PriceAlertFormScreen(
                     }
                     OutlinedTextField(
                         value = targetPrice,
-                        onValueChange = { viewModel.setTargetPrice(it) },
+                        onValueChange = { s -> viewModel.setTargetPrice(s) },
                         label = { Text("Target price") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
@@ -154,7 +155,7 @@ fun PriceAlertFormScreen(
                     ) {
                         Checkbox(
                             checked = triggerOnce,
-                            onCheckedChange = { viewModel.setTriggerOnce(it) }
+                            onCheckedChange = { checked -> viewModel.setTriggerOnce(checked) }
                         )
                         Text(
                             text = "Trigger once (disable after first alert)",
