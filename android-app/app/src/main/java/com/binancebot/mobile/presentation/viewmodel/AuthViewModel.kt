@@ -3,7 +3,7 @@ package com.binancebot.mobile.presentation.viewmodel
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.BuildConfig
@@ -11,6 +11,7 @@ import com.binancebot.mobile.data.remote.dto.LoginRequest
 import com.binancebot.mobile.data.remote.dto.RegisterRequest
 import com.binancebot.mobile.domain.repository.AuthRepository
 import com.binancebot.mobile.domain.repository.NotificationRepository
+import com.binancebot.mobile.util.ConnectivityManager
 import com.binancebot.mobile.util.TokenManager
 import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -27,14 +28,19 @@ class AuthViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val notificationRepository: NotificationRepository,
     private val tokenManager: TokenManager,
+    private val connectivityManager: ConnectivityManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
-    
+
     private val _uiState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
-    
+
     fun login(username: String, password: String) {
         viewModelScope.launch {
+            if (!connectivityManager.isNetworkAvailable()) {
+                _uiState.value = AuthUiState.Error("No internet connection. Please check your network and try again.")
+                return@launch
+            }
             _uiState.value = AuthUiState.Loading
             authRepository.login(LoginRequest(username, password))
                 .onSuccess { response ->
@@ -53,6 +59,10 @@ class AuthViewModel @Inject constructor(
     
     fun register(request: RegisterRequest) {
         viewModelScope.launch {
+            if (!connectivityManager.isNetworkAvailable()) {
+                _uiState.value = AuthUiState.Error("No internet connection. Please check your network and try again.")
+                return@launch
+            }
             _uiState.value = AuthUiState.Loading
             authRepository.register(request)
                 .onSuccess { userResponse ->
@@ -103,13 +113,13 @@ class AuthViewModel @Inject constructor(
                     appVersion = appVersion
                 )
                     .onSuccess {
-                        Log.d("AuthViewModel", "FCM token registered successfully after login")
+                        AppLogger.d("AuthViewModel", "FCM token registered successfully after login")
                     }
                     .onFailure { e ->
-                        Log.e("AuthViewModel", "Failed to register FCM token after login", e)
+                        AppLogger.e("AuthViewModel", "Failed to register FCM token after login", e)
                     }
             } catch (e: Exception) {
-                Log.e("AuthViewModel", "Failed to get FCM token", e)
+                AppLogger.e("AuthViewModel", "Failed to get FCM token", e)
             }
         }
     }

@@ -45,15 +45,20 @@ object ErrorMapper {
     fun map(throwable: Throwable): ApiResult.Error {
         return when (throwable) {
             is HttpException -> {
+                val code = throwable.code()
                 val errorBody = throwable.response()?.errorBody()?.string()
                 val errorResponse = try {
                     gson.fromJson(errorBody, ErrorResponse::class.java)
                 } catch (e: Exception) {
                     null
                 }
+                val message = errorResponse?.userMessage()
+                    ?: fallbackMessageForCode(code)
+                    ?: throwable.message()
+                    ?: "Unknown error"
                 ApiResult.Error(
-                    code = throwable.code(),
-                    message = errorResponse?.message ?: throwable.message() ?: "Unknown error",
+                    code = code,
+                    message = message,
                     errorResponse = errorResponse
                 )
             }
@@ -79,17 +84,36 @@ object ErrorMapper {
     }
     
     fun map(response: Response<*>): ApiResult.Error {
+        val code = response.code()
         val errorBody = response.errorBody()?.string()
         val errorResponse = try {
             gson.fromJson(errorBody, ErrorResponse::class.java)
         } catch (e: Exception) {
             null
         }
+        val message = errorResponse?.userMessage()
+            ?: fallbackMessageForCode(code)
+            ?: response.message()
+            ?: "Unknown error"
         return ApiResult.Error(
-            code = response.code(),
-            message = errorResponse?.message ?: response.message() ?: "Unknown error",
+            code = code,
+            message = message,
             errorResponse = errorResponse
         )
+    }
+
+    /**
+     * User-facing fallback when the API returns no message/detail in the body.
+     * e.g. 409 = symbol conflict (same symbol + account rule).
+     */
+    private fun fallbackMessageForCode(code: Int): String? = when (code) {
+        409 -> "Another strategy is already running for this symbol on this account. Stop it first or use a different account."
+        401 -> "Please sign in again."
+        403 -> "You don't have permission to do this."
+        404 -> "The requested item was not found."
+        408 -> "Request took too long. Please check your connection and try again."
+        in 500..599 -> "An unexpected error occurred. Please try again later."
+        else -> null
     }
 }
 
@@ -133,23 +157,39 @@ suspend fun <T> Response<T>.toResult(): ApiResult<T> {
 }
 
 /**
- * Extension function for retrying API calls with exponential backoff
+ * Returns a user-friendly message for UI display (for Error and Exception).
+ * Use when converting ApiResult to Result.failure(Exception(message)).
+ */
+fun <T> ApiResult<T>.userMessage(): String = when (this) {
+    is ApiResult.Success -> ""
+    is ApiResult.Error -> message
+    is ApiResult.Exception -> ErrorMapper.map(throwable).message
+}
+
+/**
+ * Extension function for retrying API calls with exponential backoff.
+ * Catches any exception thrown by the block (e.g. IOException when offline)
+ * and converts to ApiResult.Exception so the app never crashes from network errors.
  */
 suspend fun <T> retryApiCall(
     maxRetries: Int = 3,
     block: suspend () -> ApiResult<T>
 ): ApiResult<T> {
     var lastResult: ApiResult<T>? = null
-    
+
     for (attempt in 0 until maxRetries) {
-        val result = block()
-        
+        val result = try {
+            block()
+        } catch (e: Exception) {
+            ApiResult.Exception(e)
+        }
+
         if (result.isSuccess) {
             return result
         }
-        
+
         lastResult = result
-        
+
         if (RetryRules.shouldRetry(result) && attempt < maxRetries - 1) {
             val delay = RetryRules.getRetryDelay(attempt)
             kotlinx.coroutines.delay(delay)
@@ -157,7 +197,7 @@ suspend fun <T> retryApiCall(
             break
         }
     }
-    
+
     return lastResult ?: ApiResult.Exception(java.lang.Exception("Max retries exceeded"))
 }
 

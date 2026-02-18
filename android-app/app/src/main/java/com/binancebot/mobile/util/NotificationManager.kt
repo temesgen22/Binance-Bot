@@ -6,7 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.binancebot.mobile.R
@@ -356,7 +356,7 @@ class NotificationManager @Inject constructor(
         expandedText: String? = null,
         data: Map<String, Any>? = null
     ) {
-        Log.d("NotificationManager", "showStrategyNotification called: title=$title, message=$message, strategyId=$strategyId, category=$category")
+        AppLogger.d("NotificationManager", "showStrategyNotification called: title=$title, message=$message, strategyId=$strategyId, category=$category")
         val notificationId = UUID.randomUUID().toString()
         val actionUrl = strategyId?.let { "strategy_details/$it" }
         
@@ -428,12 +428,12 @@ class NotificationManager @Inject constructor(
         }
         
         val systemNotificationId = NOTIFICATION_ID_STRATEGY + (strategyId?.hashCode() ?: 0)
-        Log.d("NotificationManager", "Displaying strategy notification with system ID: $systemNotificationId")
+        AppLogger.d("NotificationManager", "Displaying strategy notification with system ID: $systemNotificationId")
         NotificationManagerCompat.from(context).notify(
             systemNotificationId,
             builder.build()
         )
-        Log.d("NotificationManager", "Strategy notification displayed successfully")
+        AppLogger.d("NotificationManager", "Strategy notification displayed successfully")
     }
     
     /**

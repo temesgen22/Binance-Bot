@@ -63,10 +63,10 @@ fun DataPrivacyScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(Spacing.Small))
-                    Text("• Account information (username, email)")
-                    Text("• Trading data (strategies, trades, performance)")
-                    Text("• API credentials (encrypted)")
-                    Text("• App usage analytics")
+                    Text("- Account information (username, email)")
+                    Text("- Trading data (strategies, trades, performance)")
+                    Text("- API credentials (encrypted)")
+                    Text("- App usage analytics")
                 }
             }
             
@@ -93,9 +93,9 @@ fun DataPrivacyScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(Spacing.Small))
-                    Text("• API credentials are encrypted")
-                    Text("• Data is stored on secure servers")
-                    Text("• Local data is encrypted")
+                    Text("- API credentials are encrypted")
+                    Text("- Data is stored on secure servers")
+                    Text("- Local data is encrypted")
                 }
             }
             
@@ -122,10 +122,10 @@ fun DataPrivacyScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(Spacing.Small))
-                    Text("• Access your data")
-                    Text("• Delete your account")
-                    Text("• Export your data")
-                    Text("• Opt out of analytics")
+                    Text("- Access your data")
+                    Text("- Delete your account")
+                    Text("- Export your data")
+                    Text("- Opt out of analytics")
                 }
             }
             

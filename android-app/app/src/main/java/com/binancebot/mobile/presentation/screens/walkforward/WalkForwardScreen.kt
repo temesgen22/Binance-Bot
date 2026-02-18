@@ -17,12 +17,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.binancebot.mobile.presentation.components.DatePickerTextField
 import com.binancebot.mobile.presentation.components.ErrorHandler
+import com.binancebot.mobile.presentation.components.StrategyParamsFields
+import com.binancebot.mobile.presentation.components.charts.EquityCurveChart
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.BacktestStrategyDefaults
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.WalkForwardViewModel
 import com.binancebot.mobile.presentation.viewmodel.WalkForwardUiState
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,7 +133,12 @@ fun NewWalkForwardTab(
     var showAdvancedOptions by remember { mutableStateOf(false) }
     var expandedStrategyTypeDropdown by remember { mutableStateOf(false) }
     var expandedWindowTypeDropdown by remember { mutableStateOf(false) }
-    
+    var paramValues by remember { mutableStateOf<Map<String, Any>>(emptyMap()) }
+
+    LaunchedEffect(selectedStrategyType) {
+        paramValues = selectedStrategyType?.let { BacktestStrategyDefaults.getDefaultParams(it) } ?: emptyMap()
+    }
+
     LaunchedEffect(Unit) {
         viewModel.loadHistory()
     }
@@ -219,25 +234,42 @@ fun NewWalkForwardTab(
                         }
                     }
                 }
+
+                // Strategy Parameters (populate when strategy type selected, like web app)
+                selectedStrategyType?.let { strategyType ->
+                    val paramDefs = BacktestStrategyDefaults.getParameterDefinitions(strategyType)
+                    if (paramDefs.isNotEmpty()) {
+                        Text(
+                            text = "Strategy Parameters",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Spacing.Small)
+                        )
+                        StrategyParamsFields(
+                            paramDefs = paramDefs,
+                            values = paramValues,
+                            onValueChange = { key, value -> paramValues = paramValues + (key to value) },
+                            enabled = uiState !is WalkForwardUiState.Running
+                        )
+                    }
+                }
                 
                 // Date Range
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
                 ) {
-                    OutlinedTextField(
+                    DatePickerTextField(
                         value = startDate,
                         onValueChange = { startDate = it },
-                        label = { Text("Start Date") },
-                        placeholder = { Text("YYYY-MM-DD") },
+                        label = "Start Date",
                         modifier = Modifier.weight(1f),
                         enabled = uiState !is WalkForwardUiState.Running
                     )
-                    OutlinedTextField(
+                    DatePickerTextField(
                         value = endDate,
                         onValueChange = { endDate = it },
-                        label = { Text("End Date") },
-                        placeholder = { Text("YYYY-MM-DD") },
+                        label = "End Date",
                         modifier = Modifier.weight(1f),
                         enabled = uiState !is WalkForwardUiState.Running
                     )
@@ -388,7 +420,7 @@ fun NewWalkForwardTab(
                                 leverage = leverage.toIntOrNull() ?: 5,
                                 riskPerTrade = riskPerTrade.toDoubleOrNull() ?: 0.01,
                                 initialBalance = initialBalance.toDoubleOrNull() ?: 1000.0,
-                                params = BacktestStrategyDefaults.getDefaultParams(strategyType)
+                                params = paramValues
                             )
                         }
                     },
@@ -842,7 +874,124 @@ fun WalkForwardResultCard(
                     }
                 }
             }
+            // Equity curve (same as web app)
+            result.equityCurve?.takeIf { it.isNotEmpty() }?.let { curve ->
+                val equityData = curve.mapNotNull { point ->
+                    val time = point["time"]?.toString()?.take(10) ?: return@mapNotNull null
+                    val balance = (point["balance"] as? Number)?.toFloat() ?: return@mapNotNull null
+                    time to balance
+                }
+                if (equityData.isNotEmpty()) {
+                    EquityCurveChart(data = equityData, title = "Equity Curve")
+                }
+            }
+            // Window breakdown table (same as web app)
+            result.windows?.takeIf { it.isNotEmpty() }?.let { windows ->
+                Text(
+                    text = "Window Breakdown",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                WalkForwardWindowTable(windows = windows)
+            }
         }
+    }
+}
+
+@Composable
+private fun WalkForwardWindowTable(windows: List<Map<String, Any>>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RectangleShape,
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 280.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                    shape = RectangleShape
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        wfTableHeaderCell("#", 36.dp)
+                        wfTableHeaderCell("Return %", 72.dp)
+                        wfTableHeaderCell("Test Start", 72.dp)
+                        wfTableHeaderCell("Test End", 72.dp)
+                    }
+                }
+            }
+            items(windows) { w ->
+                val num = w["window_number"]?.toString() ?: "—"
+                val returnPct = (w["return_pct"] as? Number)?.toDouble() ?: 0.0
+                val testStart = w["test_start"]?.toString()?.take(10) ?: "—"
+                val testEnd = w["test_end"]?.toString()?.take(10) ?: "—"
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RectangleShape
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        wfTableCell(num, 36.dp)
+                        wfTableCell(String.format("%.2f%%", returnPct), 72.dp, returnPct >= 0)
+                        wfTableCell(testStart, 72.dp)
+                        wfTableCell(testEnd, 72.dp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.wfTableHeaderCell(text: String, width: Dp) {
+    Box(
+        modifier = Modifier.width(width).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun RowScope.wfTableCell(
+    text: String,
+    width: Dp,
+    positive: Boolean? = null
+) {
+    Box(
+        modifier = Modifier.width(width).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = when (positive) {
+                true -> MaterialTheme.colorScheme.primary
+                false -> MaterialTheme.colorScheme.error
+                null -> MaterialTheme.colorScheme.onSurface
+            }
+        )
     }
 }
 

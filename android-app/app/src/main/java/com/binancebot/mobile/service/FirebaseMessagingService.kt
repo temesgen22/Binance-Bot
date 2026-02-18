@@ -1,15 +1,17 @@
 package com.binancebot.mobile.service
 
 import android.os.Build
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import com.binancebot.mobile.BuildConfig
 import com.binancebot.mobile.domain.repository.NotificationRepository
 import com.binancebot.mobile.util.NotificationManager
+import com.binancebot.mobile.util.PreferencesManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -25,12 +27,15 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
     
     @Inject
     lateinit var notificationRepository: NotificationRepository
+
+    @Inject
+    lateinit var preferencesManager: PreferencesManager
     
     private val scope = CoroutineScope(Dispatchers.IO)
     
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d("FCM", "New FCM token: $token")
+        AppLogger.d("FCM", "New FCM token: $token")
         
         // Register token with backend
         scope.launch {
@@ -53,20 +58,20 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                     appVersion = appVersion
                 )
                     .onSuccess {
-                        Log.d("FCM", "Token registered successfully for device: $deviceId ($deviceName)")
+                        AppLogger.d("FCM", "Token registered successfully for device: $deviceId ($deviceName)")
                     }
                     .onFailure { e ->
-                        Log.e("FCM", "Failed to register token", e)
+                        AppLogger.e("FCM", "Failed to register token", e)
                     }
             } catch (e: Exception) {
-                Log.e("FCM", "Failed to register token", e)
+                AppLogger.e("FCM", "Failed to register token", e)
             }
         }
     }
     
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
-        Log.d("FCM", "Message received from: ${remoteMessage.from}")
+        AppLogger.d("FCM", "Message received from: ${remoteMessage.from}")
         
         // Handle notification based on what's present in the message
         // Priority: notification payload > data-only payload
@@ -77,16 +82,42 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
         
         if (notification != null) {
             // Message contains notification payload - use it (has title/body)
-            Log.d("FCM", "Message notification payload: ${notification.title} - ${notification.body}")
+            AppLogger.d("FCM", "Message notification payload: ${notification.title} - ${notification.body}")
             handleNotificationMessage(notification, data)
         } else if (data.isNotEmpty()) {
             // Data-only message - handle it separately
-            Log.d("FCM", "Message data payload: $data")
+            AppLogger.d("FCM", "Message data payload: $data")
             handleDataMessage(data)
         }
     }
-    
+
+    /**
+     * Check user preferences before showing push. Only show if notifications are enabled
+     * and the specific type (trade / alert / strategy / system) is enabled.
+     */
     private fun handleDataMessage(data: Map<String, String>) {
+        scope.launch {
+            val notificationsEnabled = preferencesManager.notificationsEnabled.first()
+            if (!notificationsEnabled) {
+                AppLogger.d("FCM", "Notifications disabled in settings, skipping push")
+                return@launch
+            }
+            val type = data["type"] ?: "system"
+            val typeAllowed = when (type) {
+                "trade" -> preferencesManager.tradesEnabled.first()
+                "alert", "price_alert" -> preferencesManager.alertsEnabled.first()
+                "strategy" -> preferencesManager.strategyEnabled.first()
+                else -> preferencesManager.systemEnabled.first()
+            }
+            if (!typeAllowed) {
+                AppLogger.d("FCM", "Notification type '$type' disabled in settings, skipping push")
+                return@launch
+            }
+            showDataMessage(data)
+        }
+    }
+
+    private fun showDataMessage(data: Map<String, String>) {
         val type = data["type"] ?: "system"
         val category = data["category"] ?: "system"
         val title = data["title"] ?: "Notification"
@@ -144,6 +175,31 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
     }
     
     private fun handleNotificationMessage(
+        notification: com.google.firebase.messaging.RemoteMessage.Notification,
+        data: Map<String, String>
+    ) {
+        scope.launch {
+            val notificationsEnabled = preferencesManager.notificationsEnabled.first()
+            if (!notificationsEnabled) {
+                AppLogger.d("FCM", "Notifications disabled in settings, skipping push")
+                return@launch
+            }
+            val type = data["type"] ?: "system"
+            val typeAllowed = when (type) {
+                "trade" -> preferencesManager.tradesEnabled.first()
+                "alert", "price_alert" -> preferencesManager.alertsEnabled.first()
+                "strategy" -> preferencesManager.strategyEnabled.first()
+                else -> preferencesManager.systemEnabled.first()
+            }
+            if (!typeAllowed) {
+                AppLogger.d("FCM", "Notification type '$type' disabled in settings, skipping push")
+                return@launch
+            }
+            showNotificationMessage(notification, data)
+        }
+    }
+
+    private fun showNotificationMessage(
         notification: com.google.firebase.messaging.RemoteMessage.Notification,
         data: Map<String, String>
     ) {

@@ -1,7 +1,7 @@
 package com.binancebot.mobile.util
 
 import android.content.Context
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import com.binancebot.mobile.data.remote.websocket.UpdateMessage
 import com.binancebot.mobile.data.remote.websocket.WebSocketManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,11 +31,11 @@ class NotificationTrigger @Inject constructor(
     
     fun startListening() {
         if (isListening) {
-            Log.d("NotificationTrigger", "Already listening, skipping")
+            AppLogger.d("NotificationTrigger", "Already listening, skipping")
             return
         }
         isListening = true
-        Log.d("NotificationTrigger", "Starting to listen for notifications")
+        AppLogger.d("NotificationTrigger", "Starting to listen for notifications")
         
         scope.launch {
             // Combine preferences with WebSocket updates
@@ -51,9 +51,9 @@ class NotificationTrigger @Inject constructor(
                     message
                 )
             }.collectLatest { (prefs, message) ->
-                Log.d("NotificationTrigger", "Received message: ${message::class.simpleName}, Notifications enabled: ${prefs.notificationsEnabled}, Trades: ${prefs.tradesEnabled}, Alerts: ${prefs.alertsEnabled}, Strategy: ${prefs.strategyEnabled}")
+                AppLogger.d("NotificationTrigger", "Received message: ${message::class.simpleName}, Notifications enabled: ${prefs.notificationsEnabled}, Trades: ${prefs.tradesEnabled}, Alerts: ${prefs.alertsEnabled}, Strategy: ${prefs.strategyEnabled}")
                 if (!prefs.notificationsEnabled) {
-                    Log.d("NotificationTrigger", "Notifications disabled globally, skipping")
+                    AppLogger.d("NotificationTrigger", "Notifications disabled globally, skipping")
                     return@collectLatest
                 }
                 
@@ -87,7 +87,7 @@ class NotificationTrigger @Inject constructor(
                     }
                     
                     is UpdateMessage.StrategyUpdate -> {
-                        Log.d("NotificationTrigger", "Strategy update received: strategyId=${message.strategyId}, status=${message.status}, strategyEnabled=${prefs.strategyEnabled}")
+                        AppLogger.d("NotificationTrigger", "Strategy update received: strategyId=${message.strategyId}, status=${message.status}, strategyEnabled=${prefs.strategyEnabled}")
                         if (prefs.strategyEnabled) {
                             val strategyId = message.strategyId
                             val status = message.status
@@ -102,7 +102,7 @@ class NotificationTrigger @Inject constructor(
                             val messageText = message.data?.get("message") as? String
                                 ?: "Strategy $status"
                             
-                            Log.d("NotificationTrigger", "Showing strategy notification: title=$title, message=$messageText")
+                            AppLogger.d("NotificationTrigger", "Showing strategy notification: title=$title, message=$messageText")
                             notificationManager.showStrategyNotification(
                                 title = title,
                                 message = messageText,
@@ -116,7 +116,7 @@ class NotificationTrigger @Inject constructor(
                                 data = message.data
                             )
                         } else {
-                            Log.d("NotificationTrigger", "Strategy notifications disabled, skipping")
+                            AppLogger.d("NotificationTrigger", "Strategy notifications disabled, skipping")
                         }
                     }
                     

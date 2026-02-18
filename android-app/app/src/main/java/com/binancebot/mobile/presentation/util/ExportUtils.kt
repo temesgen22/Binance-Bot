@@ -254,7 +254,7 @@ object ExportUtils {
             val profitFactor = if (strategyReport.totalLossUsd != 0.0) {
                 strategyReport.totalProfitUsd / kotlin.math.abs(strategyReport.totalLossUsd)
             } else if (strategyReport.totalProfitUsd > 0) Double.POSITIVE_INFINITY else 0.0
-            sb.append("  Profit Factor: ${if (profitFactor.isInfinite()) "∞" else String.format("%.2f", profitFactor)}\n")
+            sb.append("  Profit Factor: ${if (profitFactor.isInfinite()) "Infinity" else String.format("%.2f", profitFactor)}\n")
             if (strategyReport.totalFee > 0) {
                 sb.append("  Trading Fees: ${FormatUtils.formatCurrency(strategyReport.totalFee)}\n")
             }

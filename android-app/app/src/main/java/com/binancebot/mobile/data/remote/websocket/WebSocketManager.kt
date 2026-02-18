@@ -1,6 +1,6 @@
 package com.binancebot.mobile.data.remote.websocket
 
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import com.binancebot.mobile.util.TokenManager
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -36,13 +36,13 @@ class WebSocketManager @Inject constructor(
     
     fun connect(url: String) {
         if (isConnected) {
-            Log.d("WebSocketManager", "WebSocket already connected, skipping")
+            AppLogger.d("WebSocketManager", "WebSocket already connected, skipping")
             return
         }
         
-        Log.d("WebSocketManager", "Attempting to connect to WebSocket: $url")
+        AppLogger.d("WebSocketManager", "Attempting to connect to WebSocket: $url")
         val token = tokenManager.getAccessToken() ?: run {
-            Log.e("WebSocketManager", "No access token available, cannot connect")
+            AppLogger.e("WebSocketManager", "No access token available, cannot connect")
             scope.launch {
                 _updates.tryEmit(UpdateMessage.Error("Not authenticated"))
             }
@@ -53,11 +53,11 @@ class WebSocketManager @Inject constructor(
             .url("$url?token=$token")
             .build()
         
-        Log.d("WebSocketManager", "Creating WebSocket connection...")
+        AppLogger.d("WebSocketManager", "Creating WebSocket connection...")
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isConnected = true
-                Log.d("WebSocketManager", "WebSocket connection opened successfully")
+                AppLogger.d("WebSocketManager", "WebSocket connection opened successfully")
                 // ✅ Use tryEmit from coroutine scope
                 scope.launch {
                     _updates.tryEmit(UpdateMessage.Connected)
@@ -65,14 +65,14 @@ class WebSocketManager @Inject constructor(
             }
             
             override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d("WebSocketManager", "Received WebSocket message: $text")
+                AppLogger.d("WebSocketManager", "Received WebSocket message: $text")
                 // ✅ Use tryEmit for thread-safe emission
                 scope.launch {
                     try {
                         // Parse as generic JSON object first (Gson doesn't support sealed classes directly)
                         val jsonObject = gson.fromJson(text, com.google.gson.JsonObject::class.java)
                         val messageType = jsonObject.get("type")?.asString ?: "unknown"
-                        Log.d("WebSocketManager", "Parsed message type: $messageType")
+                        AppLogger.d("WebSocketManager", "Parsed message type: $messageType")
                         
                         val message = when (messageType) {
                             "connected" -> UpdateMessage.Connected
@@ -81,7 +81,7 @@ class WebSocketManager @Inject constructor(
                                 val data = jsonObject.getAsJsonObject("data")
                                 val strategyId = data.get("strategyId")?.asString ?: ""
                                 val status = data.get("status")?.asString ?: ""
-                                Log.d("WebSocketManager", "Creating StrategyUpdate: strategyId=$strategyId, status=$status")
+                                AppLogger.d("WebSocketManager", "Creating StrategyUpdate: strategyId=$strategyId, status=$status")
                                 UpdateMessage.StrategyUpdate(
                                     strategyId = strategyId,
                                     status = status,
@@ -126,7 +126,7 @@ class WebSocketManager @Inject constructor(
                     response != null -> "WebSocket connection failed: ${response.code} ${response.message}"
                     else -> t.message ?: "Connection failed"
                 }
-                Log.e("WebSocketManager", errorMessage)
+                AppLogger.e("WebSocketManager", errorMessage)
                 // Don't emit error to avoid showing error notifications when WebSocket isn't available
                 // Only emit if it's a real connection error (not 404)
                 if (response?.code != 404) {

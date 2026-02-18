@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
@@ -29,11 +30,6 @@ import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.ReportsUiState
 import com.binancebot.mobile.presentation.viewmodel.ReportsViewModel
-
-private fun formatWinRate(winRate: Double): String {
-    val percentage = if (winRate > 1.0) winRate else winRate * 100
-    return String.format("%.1f%%", percentage)
-}
 
 /** Cell width for table columns so all parameters are visible when scrolling. */
 private val ColWidth = 110.dp
@@ -109,7 +105,7 @@ fun StrategyReportDetailScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${report.symbol} • ${report.strategyType ?: ""}",
+                            text = "${report.symbol} | ${report.strategyType ?: ""}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -322,6 +318,21 @@ private fun TrailingStopHistoryBlock(
 }
 
 @Composable
+private fun RowScope.cell(width: Dp, text: String) {
+    Box(
+        modifier = Modifier.width(width).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 private fun FullTradesTable(trades: List<TradeReportDto>) {
     val horizontalScrollState = rememberScrollState()
     var expandedTradeIds by remember { mutableStateOf(setOf<String>()) }
@@ -397,7 +408,39 @@ private fun FullTradesTable(trades: List<TradeReportDto>) {
                                 .padding(horizontal = 8.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            //TODO: Add content
+                            cell(ColWidthNarrow, trade.tradeId.takeLast(8))
+                            cell(ColWidthNarrow, trade.symbol)
+                            cell(ColWidthNarrow, trade.side)
+                            cell(ColWidthWide, trade.entryTime?.take(19) ?: "—")
+                            cell(ColWidthNarrow, FormatUtils.formatPrice(trade.entryPrice))
+                            cell(ColWidthWide, trade.exitTime?.take(19) ?: "—")
+                            cell(ColWidthNarrow, (trade.exitPrice?.let { FormatUtils.formatPrice(it) } ?: "—"))
+                            cell(ColWidthNarrow, FormatUtils.formatNumber(trade.quantity))
+                            cell(ColWidthNarrow, "${trade.leverage}x")
+                            cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
+                            cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))
+                            cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.pnlUsd))
+                            cell(ColWidthNarrow, FormatUtils.formatPercentage(trade.pnlPct))
+                            cell(ColWidthWide, trade.exitReason ?: "—")
+                            cell(ColWidthNarrow, trade.initialMargin?.let { FormatUtils.formatCurrency(it) } ?: "—")
+                            cell(ColWidthNarrow, trade.marginType ?: "—")
+                            cell(ColWidthNarrow, trade.notionalValue?.let { FormatUtils.formatCurrency(it) } ?: "—")
+                            cell(ColWidthNarrow, trade.entryOrderId?.toString() ?: "—")
+                            cell(ColWidthNarrow, trade.exitOrderId?.toString() ?: "—")
+                        }
+                        if (trade.trailingStopHistory.isNotEmpty()) {
+                            TrailingStopHistoryBlock(
+                                tradeId = trade.tradeId,
+                                history = trade.trailingStopHistory,
+                                expanded = expandedTradeIds.contains(trade.tradeId),
+                                onToggle = {
+                                    expandedTradeIds = if (expandedTradeIds.contains(trade.tradeId)) {
+                                        expandedTradeIds - trade.tradeId
+                                    } else {
+                                        expandedTradeIds + trade.tradeId
+                                    }
+                                }
+                            )
                         }
                     }
                 }

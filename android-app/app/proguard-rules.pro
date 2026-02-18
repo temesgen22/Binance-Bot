@@ -2,6 +2,15 @@
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.
 
+# Strip android.util.Log in release (AppLogger is no-op in release via BuildConfig.DEBUG; this removes any remaining Log calls)
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+    public static int w(...);
+    public static int e(...);
+}
+
 # Keep Retrofit interfaces
 -keep,allowobfuscation,allowshrinking interface retrofit2.Call
 -keep,allowobfuscation,allowshrinking class retrofit2.Response

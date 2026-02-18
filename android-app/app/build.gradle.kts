@@ -64,11 +64,23 @@ android {
         }
     }
 
+    // P0.1 CODE_QUALITY_IMPROVEMENT_PLAN: Lint configuration
+    lint {
+        warningsAsErrors = false
+        abortOnError = false
+        checkReleaseBuilds = true
+        disable += "ObsoleteLintCustomCheck"
+        warning += "UnusedResources"
+        warning += "HardcodedText"
+        warning += "MissingTranslation"
+        informational += "GradleDependency"
+    }
+
     // Workaround for "Could not find or load main class .M;C:\...\Microsoft" on Windows:
-    // System PATH can contain entries with spaces (e.g. "C:\Program Files\Microsoft...") that get
-    // mis-parsed when Gradle forks the test JVM. Override PATH for test workers to a minimal value.
+    // Override env for test workers so corrupted PATH/JAVA_TOOL_OPTIONS don't break the fork.
     testOptions {
         unitTests {
+            isReturnDefaultValues = true // avoid "Log not mocked" etc. in unit tests
             all {
                 it.maxParallelForks = 1
                 it.jvmArgs("-Xmx1024m", "-Dfile.encoding=UTF-8")
@@ -80,6 +92,9 @@ android {
                     if (javaHome.isNotEmpty()) "$javaHome\\bin" else null
                 ).joinToString(";")
                 it.environment("PATH", minimalPath)
+                it.environment("JAVA_TOOL_OPTIONS", "")
+                it.environment("GRADLE_OPTS", "")
+                it.environment("_JAVA_OPTIONS", "")
             }
         }
     }

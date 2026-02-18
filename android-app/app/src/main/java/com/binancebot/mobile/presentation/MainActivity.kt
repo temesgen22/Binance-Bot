@@ -116,22 +116,25 @@ fun BinanceBotApp(tokenManager: TokenManager) {
     var startDestination by remember { mutableStateOf<String?>(null) }
     var isValidating by remember { mutableStateOf(true) }
     
-    // Validate token on app start
+    // Validate token on app start (no network = safe fallback to login, no crash)
     LaunchedEffect(Unit) {
-        if (tokenManager.isLoggedIn()) {
-            // Try to refresh token to validate it
-            val refreshedToken = tokenManager.refreshToken()
-            if (refreshedToken != null) {
-                startDestination = Screen.Home.route
+        try {
+            if (tokenManager.isLoggedIn()) {
+                val refreshedToken = tokenManager.refreshToken()
+                if (refreshedToken != null) {
+                    startDestination = Screen.Home.route
+                } else {
+                    tokenManager.clearTokens()
+                    startDestination = Screen.Login.route
+                }
             } else {
-                // Token is invalid, clear and go to login
-                tokenManager.clearTokens()
                 startDestination = Screen.Login.route
             }
-        } else {
+        } catch (_: Exception) {
             startDestination = Screen.Login.route
+        } finally {
+            isValidating = false
         }
-        isValidating = false
     }
     
     // Show loading while validating

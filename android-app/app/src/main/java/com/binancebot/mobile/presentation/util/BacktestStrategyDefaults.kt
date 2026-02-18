@@ -1,8 +1,8 @@
 package com.binancebot.mobile.presentation.util
 
 /**
- * Strategy types supported by backtesting and walk-forward APIs, with display names
- * and default parameters (aligned with web app backtesting.html strategyParams).
+ * Strategy types supported by backtesting and walk-forward APIs, with display names,
+ * default parameters, and parameter definitions for dynamic UI (aligned with web app backtesting.html strategyParams).
  */
 object BacktestStrategyDefaults {
 
@@ -13,9 +13,86 @@ object BacktestStrategyDefaults {
         "range_mean_reversion" to "Range Mean Reversion"
     )
 
+    /** Kline interval options (same as web app) */
+    val KLINE_INTERVAL_OPTIONS: List<String> = listOf(
+        "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"
+    )
+
+    /** Parameter definition for dynamic form (like web app strategyParams) */
+    sealed class ParamDef(open val key: String, open val label: String) {
+        data class Number(
+            override val key: String,
+            override val label: String,
+            val value: Double,
+            val min: Double,
+            val max: Double,
+            val step: Double = 0.001
+        ) : ParamDef(key, label)
+
+        data class Int(
+            override val key: String,
+            override val label: String,
+            val value: kotlin.Int,
+            val min: kotlin.Int,
+            val max: kotlin.Int
+        ) : ParamDef(key, label)
+
+        data class Checkbox(
+            override val key: String,
+            override val label: String,
+            val value: Boolean
+        ) : ParamDef(key, label)
+
+        data class Select(
+            override val key: String,
+            override val label: String,
+            val value: String,
+            val options: List<String>
+        ) : ParamDef(key, label)
+    }
+
     /**
-     * Default strategy parameters per type so backtest/walk-forward run without requiring
-     * the user to configure every param (matches web app defaults).
+     * Parameter definitions for the strategy type so the UI can show labeled inputs
+     * (same structure as web app strategyParams).
+     */
+    fun getParameterDefinitions(strategyType: String): List<ParamDef> = when (strategyType) {
+        "scalping", "reverse_scalping" -> listOf(
+            ParamDef.Select("kline_interval", "Kline Interval", "1m", KLINE_INTERVAL_OPTIONS),
+            ParamDef.Int("ema_fast", "Fast EMA Period", 8, 1, 200),
+            ParamDef.Int("ema_slow", "Slow EMA Period", 21, 2, 400),
+            ParamDef.Number("take_profit_pct", "Take Profit %", 0.004, 0.001, 0.1, 0.001),
+            ParamDef.Number("stop_loss_pct", "Stop Loss %", 0.002, 0.001, 0.1, 0.001),
+            ParamDef.Checkbox("enable_short", "Enable Short Trading", true),
+            ParamDef.Number("min_ema_separation", "Min EMA Separation", 0.0002, 0.0, 0.01, 0.0001),
+            ParamDef.Checkbox("enable_htf_bias", "Enable HTF Bias", true),
+            ParamDef.Int("cooldown_candles", "Cooldown Candles", 2, 0, 10),
+            ParamDef.Checkbox("enable_ema_cross_exit", "Enable EMA Cross Exits", true),
+            ParamDef.Checkbox("trailing_stop_enabled", "Trailing Stop", false),
+            ParamDef.Number("trailing_stop_activation_pct", "Trailing Activation %", 0.0, 0.0, 0.1, 0.001)
+        )
+        "range_mean_reversion" -> listOf(
+            ParamDef.Select("kline_interval", "Kline Interval", "5m", KLINE_INTERVAL_OPTIONS),
+            ParamDef.Int("lookback_period", "Lookback Period", 150, 50, 500),
+            ParamDef.Number("buy_zone_pct", "Buy Zone %", 0.2, 0.01, 0.5, 0.01),
+            ParamDef.Number("sell_zone_pct", "Sell Zone %", 0.2, 0.01, 0.5, 0.01),
+            ParamDef.Int("ema_fast_period", "Fast EMA Period", 20, 5, 100),
+            ParamDef.Int("ema_slow_period", "Slow EMA Period", 50, 10, 200),
+            ParamDef.Number("max_ema_spread_pct", "Max EMA Spread %", 0.005, 0.0, 0.02, 0.001),
+            ParamDef.Number("max_atr_multiplier", "Max ATR Multiplier", 2.0, 0.1, 100.0, 0.1),
+            ParamDef.Int("rsi_period", "RSI Period", 14, 5, 50),
+            ParamDef.Int("rsi_oversold", "RSI Oversold", 40, 0, 50),
+            ParamDef.Int("rsi_overbought", "RSI Overbought", 60, 50, 100),
+            ParamDef.Number("tp_buffer_pct", "TP Buffer %", 0.001, 0.0, 0.05, 0.0001),
+            ParamDef.Number("sl_buffer_pct", "SL Buffer %", 0.002, 0.0, 0.05, 0.0001),
+            ParamDef.Int("cooldown_candles", "Cooldown Candles", 2, 0, 10),
+            ParamDef.Int("max_range_invalid_candles", "Max Range Invalid Candles", 20, 5, 100),
+            ParamDef.Checkbox("enable_short", "Enable Short Trading", true)
+        )
+        else -> emptyList()
+    }
+
+    /**
+     * Default strategy parameters per type (matches web app defaults).
      */
     fun getDefaultParams(strategyType: String): Map<String, Any> = when (strategyType) {
         "scalping", "reverse_scalping" -> mapOf(

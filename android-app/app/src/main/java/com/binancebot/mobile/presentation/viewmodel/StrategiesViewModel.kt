@@ -1,6 +1,6 @@
 package com.binancebot.mobile.presentation.viewmodel
 
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,6 +10,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -30,6 +33,10 @@ class StrategiesViewModel @Inject constructor(
     private val _strategyHealth = MutableStateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>>(emptyMap())
     val strategyHealth: StateFlow<Map<String, com.binancebot.mobile.data.remote.dto.StrategyHealthDto>> = _strategyHealth.asStateFlow()
     
+    /** Flow of health for a single strategy; use in list items to avoid recomposing all cards when any health updates. */
+    fun strategyHealthFor(strategyId: String): Flow<com.binancebot.mobile.data.remote.dto.StrategyHealthDto?> =
+        strategyHealth.map { it[strategyId] }.distinctUntilChanged()
+    
     private val _strategyToCopy = MutableStateFlow<StrategyPerformanceDto?>(null)
     val strategyToCopy: StateFlow<StrategyPerformanceDto?> = _strategyToCopy.asStateFlow()
     
@@ -48,20 +55,20 @@ class StrategiesViewModel @Inject constructor(
     fun loadStrategyHealth(strategyId: String) {
         viewModelScope.launch {
             try {
-                Log.d("StrategyHealth", "ViewModel: Loading health for $strategyId")
+                AppLogger.d("StrategyHealth", "ViewModel: Loading health for $strategyId")
                 strategyRepository.getStrategyHealth(strategyId)
                     .onSuccess { health ->
-                        Log.d("StrategyHealth", "ViewModel: Health loaded successfully for $strategyId: ${health.healthStatus}")
+                        AppLogger.d("StrategyHealth", "ViewModel: Health loaded successfully for $strategyId: ${health.healthStatus}")
                         _strategyHealth.value = _strategyHealth.value.toMutableMap().apply {
                             put(strategyId, health)
                         }
                     }
                     .onFailure { error ->
                         // Log error but don't crash - health check is optional
-                        Log.e("StrategyHealth", "ViewModel: Failed to load health for $strategyId: ${error.message}")
+                        AppLogger.e("StrategyHealth", "ViewModel: Failed to load health for $strategyId: ${error.message}")
                     }
             } catch (e: Exception) {
-                Log.e("StrategyHealth", "ViewModel: Exception loading health for $strategyId", e)
+                AppLogger.e("StrategyHealth", "ViewModel: Exception loading health for $strategyId", e)
             }
         }
     }

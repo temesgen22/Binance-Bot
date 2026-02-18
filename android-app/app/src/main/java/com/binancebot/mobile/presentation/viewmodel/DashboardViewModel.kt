@@ -1,6 +1,6 @@
 package com.binancebot.mobile.presentation.viewmodel
 
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.domain.repository.DashboardRepository
@@ -45,13 +45,13 @@ class DashboardViewModel @Inject constructor(
                 .onSuccess { overview ->
                     _dashboardOverview.value = overview
                     overviewLoaded = true
-                    Log.d("DashboardViewModel", "Dashboard overview loaded successfully")
+                    AppLogger.d("DashboardViewModel", "Dashboard overview loaded successfully")
                 }
                 .onFailure { error ->
                     // Log error but continue to load strategies
                     hasError = true
                     errorMessage = error.message ?: "Failed to load dashboard overview"
-                    Log.e("DashboardViewModel", "Failed to load dashboard overview: $errorMessage", error)
+                    AppLogger.e("DashboardViewModel", "Failed to load dashboard overview: $errorMessage", error)
                 }
             
             // Load strategies for strategy list
@@ -59,7 +59,7 @@ class DashboardViewModel @Inject constructor(
                 .onSuccess { strategies ->
                     _strategies.value = strategies
                     strategiesLoaded = true
-                    Log.d("DashboardViewModel", "Strategies loaded: ${strategies.size}")
+                    AppLogger.d("DashboardViewModel", "Strategies loaded: ${strategies.size}")
                 }
                 .onFailure { error ->
                     hasError = true
@@ -68,7 +68,7 @@ class DashboardViewModel @Inject constructor(
                     } else {
                         errorMessage = error.message ?: "Failed to load strategies"
                     }
-                    Log.e("DashboardViewModel", "Failed to load strategies: ${error.message}", error)
+                    AppLogger.e("DashboardViewModel", "Failed to load strategies: ${error.message}", error)
                 }
             
             // Determine final state

@@ -207,7 +207,7 @@ fun TestResultCard(
                     }
                 ) {
                     Text(
-                        text = if (result.success) "✅ Success" else "❌ Failed",
+                        text = if (result.success) "Success" else "Failed",
                         modifier = Modifier.padding(horizontal = Spacing.Small, vertical = Spacing.Tiny),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,

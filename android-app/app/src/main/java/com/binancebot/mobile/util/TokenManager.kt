@@ -5,6 +5,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.binancebot.mobile.data.remote.api.BinanceBotApi
 import com.binancebot.mobile.data.remote.dto.RefreshTokenRequest
+import com.binancebot.mobile.util.AppLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Provider
@@ -75,7 +76,7 @@ class TokenManager @Inject constructor(
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.e("TokenManager", "Token refresh failed", e)
+            AppLogger.e("TokenManager", "Token refresh failed", e)
             clearTokens()
             null
         } finally {

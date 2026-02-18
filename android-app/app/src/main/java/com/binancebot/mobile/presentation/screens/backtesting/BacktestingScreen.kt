@@ -14,14 +14,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.RowScope
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.binancebot.mobile.presentation.components.DatePickerTextField
 import com.binancebot.mobile.presentation.components.ErrorHandler
+import com.binancebot.mobile.presentation.components.StrategyParamsFields
+import com.binancebot.mobile.presentation.components.charts.EquityCurveChart
+import com.binancebot.mobile.presentation.components.charts.PriceLineChart
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.BacktestStrategyDefaults
+import com.binancebot.mobile.presentation.util.FormatUtils
 import com.binancebot.mobile.presentation.viewmodel.BacktestingViewModel
 import com.binancebot.mobile.presentation.viewmodel.BacktestingUiState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,8 +158,12 @@ fun NewBacktestTab(
     var initialBalance by remember { mutableStateOf("1000.0") }
     var showAdvancedOptions by remember { mutableStateOf(false) }
     var expandedStrategyTypeDropdown by remember { mutableStateOf(false) }
-    var showDatePicker by remember { mutableStateOf(false) }
-    
+    var paramValues by remember { mutableStateOf<Map<String, Any>>(emptyMap()) }
+
+    LaunchedEffect(selectedStrategyType) {
+        paramValues = selectedStrategyType?.let { BacktestStrategyDefaults.getDefaultParams(it) } ?: emptyMap()
+    }
+
     LaunchedEffect(Unit) {
         viewModel.loadBacktestHistory()
     }
@@ -228,6 +245,24 @@ fun NewBacktestTab(
                         }
                     }
                 }
+
+                // Strategy Parameters (populate when strategy type selected, like web app)
+                selectedStrategyType?.let { strategyType ->
+                    val paramDefs = BacktestStrategyDefaults.getParameterDefinitions(strategyType)
+                    if (paramDefs.isNotEmpty()) {
+                        Text(
+                            text = "Strategy Parameters",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Spacing.Small)
+                        )
+                        StrategyParamsFields(
+                            paramDefs = paramDefs,
+                            values = paramValues,
+                            onValueChange = { key, value -> paramValues = paramValues + (key to value) }
+                        )
+                    }
+                }
                 
                 // Date Range
                 Text(
@@ -240,29 +275,17 @@ fun NewBacktestTab(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Small)
                 ) {
-                    OutlinedTextField(
+                    DatePickerTextField(
                         value = startDate,
                         onValueChange = { startDate = it },
-                        label = { Text("Start Date") },
-                        placeholder = { Text("YYYY-MM-DD") },
-                        modifier = Modifier.weight(1f),
-                        trailingIcon = {
-                            IconButton(onClick = { showDatePicker = true }) {
-                                Icon(Icons.Default.DateRange, contentDescription = "Pick Date")
-                            }
-                        }
+                        label = "Start Date",
+                        modifier = Modifier.weight(1f)
                     )
-                    OutlinedTextField(
+                    DatePickerTextField(
                         value = endDate,
                         onValueChange = { endDate = it },
-                        label = { Text("End Date") },
-                        placeholder = { Text("YYYY-MM-DD") },
-                        modifier = Modifier.weight(1f),
-                        trailingIcon = {
-                            IconButton(onClick = { showDatePicker = true }) {
-                                Icon(Icons.Default.DateRange, contentDescription = "Pick Date")
-                            }
-                        }
+                        label = "End Date",
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 
@@ -329,7 +352,7 @@ fun NewBacktestTab(
                                 leverage = leverage.toIntOrNull() ?: 5,
                                 riskPerTrade = riskPerTrade.toDoubleOrNull() ?: 0.01,
                                 initialBalance = initialBalance.toDoubleOrNull() ?: 1000.0,
-                                params = BacktestStrategyDefaults.getDefaultParams(strategyType)
+                                params = paramValues
                             )
                         }
                     },
@@ -489,7 +512,7 @@ fun BacktestResultsCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = String.format("%.2f%%", result.winRate * 100),
+                            text = String.format("%.2f%%", if (result.winRate > 1) result.winRate else result.winRate * 100),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -612,14 +635,151 @@ fun BacktestResultsCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = com.binancebot.mobile.presentation.util.FormatUtils.formatCurrency(result.finalBalance),
+                            text = FormatUtils.formatCurrency(result.finalBalance),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
+            // Equity curve (derive from trades if not provided)
+            val equityData = remember(result) {
+                if (!result.equityCurve.isNullOrEmpty()) {
+                    result.equityCurve.mapIndexed { i, v -> "${i}" to v.toFloat() }
+                } else {
+                    val trades = result.trades ?: emptyList()
+                    val sorted = trades.mapNotNull { t ->
+                        val exitTime = t["exit_time"]?.toString() ?: t["entry_time"]?.toString()
+                        val netPnl = (t["net_pnl"] as? Number)?.toDouble()
+                        if (exitTime != null && netPnl != null) Pair(exitTime, netPnl) else null
+                    }.sortedBy { it.first }
+                    var balance = result.initialBalance.toFloat()
+                    listOf("Start" to balance) + sorted.map { (time, pnl) ->
+                        balance += pnl.toFloat()
+                        time.take(10) to balance
+                    }
+                }
+            }
+            if (equityData.isNotEmpty()) {
+                EquityCurveChart(data = equityData, title = "Equity Curve")
+            }
+            // Price chart from klines
+            result.klines?.takeIf { it.isNotEmpty() }?.let { klines ->
+                PriceLineChart(
+                    klines = klines,
+                    title = "Price (Close)"
+                )
+            }
+            // Trade history table
+            result.trades?.takeIf { it.isNotEmpty() }?.let { trades ->
+                Text(
+                    text = "Trade History (${trades.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                BacktestTradesTable(trades = trades)
+            }
         }
+    }
+}
+
+@Composable
+private fun BacktestTradesTable(trades: List<Map<String, Any>>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RectangleShape,
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 320.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                    shape = RectangleShape
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        tableHeaderCell("Side", 48.dp)
+                        tableHeaderCell("Entry", 72.dp)
+                        tableHeaderCell("Exit", 72.dp)
+                        tableHeaderCell("PnL", 72.dp)
+                        tableHeaderCell("Reason", 80.dp)
+                    }
+                }
+            }
+            items(trades) { trade ->
+                val side = trade["position_side"]?.toString() ?: "—"
+                val entryTime = trade["entry_time"]?.toString()?.take(16)?.replace("T", " ") ?: "—"
+                val exitTime = trade["exit_time"]?.toString()?.take(16)?.replace("T", " ") ?: "—"
+                val netPnl = (trade["net_pnl"] as? Number)?.toDouble() ?: 0.0
+                val reason = trade["exit_reason"]?.toString() ?: "—"
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RectangleShape
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        tableCell(side, 48.dp)
+                        tableCell(entryTime, 72.dp)
+                        tableCell(exitTime, 72.dp)
+                        tableCell(FormatUtils.formatCurrency(netPnl), 72.dp, netPnl >= 0)
+                        tableCell(reason, 80.dp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.tableHeaderCell(text: String, width: Dp) {
+    Box(
+        modifier = Modifier.width(width).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun RowScope.tableCell(
+    text: String,
+    width: Dp,
+    positive: Boolean? = null
+) {
+    Box(
+        modifier = Modifier.width(width).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = when (positive) {
+                true -> MaterialTheme.colorScheme.primary
+                false -> MaterialTheme.colorScheme.error
+                null -> MaterialTheme.colorScheme.onSurface
+            }
+        )
     }
 }
 

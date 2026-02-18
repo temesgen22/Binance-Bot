@@ -1,6 +1,6 @@
 package com.binancebot.mobile.data.remote.paging
 
-import android.util.Log
+import com.binancebot.mobile.util.AppLogger
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import com.binancebot.mobile.data.remote.api.BinanceBotApi
@@ -37,7 +37,7 @@ class TradePagingSource(
                             dto.toDomain()
                         } catch (e: Exception) {
                             // Log error but don't crash - skip invalid trades
-                            Log.e("TradePagingSource", "Failed to convert trade DTO: ${e.message}", e)
+                            AppLogger.e("TradePagingSource", "Failed to convert trade DTO: ${e.message}", e)
                             null
                         }
                     }

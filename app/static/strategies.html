@@ -1145,8 +1145,9 @@
                 });
 
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-                    throw new Error(errorData.detail || `Failed to ${isCurrentlyRunning ? 'stop' : 'start'} strategy`);
+                    const errorData = await response.json().catch(() => ({}));
+                    const msg = errorData.message || errorData.detail || `Failed to ${isCurrentlyRunning ? 'stop' : 'start'} strategy`;
+                    throw new Error(msg);
                 }
 
                 // Success - reload data to reflect new status

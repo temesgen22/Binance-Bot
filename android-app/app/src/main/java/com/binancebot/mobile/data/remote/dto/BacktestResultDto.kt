@@ -51,7 +51,9 @@ data class BacktestResultDto(
     @SerializedName("klines")
     val klines: List<List<Any>>? = null,
     @SerializedName("indicators")
-    val indicators: Map<String, Any>? = null
+    val indicators: Map<String, Any>? = null,
+    @SerializedName("equity_curve")
+    val equityCurve: List<Double>? = null
 ) {
     // Helper properties for compatibility with existing code
     val id: String get() = "${symbol}_${strategyType}_${startTime}"

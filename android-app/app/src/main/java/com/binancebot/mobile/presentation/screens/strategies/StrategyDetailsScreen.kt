@@ -45,6 +45,7 @@ fun StrategyDetailsScreen(
     val activity by viewModel.activity.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val actionInProgress by viewModel.actionInProgress.collectAsState()
+    val strategyHealth by strategiesViewModel.strategyHealth.collectAsState()
     
     LaunchedEffect(strategyId) {
         viewModel.loadStrategyDetails(strategyId)
@@ -126,7 +127,7 @@ fun StrategyDetailsScreen(
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = "${strat.symbol} • ${strat.strategyType}",
+                                            text = "${strat.symbol} | ${strat.strategyType}",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -333,7 +334,8 @@ fun StrategyDetailsScreen(
                                             HorizontalDivider()
                                             StrategyHealthDetailsSection(
                                                 strategyId = strategyId,
-                                                strategiesViewModel = strategiesViewModel
+                                                health = strategyHealth[strategyId],
+                                                onLoadHealth = { strategiesViewModel.loadStrategyHealth(strategyId) }
                                             )
                                         }
                                     }
@@ -349,7 +351,7 @@ fun StrategyDetailsScreen(
                         )
                         
                         // Strategy Risk Configuration (strategy-level overrides; always show when strategy is loaded)
-                        com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
+                        com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSectionWithViewModel(
                             strategyId = strategyId,
                             strategyName = strat.name,
                             viewModel = riskManagementViewModel
@@ -633,8 +635,7 @@ fun RiskConfigurationSection(
     strategyName: String?,
     riskManagementViewModel: RiskManagementViewModel
 ) {
-    // Use the same StrategyRiskConfigSection from StrategiesScreen
-    com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSection(
+    com.binancebot.mobile.presentation.screens.strategies.StrategyRiskConfigSectionWithViewModel(
         strategyId = strategyId,
         strategyName = strategyName ?: strategyId,
         viewModel = riskManagementViewModel

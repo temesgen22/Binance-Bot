@@ -23,10 +23,6 @@ class StrategyPerformanceViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<StrategyPerformanceUiState>(StrategyPerformanceUiState.Idle)
     val uiState: StateFlow<StrategyPerformanceUiState> = _uiState.asStateFlow()
     
-    init {
-        loadPerformance()
-    }
-    
     fun loadPerformance(
         strategyName: String? = null,
         symbol: String? = null,

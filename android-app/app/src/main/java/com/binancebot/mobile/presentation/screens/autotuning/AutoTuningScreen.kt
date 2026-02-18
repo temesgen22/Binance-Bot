@@ -156,7 +156,7 @@ fun AutoTuningStrategyCard(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "${strategy.symbol} • ${strategy.strategyType}",
+                        text = "${strategy.symbol} | ${strategy.strategyType}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

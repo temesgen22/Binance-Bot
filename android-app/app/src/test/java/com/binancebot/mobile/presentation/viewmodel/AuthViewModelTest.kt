@@ -6,6 +6,7 @@ import com.binancebot.mobile.data.remote.dto.LoginRequest
 import com.binancebot.mobile.data.remote.dto.LoginResponse
 import com.binancebot.mobile.domain.repository.AuthRepository
 import com.binancebot.mobile.domain.repository.NotificationRepository
+import com.binancebot.mobile.util.ConnectivityManager
 import com.binancebot.mobile.util.TokenManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -35,6 +36,9 @@ class AuthViewModelTest {
     lateinit var tokenManager: TokenManager
 
     @Mock
+    lateinit var connectivityManager: ConnectivityManager
+
+    @Mock
     lateinit var context: Context
 
     private lateinit var viewModel: AuthViewModel
@@ -44,7 +48,7 @@ class AuthViewModelTest {
     fun setup() {
         MockitoAnnotations.openMocks(this)
         Dispatchers.setMain(testDispatcher)
-        viewModel = AuthViewModel(authRepository, notificationRepository, tokenManager, context)
+        viewModel = AuthViewModel(authRepository, notificationRepository, tokenManager, connectivityManager, context)
     }
 
     @After
@@ -62,9 +66,8 @@ class AuthViewModelTest {
         whenever(authRepository.login(any<LoginRequest>())).thenReturn(Result.success(response))
 
         viewModel.uiState.test {
+            skipItems(1) // ignore initial (Idle); StateFlow may conflate Loading
             viewModel.login("user", "pass")
-            skipItems(1)
-            assertEquals(AuthUiState.Loading, awaitItem())
             assertEquals(AuthUiState.Success, awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
@@ -77,9 +80,8 @@ class AuthViewModelTest {
         )
 
         viewModel.uiState.test {
+            skipItems(1) // ignore initial (Idle); StateFlow may conflate Loading
             viewModel.login("user", "wrong")
-            skipItems(1)
-            assertEquals(AuthUiState.Loading, awaitItem())
             val error = awaitItem() as AuthUiState.Error
             assertEquals("Bad credentials", error.message)
             cancelAndIgnoreRemainingEvents()

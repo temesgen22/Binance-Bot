@@ -59,15 +59,19 @@ fun NetworkErrorHandler(
     modifier: Modifier = Modifier
 ) {
     val errorMessage = when {
-        error?.message?.contains("Unable to resolve host") == true -> 
+        error?.message?.contains("Unable to resolve host") == true ->
             "No internet connection. Please check your network."
-        error?.message?.contains("timeout") == true -> 
+        error?.message?.contains("Network error") == true ||
+        error?.message?.contains("internet connection") == true ->
+            "No internet connection. Please check your network and try again."
+        error?.message?.contains("timeout") == true ||
+        error?.message?.contains("Request timeout") == true ->
             "Request timed out. Please try again."
-        error?.message?.contains("401") == true -> 
+        error?.message?.contains("401") == true ->
             "Authentication failed. Please login again."
-        error?.message?.contains("404") == true -> 
+        error?.message?.contains("404") == true ->
             "Resource not found."
-        error?.message?.contains("500") == true -> 
+        error?.message?.contains("500") == true ->
             "Server error. Please try again later."
         error != null -> error.message ?: "An error occurred"
         else -> "Unknown error"

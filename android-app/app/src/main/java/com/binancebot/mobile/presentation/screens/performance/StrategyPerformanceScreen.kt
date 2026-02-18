@@ -277,7 +277,7 @@ fun PerformanceRankingCard(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "${performance.symbol} • ${performance.strategyType}",
+                    text = "${performance.symbol} | ${performance.strategyType}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
