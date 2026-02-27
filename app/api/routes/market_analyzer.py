@@ -4,8 +4,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.api.deps import get_binance_client
-from app.core.my_binance_client import BinanceClient
+from app.core.public_market_data_client import PublicMarketDataClient
+from app.core.config import get_settings
 from app.strategies.indicators import (
     calculate_ema, 
     calculate_rsi, 
@@ -17,6 +17,14 @@ from loguru import logger
 
 
 router = APIRouter(prefix="/api/market-analyzer", tags=["market-analyzer"])
+
+
+def get_market_analyzer_client() -> PublicMarketDataClient:
+    """Use mainnet for Market Analyzer so range/trend match Binance.com.
+    The default BinanceClient may use testnet (BINANCE_TESTNET=true), which has
+    different price history and causes Range Low/High to differ from Binance."""
+    settings = get_settings()
+    return PublicMarketDataClient(testnet=False)
 
 
 class MarketAnalysisResponse(BaseModel):
@@ -44,16 +52,12 @@ async def analyze_market(
     max_ema_spread_pct: float = Query(0.005, description="Max EMA spread % for sideways (0.5%)"),
     rsi_period: int = Query(14, description="RSI period"),
     swing_period: int = Query(5, description="Swing period for market structure (default 5)"),
-    client: BinanceClient = Depends(get_binance_client),
+    client: PublicMarketDataClient = Depends(get_market_analyzer_client),
 ) -> MarketAnalysisResponse:
     """
     Analyze market condition (trending vs sideways) and recommend strategy.
     
-    This endpoint:
-    - Fetches historical klines from Binance
-    - Calculates technical indicators (EMA, RSI, ATR)
-    - Determines if market is trending or sideways
-    - Recommends appropriate strategy (EMA Scalping or Range Mean Reversion)
+    Uses Binance mainnet for klines/price so Range Low/High match Binance.com.
     """
     try:
         # Validate parameters
@@ -73,7 +77,7 @@ async def analyze_market(
                 detail="ema_fast_period must be less than ema_slow_period"
             )
         
-        # Get enough klines for analysis
+        # Get enough klines for analysis (mainnet so range matches Binance.com)
         limit = max(lookback_period + 50, 200)
         klines = client.get_klines(
             symbol=symbol,
@@ -511,6 +515,8 @@ async def analyze_market(
                 "atr_ratio": range_atr_ratio_for_info,
                 "atr_ratio_trending_threshold": 5.0,
                 "atr_ratio_sideways_threshold": 2.0,
+                "lookback_candles": lookback_period,
+                "lookback_interval": interval,
             }
         
         # Format market structure for response

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from app.api.deps import get_binance_client, get_current_user_async
 from app.core.my_binance_client import BinanceClient
+from app.core.public_market_data_client import PublicMarketDataClient
 from app.core.config import get_settings
 from app.strategies.base import StrategyContext, StrategySignal
 from app.strategies.scalping import EmaScalpingStrategy
@@ -470,6 +471,91 @@ async def _fetch_historical_klines(
     return filtered_klines
 
 
+def _fetch_historical_klines_mainnet_sync(
+    symbol: str,
+    interval: str,
+    start_timestamp: int,
+    end_timestamp: int,
+    interval_seconds: int,
+    estimated_candles: int,
+) -> list:
+    """Sync helper: fetch klines from Binance mainnet (public API) for backtest chart to match Binance.com."""
+    client = PublicMarketDataClient(testnet=False)
+    MAX_KLINES_PER_REQUEST = 1000
+    all_klines = []
+    current_start = start_timestamp
+    interval_ms = interval_seconds * 1000
+    chunk_count = 0
+    max_chunks = (estimated_candles // MAX_KLINES_PER_REQUEST) + 10
+    while current_start < end_timestamp and chunk_count < max_chunks:
+        chunk_count += 1
+        chunk_end = min(current_start + (MAX_KLINES_PER_REQUEST * interval_ms), end_timestamp)
+        chunk_klines = client.get_klines(
+            symbol=symbol,
+            interval=interval,
+            limit=MAX_KLINES_PER_REQUEST,
+            start_time=current_start,
+            end_time=chunk_end,
+        )
+        if not chunk_klines:
+            break
+        filtered_chunk = [k for k in chunk_klines if start_timestamp <= int(k[0]) <= end_timestamp]
+        if not filtered_chunk:
+            break
+        all_klines.extend(filtered_chunk)
+        last_candle_time = int(chunk_klines[-1][0])
+        current_start = last_candle_time + interval_ms
+        if len(chunk_klines) < MAX_KLINES_PER_REQUEST:
+            break
+    if all_klines:
+        unique_klines_dict = {}
+        for k in all_klines:
+            unique_klines_dict[int(k[0])] = k
+        all_klines = sorted(unique_klines_dict.values(), key=lambda k: int(k[0]))
+    filtered_klines = [k for k in all_klines if start_timestamp <= int(k[0]) <= end_timestamp]
+    return filtered_klines
+
+
+async def _fetch_historical_klines_mainnet(
+    symbol: str,
+    interval: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> list[list]:
+    """Fetch historical klines from Binance MAINNET so backtest chart matches Binance.com."""
+    start_timestamp = int(start_time.timestamp() * 1000)
+    end_timestamp = int(end_time.timestamp() * 1000)
+    interval_seconds_map = {
+        "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200,
+        "1d": 86400, "3d": 259200, "1w": 604800, "1M": 2592000,
+    }
+    interval_seconds = interval_seconds_map.get(interval, 60)
+    duration_seconds = (end_timestamp - start_timestamp) / 1000
+    estimated_candles = int(duration_seconds / interval_seconds) + 200
+    loop = asyncio.get_running_loop()
+    filtered_klines = await loop.run_in_executor(
+        None,
+        lambda: _fetch_historical_klines_mainnet_sync(
+            symbol=symbol,
+            interval=interval,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            interval_seconds=interval_seconds,
+            estimated_candles=estimated_candles,
+        ),
+    )
+    if len(filtered_klines) < 50:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient historical data: only {len(filtered_klines)} candles (mainnet). Need at least 50."
+        )
+    if not filtered_klines:
+        raise HTTPException(status_code=400, detail="No klines found in the specified time range (mainnet).")
+    logger.info(f"Fetched {len(filtered_klines)} klines from Binance mainnet for backtest")
+    return filtered_klines
+
+
 def validate_and_normalize_interval(
     interval: str,
     strategy_type: str,
@@ -660,18 +746,17 @@ async def run_backtest(
                 detail=f"No klines found in pre-fetched data for time range {request.start_time} to {request.end_time}"
             )
     else:
-        # Fetch historical klines - use interval from params
+        # Fetch historical klines from MAINNET so chart and results match Binance.com
         raw_interval = request.params.get("kline_interval", "1m" if request.strategy_type in ("scalping", "reverse_scalping") else "5m")
         interval = validate_and_normalize_interval(raw_interval, request.strategy_type)
-        logger.debug(f"Fetching klines from Binance for range: {request.start_time} to {request.end_time}, interval: {interval}")
-        filtered_klines = await _fetch_historical_klines(
-            client=client,
+        logger.debug(f"Fetching klines from Binance mainnet for range: {request.start_time} to {request.end_time}, interval: {interval}")
+        filtered_klines = await _fetch_historical_klines_mainnet(
             symbol=request.symbol,
             interval=interval,
             start_time=request.start_time,
-            end_time=request.end_time
+            end_time=request.end_time,
         )
-        logger.debug(f"Fetched {len(filtered_klines)} klines from Binance")
+        logger.debug(f"Fetched {len(filtered_klines)} klines from Binance mainnet")
     
     # Calculate interval_seconds for strategy context (using the correct interval)
     # NOTE: Seconds intervals (1s, 3s, etc.) are NOT supported by standard Binance klines endpoint

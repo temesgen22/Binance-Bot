@@ -196,13 +196,15 @@ class StrategyRunner:
             settings = get_settings()
             use_websocket = settings.use_websocket_klines
         
-        # Initialize WebSocket manager
+        # Initialize WebSocket manager: always use MAINNET for kline streams so real-time
+        # candle data matches Binance.com (consistent with backtest and market analyzer).
+        # Order execution remains per-account (testnet/mainnet via BinanceClientManager).
         self.kline_manager: Optional["WebSocketKlineManager"] = None
         if use_websocket:
             try:
                 from app.core.websocket_kline_manager import WebSocketKlineManager
-                self.kline_manager = WebSocketKlineManager(testnet=testnet)
-                logger.info(f"WebSocket kline manager initialized (testnet={testnet})")
+                self.kline_manager = WebSocketKlineManager(testnet=False)
+                logger.info("WebSocket kline manager initialized (mainnet)")
             except Exception as e:
                 logger.warning(f"Failed to initialize WebSocket manager: {e}. Falling back to REST API.")
                 self.kline_manager = None

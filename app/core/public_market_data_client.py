@@ -118,10 +118,12 @@ class PublicMarketDataClient:
         raise BinanceAPIError(f"Failed to fetch {endpoint} after {max_retries} attempts")
     
     def get_klines(
-        self, 
-        symbol: str, 
-        interval: str = "1m", 
-        limit: int = 100
+        self,
+        symbol: str,
+        interval: str = "1m",
+        limit: int = 100,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
     ) -> List[List[Any]]:
         """Get candlestick data from Binance public API.
         
@@ -129,18 +131,24 @@ class PublicMarketDataClient:
             symbol: Trading symbol (e.g., 'BTCUSDT')
             interval: Kline interval (1m, 5m, 15m, 1h, etc.)
             limit: Number of klines to retrieve (max 1500)
+            start_time: Optional start time in milliseconds
+            end_time: Optional end time in milliseconds
             
         Returns:
             List of klines where each kline is [open_time, open, high, low, close, volume, ...]
         """
         symbol = symbol.strip().upper()
         limit = min(limit, 1500)  # Binance max limit
-        
-        return self._fetch_public_data("klines", {
+        params: Dict[str, Any] = {
             "symbol": symbol,
             "interval": interval,
-            "limit": limit
-        })
+            "limit": limit,
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+        return self._fetch_public_data("klines", params)
     
     def get_price(self, symbol: str) -> float:
         """Get current price from Binance public API.

@@ -101,22 +101,18 @@ fun StrategiesScreen(
         )
     }
     
-    // After start/stop success, refresh performance list so Start/Stop button updates
-    val refreshPerformanceTrigger by strategiesViewModel.refreshPerformanceTrigger.collectAsState()
-    LaunchedEffect(refreshPerformanceTrigger) {
-        if (refreshPerformanceTrigger > 0) {
-            performanceViewModel.loadPerformance(
-                strategyName = searchQuery.takeIf { it.isNotBlank() },
-                symbol = filterSymbol.takeIf { it.isNotBlank() },
-                status = filterStatus,
-                rankBy = rankBy,
-                startDate = startDate,
-                endDate = endDate,
-                accountId = filterAccount
-            )
+    // On start/stop success, update only that strategy's status in the list (single card refresh)
+    LaunchedEffect(Unit) {
+        strategiesViewModel.strategyStatusUpdate.collect { (strategyId, status) ->
+            performanceViewModel.updateStrategyStatus(strategyId, status)
         }
     }
-    
+    LaunchedEffect(Unit) {
+        strategiesViewModel.strategyRemoved.collect { strategyId ->
+            performanceViewModel.removeStrategy(strategyId)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

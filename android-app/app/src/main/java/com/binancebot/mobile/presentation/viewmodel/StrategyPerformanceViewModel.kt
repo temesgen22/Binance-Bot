@@ -52,6 +52,32 @@ class StrategyPerformanceViewModel @Inject constructor(
                 }
         }
     }
+
+    /**
+     * Optimistically update only the given strategy's status in the current list.
+     * Used after start/stop so only that card recomposes without refetching the full list.
+     */
+    fun updateStrategyStatus(strategyId: String, status: String) {
+        val current = _performanceList.value ?: return
+        val newStrategies = current.strategies.map { perf ->
+            if (perf.strategyId == strategyId) perf.copy(status = status) else perf
+        }
+        if (newStrategies != current.strategies) {
+            _performanceList.value = current.copy(strategies = newStrategies)
+        }
+    }
+
+    /** Remove the given strategy from the list (e.g. after delete). */
+    fun removeStrategy(strategyId: String) {
+        val current = _performanceList.value ?: return
+        val newStrategies = current.strategies.filter { it.strategyId != strategyId }
+        if (newStrategies.size != current.strategies.size) {
+            _performanceList.value = current.copy(
+                strategies = newStrategies,
+                totalStrategies = (current.totalStrategies - 1).coerceAtLeast(0)
+            )
+        }
+    }
 }
 
 sealed class StrategyPerformanceUiState {

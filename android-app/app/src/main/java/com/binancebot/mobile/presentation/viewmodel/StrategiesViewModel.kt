@@ -7,8 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.domain.model.Strategy
 import com.binancebot.mobile.domain.repository.StrategyRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -104,18 +107,21 @@ class StrategiesViewModel @Inject constructor(
     
     private val _actionInProgress = MutableStateFlow<Set<String>>(emptySet())
     val actionInProgress: StateFlow<Set<String>> = _actionInProgress.asStateFlow()
-    
-    /** Trigger for the Strategies screen to refresh performance list (so Start/Stop button updates). */
-    private val _refreshPerformanceTrigger = MutableStateFlow(0)
-    val refreshPerformanceTrigger: StateFlow<Int> = _refreshPerformanceTrigger.asStateFlow()
-    
+
+    /** Emits (strategyId, status) on start/stop success so only that strategy card can refresh. */
+    private val _strategyStatusUpdate = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 1)
+    val strategyStatusUpdate: SharedFlow<Pair<String, String>> = _strategyStatusUpdate.asSharedFlow()
+
+    /** Emits strategyId when a strategy is deleted so the performance list can remove that card. */
+    private val _strategyRemoved = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val strategyRemoved: SharedFlow<String> = _strategyRemoved.asSharedFlow()
+
     fun startStrategy(strategyId: String) {
         viewModelScope.launch {
             _actionInProgress.value = _actionInProgress.value + strategyId
             strategyRepository.startStrategy(strategyId)
                 .onSuccess {
-                    loadStrategies()
-                    _refreshPerformanceTrigger.value += 1
+                    _strategyStatusUpdate.emit(strategyId to "running")
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to start strategy")
@@ -123,14 +129,13 @@ class StrategiesViewModel @Inject constructor(
             _actionInProgress.value = _actionInProgress.value - strategyId
         }
     }
-    
+
     fun stopStrategy(strategyId: String) {
         viewModelScope.launch {
             _actionInProgress.value = _actionInProgress.value + strategyId
             strategyRepository.stopStrategy(strategyId)
                 .onSuccess {
-                    loadStrategies()
-                    _refreshPerformanceTrigger.value += 1
+                    _strategyStatusUpdate.emit(strategyId to "stopped")
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to stop strategy")
@@ -143,7 +148,8 @@ class StrategiesViewModel @Inject constructor(
         viewModelScope.launch {
             strategyRepository.deleteStrategy(strategyId)
                 .onSuccess {
-                    loadStrategies() // Reload after deletion
+                    loadStrategies()
+                    _strategyRemoved.emit(strategyId)
                 }
                 .onFailure { error ->
                     _uiState.value = StrategiesUiState.Error(error.message ?: "Failed to delete strategy")
@@ -204,27 +210,29 @@ class StrategiesViewModel @Inject constructor(
     
     fun startAllStrategies() {
         viewModelScope.launch {
+            loadStrategies() // Fresh list so we know which to start
             val strategiesToStart = _strategies.value.filter { !it.isRunning }
             strategiesToStart.forEach { strategy ->
                 strategyRepository.startStrategy(strategy.id)
+                    .onSuccess { _strategyStatusUpdate.emit(strategy.id to "running") }
                     .onFailure { error ->
                         _uiState.value = StrategiesUiState.Error("Failed to start ${strategy.name}: ${error.message}")
                     }
             }
-            loadStrategies() // Reload to get updated status
         }
     }
-    
+
     fun stopAllStrategies() {
         viewModelScope.launch {
+            loadStrategies() // Fresh list so we know which to stop
             val strategiesToStop = _strategies.value.filter { it.isRunning }
             strategiesToStop.forEach { strategy ->
                 strategyRepository.stopStrategy(strategy.id)
+                    .onSuccess { _strategyStatusUpdate.emit(strategy.id to "stopped") }
                     .onFailure { error ->
                         _uiState.value = StrategiesUiState.Error("Failed to stop ${strategy.name}: ${error.message}")
                     }
             }
-            loadStrategies() // Reload to get updated status
         }
     }
 }
