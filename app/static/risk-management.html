@@ -735,7 +735,7 @@
                         html += `<tr><td>${strategy.name || strategy.id}</td><td colspan="6" style="text-align: center; color: #f44336;">Error: ${result.reason?.message || 'Unknown'}</td></tr>`;
                         return;
                     }
-                    const { strategy, ok, data: metricsData, status, errorText } = result.value;
+                    const { ok, data: metricsData, status, errorText } = result.value;
                     try {
                         if (ok && metricsData) {
                             if (metricsData.metrics) {

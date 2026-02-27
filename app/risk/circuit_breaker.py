@@ -74,6 +74,55 @@ class CircuitBreaker:
         self._active_breakers: Dict[str, Dict[str, CircuitBreakerState]] = {}
         # Format: {scope: {breaker_type: CircuitBreakerState}}
         # scope = 'account' or 'strategy_id'
+        self._load_active_breakers_from_db()
+    
+    def _load_active_breakers_from_db(self) -> None:
+        """Load active circuit breaker events from DB so is_active() is correct after restart."""
+        if not self.db_service or not self.user_id:
+            return
+        try:
+            from app.models.db_models import CircuitBreakerEvent as DBCircuitBreakerEvent
+            from app.models.db_models import Account, Strategy
+            account = self.db_service.db.query(Account).filter(
+                Account.user_id == self.user_id,
+                Account.account_id.ilike(self.account_id)
+            ).first()
+            if not account:
+                return
+            account_uuid = account.id
+            rows = self.db_service.db.query(DBCircuitBreakerEvent).filter(
+                DBCircuitBreakerEvent.user_id == self.user_id,
+                DBCircuitBreakerEvent.account_id == account_uuid,
+                DBCircuitBreakerEvent.status == "active",
+            ).all()
+            for event in rows:
+                scope_key: str
+                strategy_id_str: Optional[str] = None
+                if event.breaker_scope == "strategy" and event.strategy_id:
+                    st = self.db_service.db.query(Strategy).filter(Strategy.id == event.strategy_id).first()
+                    scope_key = st.strategy_id if st else str(event.strategy_id)
+                    strategy_id_str = scope_key
+                else:
+                    scope_key = "account"
+                if scope_key not in self._active_breakers:
+                    self._active_breakers[scope_key] = {}
+                triggered_at = event.triggered_at.replace(tzinfo=timezone.utc) if event.triggered_at.tzinfo is None else event.triggered_at
+                # Restored breakers need a cooldown so is_active() returns True until resolved or cooldown expires
+                cooldown_mins = (getattr(self.config, "circuit_breaker_cooldown_minutes", None) or 60) if self.config else 60
+                cooldown_until = triggered_at + timedelta(minutes=cooldown_mins)
+                state = CircuitBreakerState(
+                    breaker_type=event.breaker_type or "unknown",
+                    scope=event.breaker_scope or "account",
+                    triggered_at=triggered_at,
+                    trigger_value=float(event.trigger_value),
+                    threshold_value=float(event.threshold_value),
+                    status="active",
+                    cooldown_until=cooldown_until,
+                    strategy_id=strategy_id_str,
+                )
+                self._active_breakers[scope_key][event.breaker_type] = state
+        except Exception as e:
+            logger.debug(f"Could not load active circuit breakers from DB: {e}")
     
     def is_active(
         self,
@@ -540,13 +589,13 @@ class CircuitBreaker:
             from app.models.db_models import CircuitBreakerEvent as DBCircuitBreakerEvent
             from uuid import uuid4
             
-            # Get account UUID
+            # Get account UUID (use self.account_id = Binance account ID string, e.g. "default")
             account_uuid = None
             if self.db_service:
                 from app.models.db_models import Account
                 account = self.db_service.db.query(Account).filter(
                     Account.user_id == self.user_id,
-                    Account.account_id.ilike(breaker_state.scope if breaker_state.scope == 'account' else self.account_id)
+                    Account.account_id.ilike(self.account_id)
                 ).first()
                 if account:
                     account_uuid = account.id

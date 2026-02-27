@@ -46,7 +46,7 @@ from app.services.trade_service import TradeService
 from app.services.strategy_service import StrategyService
 from app.services.database_service import DatabaseService
 from app.services.account_service import AccountService
-from app.models.db_models import Trade as DBTrade
+from app.models.db_models import Trade as DBTrade, CircuitBreakerEvent as DBCircuitBreakerEvent
 from app.models.risk_management import (
     PortfolioRiskStatusResponse,
     RiskManagementConfigCreate,
@@ -1998,6 +1998,32 @@ async def get_strategy_risk_status(
         strategy_status = str(db_strategy.status) if hasattr(db_strategy, 'status') and db_strategy.status else None
         is_stopped_by_risk = strategy_status == "stopped_by_risk"
         circuit_breaker_active = is_stopped_by_risk
+        # Also reflect actual circuit breaker feature (consecutive/rapid loss) from DB
+        try:
+            from sqlalchemy import or_, and_
+            account_uuid = getattr(db_strategy, "account_id", None)
+            strategy_uuid = getattr(db_strategy, "id", None)
+            if account_uuid is not None or strategy_uuid is not None:
+                q = db.query(DBCircuitBreakerEvent).filter(
+                    DBCircuitBreakerEvent.user_id == user_id,
+                    DBCircuitBreakerEvent.status == "active",
+                )
+                # Account-level (strategy_id IS NULL) affects all strategies on account; strategy-level affects only this strategy
+                if account_uuid is not None and strategy_uuid is not None:
+                    q = q.filter(
+                        or_(
+                            and_(DBCircuitBreakerEvent.account_id == account_uuid, DBCircuitBreakerEvent.strategy_id.is_(None)),
+                            DBCircuitBreakerEvent.strategy_id == strategy_uuid,
+                        )
+                    )
+                elif account_uuid is not None:
+                    q = q.filter(DBCircuitBreakerEvent.account_id == account_uuid)
+                else:
+                    q = q.filter(DBCircuitBreakerEvent.strategy_id == strategy_uuid)
+                if q.first() is not None:
+                    circuit_breaker_active = True
+        except Exception as e:
+            logger.debug(f"Could not check circuit breaker events: {e}")
         
         # Get account-level risk config
         account_risk_config = None

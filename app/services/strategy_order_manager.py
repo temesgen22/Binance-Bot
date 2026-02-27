@@ -907,6 +907,42 @@ class StrategyOrderManager:
                         # Don't raise - order is already in Binance, can't undo
                         # Trade is still tracked in memory/Redis, can be recovered later
                 
+                # Circuit breaker: check consecutive losses / rapid loss after a closing trade (no impact on strategy/account risk)
+                if (
+                    order_response.realized_pnl is not None
+                    and self.circuit_breaker_factory
+                    and self.user_id
+                    and account_id
+                    and self.strategy_service
+                    and hasattr(self.strategy_service, "db_service")
+                    and self.trade_service
+                ):
+                    try:
+                        breaker = (
+                            self.circuit_breaker_factory(account_id)
+                            if callable(self.circuit_breaker_factory)
+                            else getattr(self.circuit_breaker_factory, "get_circuit_breaker", lambda _: None)(account_id)
+                        )
+                        if breaker:
+                            db_strategy_cb = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
+                            if db_strategy_cb:
+                                def _run_breaker_checks() -> None:
+                                    recent = self.trade_service.get_recent_trades(
+                                        self.user_id,
+                                        strategy_id=db_strategy_cb.id,
+                                        limit=100,
+                                    )
+                                    # Include this close so consecutive loss count is up to date
+                                    recent = [order_response] + [t for t in recent if getattr(t, "order_id", None) != order_response.order_id]
+                                    breaker.check_consecutive_losses(summary.id, recent)
+                                    if breaker.config and getattr(breaker.config, "rapid_loss_timeframe_minutes", None):
+                                        breaker.check_rapid_loss(account_id, breaker.config.rapid_loss_timeframe_minutes)
+                                    elif breaker.config:
+                                        breaker.check_rapid_loss(account_id, 60)
+                                await asyncio.to_thread(_run_breaker_checks)
+                    except Exception as cb_err:
+                        logger.warning(f"[{summary.id}] Circuit breaker check after trade failed: {cb_err}")
+                
                 # Update entry price and position size based on order side
                 if order_response.side == "BUY":
                     if summary.position_side == "SHORT":

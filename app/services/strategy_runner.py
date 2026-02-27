@@ -249,6 +249,26 @@ class StrategyRunner:
             if strategy_service and user_id:
                 logger.warning("TradeService not initialized: strategy_service missing db_service. Trades will not be saved to database.")
         
+        # Circuit breaker factory: only when we have strategy_service, user_id, trade_service (no impact on strategy/account risk)
+        circuit_breaker_factory = None
+        if strategy_service and user_id and self.trade_service and hasattr(strategy_service, "db_service") and strategy_service.db_service:
+            try:
+                from app.services.risk_management_service import RiskManagementService
+                from app.services.circuit_breaker_factory import CircuitBreakerFactory
+                risk_management_service = RiskManagementService(
+                    strategy_service.db_service.db,
+                    redis_storage=redis_storage,
+                )
+                circuit_breaker_factory = CircuitBreakerFactory(
+                    risk_config_service=risk_management_service,
+                    user_id=user_id,
+                    db_service=strategy_service.db_service,
+                    strategy_runner=self,
+                    trade_service=self.trade_service,
+                )
+            except Exception as e:
+                logger.warning(f"Could not create circuit breaker factory: {e}. Circuit breaker checks will be skipped.")
+        
         # Initialize order manager
         # Note: Factories will be created when needed (lazy initialization)
         # They can be set later if factories are provided from main.py
@@ -265,10 +285,7 @@ class StrategyRunner:
             lock=self._lock,
             notification_service=notification_service,  # Pass notification service for risk alerts
             strategy_runner=self,  # Pass self so order manager can pause strategies
-            # Factories can be set later if needed - they're optional
-            # portfolio_risk_manager_factory=...,
-            # circuit_breaker_factory=...,
-            # dynamic_sizing_factory=...,
+            circuit_breaker_factory=circuit_breaker_factory,
         )
         
         # Initialize executor
