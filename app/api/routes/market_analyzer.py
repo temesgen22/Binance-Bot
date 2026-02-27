@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional, Union
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.core.public_market_data_client import PublicMarketDataClient
@@ -19,11 +19,12 @@ from loguru import logger
 router = APIRouter(prefix="/api/market-analyzer", tags=["market-analyzer"])
 
 
-def get_market_analyzer_client() -> PublicMarketDataClient:
+def get_market_analyzer_client(request: Request) -> Union[PublicMarketDataClient, object]:
     """Use mainnet for Market Analyzer so range/trend match Binance.com.
-    The default BinanceClient may use testnet (BINANCE_TESTNET=true), which has
-    different price history and causes Range Low/High to differ from Binance."""
-    settings = get_settings()
+    In tests, app.state.market_analyzer_client can be set to a stub (get_klines, get_price)."""
+    stub = getattr(request.app.state, "market_analyzer_client", None)
+    if stub is not None:
+        return stub
     return PublicMarketDataClient(testnet=False)
 
 
@@ -52,7 +53,7 @@ async def analyze_market(
     max_ema_spread_pct: float = Query(0.005, description="Max EMA spread % for sideways (0.5%)"),
     rsi_period: int = Query(14, description="RSI period"),
     swing_period: int = Query(5, description="Swing period for market structure (default 5)"),
-    client: PublicMarketDataClient = Depends(get_market_analyzer_client),
+    client: Union[PublicMarketDataClient, object] = Depends(get_market_analyzer_client),
 ) -> MarketAnalysisResponse:
     """
     Analyze market condition (trending vs sideways) and recommend strategy.

@@ -39,8 +39,10 @@ class StubBinanceClient:
 
 @pytest.fixture()
 def client():
-    """Create test client with stubbed Binance client."""
-    app.state.binance_client = StubBinanceClient()
+    """Create test client with stubbed Binance and market-analyzer clients."""
+    stub = StubBinanceClient()
+    app.state.binance_client = stub
+    app.state.market_analyzer_client = stub  # Market analyzer uses this (mainnet client override for tests)
     return TestClient(app)
 
 
@@ -267,7 +269,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_success(self, client):
         """Test successful market analysis."""
         klines = build_klines(count=200, base_price=50000.0)
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -291,7 +293,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_insufficient_data(self, client):
         """Test market analysis with insufficient data returns 400 error."""
         klines = build_klines(count=30, base_price=50000.0)  # Not enough for lookback_period=150
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -354,7 +356,7 @@ class TestMarketAnalyzerEndpoint:
                 0, 0, 0, 0, 0
             ])
         
-        app.state.binance_client = StubBinanceClient(klines=klines, price=60000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=60000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -388,7 +390,7 @@ class TestMarketAnalyzerEndpoint:
                 0, 0, 0, 0, 0
             ])
         
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -420,7 +422,7 @@ class TestMarketAnalyzerEndpoint:
                 0, 0, 0, 0, 0
             ])
         
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50400.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50400.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -439,7 +441,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_includes_market_structure(self, client):
         """Test market analysis includes market structure data."""
         klines = build_klines(count=200, base_price=50000.0)
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -460,7 +462,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_includes_volume_analysis(self, client):
         """Test market analysis includes volume analysis data."""
         klines = build_klines(count=200, base_price=50000.0)
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -485,7 +487,7 @@ class TestMarketAnalyzerEndpoint:
         klines = build_klines(count=200, base_price=50000.0)
         klines[100][5] = 0.0  # Zero volume at index 100
         
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -517,7 +519,7 @@ class TestMarketAnalyzerEndpoint:
             }
             
             klines = build_klines(count=200, base_price=50000.0)
-            app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+            app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
             
             response = client.get(
                 "/api/market-analyzer/analyze",
@@ -535,7 +537,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_current_price_rounded(self, client):
         """Test current_price is consistently rounded to 8 decimals."""
         klines = build_klines(count=200, base_price=50000.0)
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.123456789)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.123456789)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -566,7 +568,7 @@ class TestMarketAnalyzerEndpoint:
                 0, 0, 0, 0, 0
             ])
         
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50600.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50600.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -588,7 +590,7 @@ class TestMarketAnalyzerEndpoint:
         # = max(50, 14, 14, 10) = 50
         # But we also need lookback_period + 10 = 160 total candles
         klines = build_klines(count=160, base_price=50000.0)  # Enough for lookback, but may fail min_required check
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
@@ -610,7 +612,7 @@ class TestMarketAnalyzerEndpoint:
     def test_analyze_market_response_structure(self, client):
         """Test response structure matches MarketAnalysisResponse model."""
         klines = build_klines(count=200, base_price=50000.0)
-        app.state.binance_client = StubBinanceClient(klines=klines, price=50000.0)
+        app.state.market_analyzer_client = StubBinanceClient(klines=klines, price=50000.0)
         
         response = client.get(
             "/api/market-analyzer/analyze",
