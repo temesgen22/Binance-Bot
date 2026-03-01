@@ -456,6 +456,49 @@ class FCMNotifier:
         )
         return sent_count > 0
     
+    async def notify_order_execution_failed(
+        self,
+        user_id: UUID,
+        summary: StrategySummary,
+        reason: str,
+        error_type: Optional[str] = None,
+        signal_action: Optional[str] = None,
+        symbol: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
+    ) -> bool:
+        """Send FCM notification when order was not executed (e.g. insufficient balance, timeout).
+        
+        Args:
+            user_id: User UUID
+            summary: Strategy summary
+            reason: Human-readable reason
+            error_type: Optional exception type
+            signal_action: Optional signal (BUY/SELL)
+            symbol: Optional symbol
+            db: Async database session
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        title = "Order Not Executed"
+        body = f"{summary.name} ({summary.symbol}): {reason[:120]}"
+        data = {
+            "type": "alert",
+            "category": "order_execution_failed",
+            "strategy_id": summary.id,
+            "strategy_name": summary.name[:50],
+            "symbol": summary.symbol,
+            "reason": reason[:200],
+        }
+        if error_type:
+            data["error_type"] = error_type
+        if signal_action:
+            data["signal_action"] = signal_action
+        sent_count = await self.send_to_user(
+            user_id, title, body, data, db, channel_id="alerts_channel"
+        )
+        return sent_count > 0
+    
     async def notify_pnl_threshold(
         self,
         user_id: UUID,

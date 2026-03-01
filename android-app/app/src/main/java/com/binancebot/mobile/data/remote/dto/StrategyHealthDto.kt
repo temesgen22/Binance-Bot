@@ -3,6 +3,19 @@ package com.binancebot.mobile.data.remote.dto
 import com.google.gson.annotations.SerializedName
 
 /**
+ * Reason why the strategy did not execute an order (from backend health API).
+ * Shown in strategy detail / execution health status when present.
+ */
+data class OrderFailureDto(
+    @SerializedName("reason")
+    val reason: String? = null,
+    @SerializedName("at")
+    val at: String? = null,
+    @SerializedName("error_type")
+    val errorType: String? = null
+)
+
+/**
  * Strategy Health Status DTO
  */
 data class StrategyHealthDto(
@@ -24,6 +37,9 @@ data class StrategyHealthDto(
     val executionStatus: Map<String, Any?>? = null,
     @SerializedName("order_status")
     val orderStatus: Map<String, Any?>? = null,
+    /** When set, strategy is not executing orders; reason explains why (e.g. insufficient balance, timeout). */
+    @SerializedName("order_failure")
+    val orderFailure: OrderFailureDto? = null,
     @SerializedName("meta")
     val meta: Map<String, Any?>? = null
 )

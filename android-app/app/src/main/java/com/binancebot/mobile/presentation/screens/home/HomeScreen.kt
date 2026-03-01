@@ -85,13 +85,14 @@ fun HomeScreen(
         }
     }
     
-    // Collect strategies with health issues
+    // Collect strategies with health issues (stale, dead, no orders, or order not executed e.g. insufficient balance)
     val strategiesWithHealthIssues = remember(strategies, strategyHealth) {
         strategies.filter { strategy ->
             if (!strategy.isRunning) return@filter false
             val health = strategyHealth[strategy.id]
             val healthStatus = health?.healthStatus
-            healthStatus in listOf("execution_stale", "task_dead", "no_recent_orders")
+            val hasOrderFailure = health?.orderFailure?.reason != null
+            healthStatus in listOf("execution_stale", "task_dead", "no_recent_orders") || hasOrderFailure
         }
     }
     

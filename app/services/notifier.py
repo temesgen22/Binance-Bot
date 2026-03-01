@@ -41,6 +41,7 @@ class NotificationType(str, Enum):
     ORDER_BLOCKED_BY_RISK = "ORDER_BLOCKED_BY_RISK"
     CIRCUIT_BREAKER_TRIGGERED = "CIRCUIT_BREAKER_TRIGGERED"
     ORDER_SIZE_REDUCED = "ORDER_SIZE_REDUCED"
+    ORDER_EXECUTION_FAILED = "ORDER_EXECUTION_FAILED"
     # Risk warnings (approaching limits - 80% threshold)
     DAILY_LOSS_LIMIT_WARNING = "DAILY_LOSS_LIMIT_WARNING"
     WEEKLY_LOSS_LIMIT_WARNING = "WEEKLY_LOSS_LIMIT_WARNING"
@@ -254,6 +255,17 @@ class TelegramNotifier:
                 message += f"Symbol: {additional_info['symbol']}\n"
             if additional_info.get("account_id"):
                 message += f"Account: {additional_info['account_id']}\n"
+        
+        elif notification_type == NotificationType.ORDER_EXECUTION_FAILED:
+            message += "\n⚠️ <b>Order NOT Executed</b>\n"
+            if additional_info.get("reason"):
+                message += f"Reason: {additional_info['reason']}\n"
+            if additional_info.get("error_type"):
+                message += f"Error Type: {additional_info['error_type']}\n"
+            if additional_info.get("signal_action"):
+                message += f"Signal: {additional_info['signal_action']}\n"
+            if additional_info.get("symbol"):
+                message += f"Symbol: {additional_info['symbol']}\n"
         
         elif notification_type == NotificationType.CIRCUIT_BREAKER_TRIGGERED:
             message += "\n⛔ <b>Circuit Breaker TRIGGERED</b>\n"
@@ -778,6 +790,39 @@ class TelegramNotifier:
         
         return await self.send_message(message)
     
+    async def notify_order_execution_failed(
+        self,
+        summary: StrategySummary,
+        reason: str,
+        error_type: Optional[str] = None,
+        signal_action: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ) -> bool:
+        """Send notification when an order could not be executed (e.g. insufficient balance, timeout, API error).
+        
+        Args:
+            summary: Strategy summary
+            reason: Human-readable reason why order was not executed
+            error_type: Optional exception type (e.g. AttributeError, TimeoutError)
+            signal_action: Optional signal that was not executed (e.g. BUY, SELL)
+            symbol: Optional symbol (defaults to summary.symbol)
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        additional_info = {
+            "reason": reason[:500] if reason else "Unknown",
+            "error_type": error_type,
+            "signal_action": signal_action,
+            "symbol": symbol or (summary.symbol if summary else None),
+        }
+        message = self.format_strategy_message(
+            NotificationType.ORDER_EXECUTION_FAILED,
+            summary,
+            additional_info,
+        )
+        return await self.send_message(message, disable_notification=False)
+    
     async def notify_risk_warning(
         self,
         warning_type: NotificationType,
@@ -1265,6 +1310,40 @@ class NotificationService:
                     alert_type="circuit_breaker",
                     account_id=account_id,
                     message=f"Circuit breaker triggered: {reason}",
+                )
+            )
+    
+    async def notify_order_execution_failed(
+        self,
+        summary: StrategySummary,
+        reason: str,
+        error_type: Optional[str] = None,
+        signal_action: Optional[str] = None,
+        symbol: Optional[str] = None,
+        user_id: Optional[UUID] = None,
+    ) -> None:
+        """Notify that an order could not be executed (e.g. insufficient balance, timeout, API error).
+        
+        Args:
+            summary: Strategy summary
+            reason: Human-readable reason
+            error_type: Optional exception type
+            signal_action: Optional signal (BUY/SELL)
+            symbol: Optional symbol
+            user_id: User UUID for FCM notifications
+        """
+        if self.telegram:
+            await self.telegram.notify_order_execution_failed(
+                summary, reason, error_type, signal_action, symbol
+            )
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_order_execution_failed",
+                    summary, reason,
+                    error_type=error_type,
+                    signal_action=signal_action,
+                    symbol=symbol or getattr(summary, "symbol", None),
                 )
             )
     

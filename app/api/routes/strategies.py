@@ -410,6 +410,15 @@ async def get_strategy_health(
                 "last_order_id": last_order_id,
                 "orders_healthy": orders_healthy,
             },
+            "order_failure": (
+                {
+                    "reason": strategy.meta.get("last_order_failure_reason"),
+                    "at": strategy.meta.get("last_order_failure_time"),
+                    "error_type": strategy.meta.get("last_order_failure_error_type"),
+                }
+                if isinstance(strategy.meta, dict) and strategy.meta.get("last_order_failure_reason")
+                else None
+            ),
             "meta": {
                 "orders_executed_count": strategy.meta.get('orders_executed_count', 0) if isinstance(strategy.meta, dict) else 0,
                 "orders_skipped_count": strategy.meta.get('orders_skipped_count', 0) if isinstance(strategy.meta, dict) else 0,

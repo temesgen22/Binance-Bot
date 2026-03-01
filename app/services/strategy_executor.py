@@ -1,7 +1,7 @@
 """Strategy execution loop and signal processing."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
@@ -55,6 +55,29 @@ class StrategyExecutor:
         self.default_executor = default_executor
         self.notifications = notification_service
         self._lock = lock
+    
+    # Throttle: do not send the same order-failure notification more than once per 15 minutes per strategy
+    _ORDER_FAILURE_NOTIFY_THROTTLE_MINUTES = 15
+    
+    @staticmethod
+    def _normalize_order_failure_reason(exc: Exception) -> str:
+        """Build a short user-facing reason for order execution failure (e.g. for notifications and state)."""
+        msg = str(exc).strip()
+        msg_lower = msg.lower()
+        if "insufficient" in msg_lower and ("balance" in msg_lower or "margin" in msg_lower):
+            return "Insufficient balance or margin"
+        if "redisstorage" in msg_lower or "has no attribute" in msg_lower and "get" in msg_lower:
+            return "Service error (cache/config)"
+        if "reduceonly" in msg_lower or "reduce only" in msg_lower or "rejected" in msg_lower:
+            return "Position already closed (order rejected)"
+        if "timeout" in msg_lower or "timed out" in msg_lower:
+            return "Order execution timed out"
+        if "error_code" in msg_lower or "-2019" in msg or "-2022" in msg:
+            if "-2019" in msg:
+                return "Insufficient balance or margin"
+            if "-2022" in msg:
+                return "Position already closed (order rejected)"
+        return msg[:400] if msg else type(exc).__name__
     
     async def run_loop(
         self,
@@ -283,11 +306,44 @@ class StrategyExecutor:
                         f"Signal: {signal.action} | Symbol: {signal.symbol}"
                     )
                     # Continue loop instead of hanging - strategy will retry on next iteration
-                    # Mark in meta that order execution timed out
+                    # Mark in meta that order execution timed out and set state details for UI/API
                     if not isinstance(summary.meta, dict):
                         summary.meta = {}
                     summary.meta['last_order_timeout'] = current_time.isoformat()
                     summary.meta['order_timeout_count'] = summary.meta.get('order_timeout_count', 0) + 1
+                    reason = "Order execution timed out"
+                    summary.meta['last_order_failure_reason'] = reason
+                    summary.meta['last_order_failure_time'] = current_time.isoformat()
+                    summary.meta['last_order_failure_error_type'] = 'TimeoutError'
+                    try:
+                        self.state_manager.update_strategy_in_db(
+                            summary.id, save_to_redis=True, meta=summary.meta
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to save order failure meta: {e}")
+                    # Push notification with throttle (same reason within 15 min = no duplicate)
+                    if self.notifications and self.order_manager.user_id:
+                        last_reason = summary.meta.get('last_order_failure_reason')
+                        last_notified = summary.meta.get('last_order_failure_notified_at')
+                        try:
+                            notified_dt = datetime.fromisoformat(last_notified.replace('Z', '+00:00')) if last_notified else None
+                        except Exception:
+                            notified_dt = None
+                        age_sec = (datetime.now(timezone.utc) - notified_dt).total_seconds() if notified_dt else float('inf')
+                        should_notify = (last_reason != reason) or (notified_dt is None) or (age_sec >= self._ORDER_FAILURE_NOTIFY_THROTTLE_MINUTES * 60)
+                        if should_notify:
+                            try:
+                                await self.notifications.notify_order_execution_failed(
+                                    summary, reason, error_type='TimeoutError',
+                                    signal_action=signal.action, symbol=signal.symbol,
+                                    user_id=self.order_manager.user_id,
+                                )
+                                summary.meta['last_order_failure_notified_at'] = datetime.now(timezone.utc).isoformat()
+                                self.state_manager.update_strategy_in_db(
+                                    summary.id, save_to_redis=True, meta=summary.meta
+                                )
+                            except Exception as notify_err:
+                                logger.warning(f"Failed to send order execution failed notification: {notify_err}")
                 except RiskLimitExceededError as risk_exc:
                     # CRITICAL: If daily/weekly loss limit exceeded, the strategy has been paused
                     # Exit the loop IMMEDIATELY - no point continuing if limits are exceeded
@@ -322,6 +378,41 @@ class StrategyExecutor:
                         f"[{summary.id}] Order execution failed (non-timeout): {type(order_exc).__name__}: {order_exc}. "
                         f"Strategy loop will continue."
                     )
+                    # Persist failure reason in strategy state for UI/API and send push notification
+                    if not isinstance(summary.meta, dict):
+                        summary.meta = {}
+                    reason = self._normalize_order_failure_reason(order_exc)
+                    summary.meta['last_order_failure_reason'] = reason
+                    summary.meta['last_order_failure_time'] = current_time.isoformat()
+                    summary.meta['last_order_failure_error_type'] = type(order_exc).__name__
+                    try:
+                        self.state_manager.update_strategy_in_db(
+                            summary.id, save_to_redis=True, meta=summary.meta
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to save order failure meta: {e}")
+                    if self.notifications and self.order_manager.user_id:
+                        last_reason = summary.meta.get('last_order_failure_reason')
+                        last_notified = summary.meta.get('last_order_failure_notified_at')
+                        try:
+                            notified_dt = datetime.fromisoformat(last_notified.replace('Z', '+00:00')) if last_notified else None
+                        except Exception:
+                            notified_dt = None
+                        age_sec = (datetime.now(timezone.utc) - notified_dt).total_seconds() if notified_dt else float('inf')
+                        should_notify = (last_reason != reason) or (notified_dt is None) or (age_sec >= self._ORDER_FAILURE_NOTIFY_THROTTLE_MINUTES * 60)
+                        if should_notify:
+                            try:
+                                await self.notifications.notify_order_execution_failed(
+                                    summary, reason, error_type=type(order_exc).__name__,
+                                    signal_action=signal.action, symbol=signal.symbol,
+                                    user_id=self.order_manager.user_id,
+                                )
+                                summary.meta['last_order_failure_notified_at'] = datetime.now(timezone.utc).isoformat()
+                                self.state_manager.update_strategy_in_db(
+                                    summary.id, save_to_redis=True, meta=summary.meta
+                                )
+                            except Exception as notify_err:
+                                logger.warning(f"Failed to send order execution failed notification: {notify_err}")
                 
                 # Wait for new candle event or timeout (for TP/SL checks)
                 await self._wait_for_next_evaluation(strategy, summary)

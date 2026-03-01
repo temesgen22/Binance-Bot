@@ -1,0 +1,292 @@
+﻿python : C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\pytest_asyncio\plugin.py:208: 
+PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+At C:\Users\teme2\AppData\Local\Temp\ps-script-362da824-24b8-419c-ab20-00df91a87adc.ps1:7 char:34
++ ... 2\Binance Bot"; python -m pytest tests/ -v --tb=short -q 2>&1 | Out-F ...
++                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\teme2\...cope" is unset.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of 
+pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop 
+scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", 
+"class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts =============================
+platform win32 -- Python 3.12.1, pytest-8.3.3, pluggy-1.6.0
+rootdir: C:\Users\teme2\Binance Bot
+configfile: pytest.ini
+plugins: anyio-3.7.1, asyncio-0.24.0, cov-4.1.0
+asyncio: mode=Mode.AUTO, default_loop_scope=None
+collected 1222 items
+
+tests\test_account_limit_pause_strategies.py ..........                  [  0%]
+tests\test_account_status_management.py .........                        [  1%]
+tests\test_android_app_endpoints.py .................................... [  4%]
+....................                                                     [  6%]
+tests\test_async_database.py .........                                   [  6%]
+tests\test_backtest_opposite_profits.py .                                [  6%]
+tests\test_backtesting.py ..................                             [  8%]
+tests\test_backtesting_critical_fixes.py ......                          [  8%]
+tests\test_backtesting_ema_cross_exit.py ...                             [  9%]
+tests\test_backtesting_pagination.py ...........                         [ 10%]
+tests\test_backtesting_parameters.py s....                               [ 10%]
+tests\test_binance_parameters.py ..............                          [ 11%]
+tests\test_chart_time_alignment.py ....                                  [ 11%]
+tests\test_circuit_breaker.py ..............                             [ 13%]
+tests\test_completed_trade_flush_validation.py ...                       [ 13%]
+tests\test_completed_trade_helper_comprehensive.py ............          [ 14%]
+tests\test_completed_trade_integration.py .....s.                        [ 14%]
+tests\test_concurrent_operations.py ........                             [ 15%]
+tests\test_configurable_guardrails.py .........                          [ 16%]
+tests\test_cooldown_position_switching.py ....                           [ 16%]
+tests\test_correlation_id.py ........                                    [ 17%]
+tests\test_correlation_manager.py ...........                            [ 18%]
+tests\test_critical_functions.py ...................                     [ 19%]
+tests\test_critical_race_conditions.py ................................. [ 22%]
+....                                                                     [ 22%]
+tests\test_daily_limit_stops_strategies.py ....                          [ 23%]
+tests\test_dashboard.py ..........                                       [ 23%]
+tests\test_datetime_filtering.py .............                           [ 24%]
+tests\test_dynamic_sizing.py ............                                [ 25%]
+tests\test_ema_cross_exit_comprehensive.py ..........                    [ 26%]
+tests\test_ema_cross_exit_config.py ....                                 [ 27%]
+tests\test_exit_reason.py ...........                                    [ 27%]
+tests\test_fcm_integration.py sssFFFF......sFFFF.                        [ 29%]
+tests\test_health.py .                                                   [ 29%]
+tests\test_health_checks.py .......                                      [ 30%]
+tests\test_indicators.py .....................                           [ 31%]
+tests\test_live_price_tp_sl.py ....................                      [ 33%]
+tests\test_live_trading_completed_trades.py ..........                   [ 34%]
+tests\test_log_viewer.py ....................................            [ 37%]
+tests\test_logging.py .                                                  [ 37%]
+tests\test_long_position_sl_tp_exit_matching.py ...                      [ 37%]
+tests\test_margin_manager.py ............                                [ 38%]
+tests\test_market_analyzer.py .............................              [ 40%]
+tests\test_metrics.py .................                                  [ 42%]
+tests\test_multi_account.py ......                                       [ 42%]
+tests\test_multi_strategy_symbol_conflict.py ........                    [ 43%]
+tests\test_notifier.py .................................                 [ 46%]
+tests\test_order_execution.py ....................                       [ 47%]
+tests\test_order_idempotency.py ......................                   [ 49%]
+tests\test_order_storage.py ...............................              [ 52%]
+tests\test_paper_trading.py ..................                           [ 53%]
+tests\test_parameter_contracts.py ........                               [ 54%]
+tests\test_performance_optimizations.py ..............                   [ 55%]
+tests\test_periodic_cleanup.py .........                                 [ 56%]
+tests\test_pnl_calculation.py .......                                    [ 56%]
+tests\test_portfolio_risk_manager.py .............                       [ 57%]
+tests\test_position_instance_id.py ........                              [ 58%]
+tests\test_position_instance_id_entry_exit_matching.py ..                [ 58%]
+tests\test_position_instance_id_stale_state.py ...                       [ 58%]
+tests\test_position_side_inference_integration.py ......                 [ 59%]
+tests\test_range_mean_reversion.py .......................               [ 61%]
+tests\test_redis_binance_parameters.py ..........                        [ 62%]
+tests\test_redis_database_integration.py .........                       [ 62%]
+tests\test_redis_persistence.py ............                             [ 63%]
+tests\test_reports.py ............                                       [ 64%]
+tests\test_reports_funding_fees.py .........                             [ 65%]
+tests\test_reverse_scalping.py ...........                               [ 66%]
+tests\test_reverse_scalping_database_storage.py ....                     [ 66%]
+tests\test_reverse_scalping_htf_bias_fix.py ....                         [ 67%]
+tests\test_reverse_scalping_win_rate.py ...                              [ 67%]
+tests\test_risk_enforcement_events.py ...                                [ 67%]
+tests\test_risk_management_models.py ......                              [ 68%]
+tests\test_risk_management_service.py .......                            [ 68%]
+tests\test_risk_metrics_calculation.py ...                               [ 68%]
+tests\test_risk_status_endpoint.py .......                               [ 69%]
+tests\test_risk_status_frontend_e2e.py ...                               [ 69%]
+tests\test_risk_status_frontend_integration.py ......                    [ 70%]
+tests\test_risk_status_frontend_zero_trades.py ....                      [ 70%]
+tests\test_risk_utils.py ..................                              [ 72%]
+tests\test_scalping_critical_edge_cases.py ...........                   [ 72%]
+tests\test_scalping_reverse_exact_parameters.py .                        [ 72%]
+tests\test_scalping_reverse_opposite_comparison.py ....                  [ 73%]
+tests\test_short_position_sl_tp_exit_matching.py ..                      [ 73%]
+tests\test_strategies_page_position_display.py ..............            [ 74%]
+tests\test_strategy_integration.py ..........                            [ 75%]
+tests\test_strategy_level_limit_stopping.py .........                    [ 76%]
+tests\test_strategy_level_risk_config.py ...............                 [ 77%]
+tests\test_strategy_registration_async.py ...                            [ 77%]
+tests\test_strategy_runner.py ....                                       [ 77%]
+tests\test_strategy_scalping.py ......................                   [ 79%]
+tests\test_strategy_start_stop_times.py ........                         [ 80%]
+tests\test_strategy_statistics_database.py ....                          [ 80%]
+tests\test_structured_logging.py ......                                  [ 81%]
+tests\test_telegram_commands.py ........................................ [ 84%]
+.                                                                        [ 84%]
+tests\test_test_accounts.py ..................                           [ 86%]
+tests\test_time_handling.py ..................................           [ 88%]
+tests\test_tp_sl_order_error_handling.py ...........                     [ 89%]
+tests\test_trade_fees_and_fields_storage.py .......                      [ 90%]
+tests\test_trade_frequency_limiter.py .........                          [ 91%]
+tests\test_trailing_stop.py .............                                [ 92%]
+tests\test_trailing_stop_tracing.py ....                                 [ 92%]
+tests\test_walk_forward.py .........................                     [ 94%]
+tests\test_walk_forward_base_strategy_independence.py ..                 [ 94%]
+tests\test_walk_forward_optimization.py ............                     [ 95%]
+tests\test_walk_forward_optimization_verification.py .....               [ 96%]
+tests\test_walk_forward_progress_tracking.py ........................... [ 98%]
+..............                                                           [ 99%]
+tests\test_walk_forward_storage.py .......                               [100%]
+
+================================== FAILURES ===================================
+____________ TestFCMNotifierUnit.test_fcm_notifier_initialization _____________
+tests\test_fcm_integration.py:66: in test_fcm_notifier_initialization
+    assert FIREBASE_AVAILABLE, "Firebase not available"
+E   AssertionError: Firebase not available
+E   assert False
+_________ TestFCMNotifierUnit.test_fcm_notifier_with_mock_credentials _________
+tests\test_fcm_integration.py:92: in test_fcm_notifier_with_mock_credentials
+    mock_creds.Certificate.assert_called_once()
+C:\Python312\Lib\unittest\mock.py:923: in assert_called_once
+    raise AssertionError(msg)
+E   AssertionError: Expected 'Certificate' to have been called once. Called 0 times.
+---------------------------- Captured stderr call -----------------------------
+[32m2026-02-17 11:03:55[0m | [33m[1mWARNING [0m | [33m[1mfirebase-admin package not installed. FCM notifications disabled.[0m
+_________________ TestFCMMessageFormat.test_message_creation __________________
+tests\test_fcm_integration.py:101: in test_message_creation
+    from firebase_admin import messaging
+E   ModuleNotFoundError: No module named 'firebase_admin'
+______________ TestFCMMessageFormat.test_batch_message_creation _______________
+tests\test_fcm_integration.py:129: in test_batch_message_creation
+    from firebase_admin import messaging
+E   ModuleNotFoundError: No module named 'firebase_admin'
+____________________________ test_firebase_import _____________________________
+tests\test_fcm_integration.py:432: in test_firebase_import
+    import firebase_admin
+E   ModuleNotFoundError: No module named 'firebase_admin'
+____________________________ test_send_each_exists ____________________________
+tests\test_fcm_integration.py:438: in test_send_each_exists
+    from firebase_admin import messaging
+E   ModuleNotFoundError: No module named 'firebase_admin'
+__________________________ test_fcm_notifier_import ___________________________
+tests\test_fcm_integration.py:444: in test_fcm_notifier_import
+    assert FIREBASE_AVAILABLE, "Firebase not available"
+E   AssertionError: Firebase not available
+E   assert False
+____________________________ test_message_creation ____________________________
+tests\test_fcm_integration.py:448: in test_message_creation
+    from firebase_admin import messaging
+E   ModuleNotFoundError: No module named 'firebase_admin'
+============================== warnings summary ===============================
+..\..\..\Python312\Lib\site-packages\binance\ws\websocket_api.py:4
+..\..\..\Python312\Lib\site-packages\binance\ws\websocket_api.py:4
+  C:\Python312\Lib\site-packages\binance\ws\websocket_api.py:4: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    from websockets import WebSocketClientProtocol  # type: ignore
+
+..\..\..\Python312\Lib\site-packages\websockets\legacy\__init__.py:6
+  C:\Python312\Lib\site-packages\websockets\legacy\__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+..\AppData\Roaming\Python\Python312\site-packages\starlette\formparsers.py:12
+  C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\starlette\formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+..\AppData\Roaming\Python\Python312\site-packages\pydantic\_internal\_config.py:291
+..\AppData\Roaming\Python\Python312\site-packages\pydantic\_internal\_config.py:291
+  C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\pydantic\_internal\_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+..\..\..\Python312\Lib\site-packages\binance\helpers.py:96
+  C:\Python312\Lib\site-packages\binance\helpers.py:96: DeprecationWarning: There is no current event loop
+    loop = asyncio.get_event_loop()
+
+tests/test_android_app_endpoints.py::TestAndroidTradeEndpoints::test_get_trades_list_endpoint
+  C:\Python312\Lib\concurrent\futures\_base.py:149: RuntimeWarning: coroutine 'Connection._cancel' was never awaited
+    future._condition.acquire()
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_android_app_endpoints.py::TestAndroidEndpointResponseStructures::test_logs_returns_log_response
+  C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\pydantic\_internal\_model_construction.py:305: RuntimeWarning: coroutine 'Connection._cancel' was never awaited
+    def init_private_attributes(self: BaseModel, context: Any, /) -> None:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_async_database.py::test_async_database_connection
+  C:\Python312\Lib\site-packages\sqlalchemy\util\queue.py:303: RuntimeWarning: coroutine 'Connection._cancel' was never awaited
+    raise Empty() from err
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_async_database.py::test_concurrent_async_queries
+  C:\Users\teme2\Binance Bot\app\core\database.py:484: SAWarning: The garbage collector is trying to clean up non-checked-in connection <AdaptedConnection <asyncpg.connection.Connection object at 0x0000023127339C70>>, which will be terminated.  Please ensure that SQLAlchemy pooled connections are returned to the pool explicitly, either by calling ``close()`` or by using appropriate context managers to manage their lifecycle.
+    async with _async_engine.connect() as conn:
+
+tests/test_async_database.py::test_concurrent_async_queries
+  C:\Users\teme2\Binance Bot\app\core\database.py:484: SAWarning: The garbage collector is trying to clean up non-checked-in connection <AdaptedConnection <asyncpg.connection.Connection object at 0x0000023128879130>>, which will be terminated.  Please ensure that SQLAlchemy pooled connections are returned to the pool explicitly, either by calling ``close()`` or by using appropriate context managers to manage their lifecycle.
+    async with _async_engine.connect() as conn:
+
+tests/test_async_database.py::test_concurrent_async_queries
+  C:\Users\teme2\Binance Bot\app\core\database.py:484: SAWarning: The garbage collector is trying to clean up non-checked-in connection <AdaptedConnection <asyncpg.connection.Connection object at 0x000002312887B6B0>>, which will be terminated.  Please ensure that SQLAlchemy pooled connections are returned to the pool explicitly, either by calling ``close()`` or by using appropriate context managers to manage their lifecycle.
+    async with _async_engine.connect() as conn:
+
+tests/test_async_database.py::test_concurrent_async_queries
+  C:\Python312\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py:203: RuntimeWarning: coroutine 'Connection._cancel' was never awaited
+    result = context.switch(value)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_backtesting.py::TestBacktestingCalculations::test_pnl_calculation_with_leverage
+  C:\Python312\Lib\copyreg.py:119: SAWarning: The garbage collector is trying to clean up non-checked-in connection <AdaptedConnection <asyncpg.connection.Connection object at 0x0000023128927200>>, which will be terminated.  Please ensure that SQLAlchemy pooled connections are returned to the pool explicitly, either by calling ``close()`` or by using appropriate context managers to manage their lifecycle.
+    names = cls.__dict__.get("__slotnames__")
+
+tests/test_backtesting_pagination.py::TestHistoricalKlinesPagination::test_large_range_with_pagination
+  C:\Users\teme2\Binance Bot\tests\test_backtesting_pagination.py:48: RuntimeWarning: coroutine 'Connection._cancel' was never awaited
+    high_price = max(open_price, close_price) + 0.5
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_critical_race_conditions.py::TestPersistenceOrdering::test_tc25_db_succeeds_redis_fails
+  C:\Python312\Lib\unittest\mock.py:2185: RuntimeWarning: coroutine 'sleep' was never awaited
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_daily_limit_stops_strategies.py::TestDailyLimitStopsStrategies::test_daily_limit_stops_only_account_strategies
+tests/test_daily_limit_stops_strategies.py::TestDailyLimitStopsStrategies::test_daily_limit_status_is_stopped_by_risk_not_stopped
+tests/test_daily_limit_stops_strategies.py::TestDailyLimitStopsStrategies::test_daily_limit_stops_strategies_with_positions
+  C:\Users\teme2\Binance Bot\app\services\strategy_runner.py:1256: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    task.cancel()
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_order_execution.py::TestTradeTrackingAndPersistence::test_trade_values_properly_tracked_in_memory
+tests/test_order_execution.py::TestTradeTrackingAndPersistence::test_multiple_trades_values_tracked_correctly
+tests/test_order_execution.py::TestTradeTrackingAndPersistence::test_invalid_trade_filtered_out
+tests/test_order_execution.py::TestTradeTrackingAndPersistence::test_trades_can_be_retrieved_after_tracking
+tests/test_order_execution.py::TestTradeTrackingAndPersistence::test_trade_with_none_avg_price_handled_correctly
+  C:\Users\teme2\Binance Bot\tests\test_order_execution.py:726: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    created_at=datetime.utcnow(),
+
+tests/test_strategy_registration_async.py::TestStrategyRegistrationAsyncDependency::test_await_get_database_service_async_returns_service
+tests/test_strategy_registration_async.py::TestStrategyRegistrationAsyncDependency::test_async_get_user_accounts_can_be_called_on_service
+  C:\Python312\Lib\asyncio\events.py:84: RuntimeWarning: coroutine 'DatabaseService.async_get_user_accounts' was never awaited
+    self._context.run(self._callback, *self._args)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_strategy_registration_async.py::TestStrategyRegistrationAsyncDependency::test_get_database_service_async_without_await_returns_coroutine
+  C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\_pytest\python.py:159: RuntimeWarning: coroutine 'get_database_service_async' was never awaited
+    result = testfunction(**testargs)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_walk_forward_progress_tracking.py::TestWalkForwardAPIEndpoints::test_cancel_walk_forward_endpoint
+  C:\Users\teme2\AppData\Roaming\Python\Python312\site-packages\starlette\middleware\base.py:26: RuntimeWarning: coroutine 'start_walk_forward_analysis.<locals>.run_analysis' was never awaited
+    def __init__(self, scope: Scope, receive: Receive):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_fcm_integration.py::TestFCMNotifierUnit::test_fcm_notifier_initialization
+FAILED tests/test_fcm_integration.py::TestFCMNotifierUnit::test_fcm_notifier_with_mock_credentials
+FAILED tests/test_fcm_integration.py::TestFCMMessageFormat::test_message_creation
+FAILED tests/test_fcm_integration.py::TestFCMMessageFormat::test_batch_message_creation
+FAILED tests/test_fcm_integration.py::test_firebase_import - ModuleNotFoundEr...
+FAILED tests/test_fcm_integration.py::test_send_each_exists - ModuleNotFoundE...
+FAILED tests/test_fcm_integration.py::test_fcm_notifier_import - AssertionErr...
+FAILED tests/test_fcm_integration.py::test_message_creation - ModuleNotFoundE...
+===== 8 failed, 1208 passed, 6 skipped, 29 warnings in 497.91s (0:08:17) ======
