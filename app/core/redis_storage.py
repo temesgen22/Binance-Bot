@@ -45,6 +45,30 @@ class RedisStorage:
         """Generate Redis key for a strategy."""
         return f"binance_bot:{prefix}:{strategy_id}"
     
+    def get(self, key: str) -> Optional[str]:
+        """Get a value by key (for generic cache use, e.g. risk config cache). Returns raw string or None."""
+        if not self.enabled or not self._client:
+            return None
+        try:
+            return self._client.get(key)
+        except Exception as exc:
+            logger.debug(f"Redis get {key!r} failed: {exc}")
+            return None
+    
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> bool:
+        """Set a value by key with optional TTL in seconds (for generic cache use)."""
+        if not self.enabled or not self._client:
+            return False
+        try:
+            if ex is not None:
+                self._client.set(key, value, ex=ex)
+            else:
+                self._client.set(key, value)
+            return True
+        except Exception as exc:
+            logger.debug(f"Redis set {key!r} failed: {exc}")
+            return False
+    
     def save_strategy(self, strategy_id: str, strategy_data: dict) -> bool:
         """Save strategy to Redis."""
         if not self.enabled or not self._client:
