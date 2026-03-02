@@ -331,7 +331,70 @@ class StrategyPersistence:
             )
         except Exception as exc:
             logger.error(f"Failed to load strategies from Redis: {exc}", exc_info=True)
-    
+
+    async def _clear_position_state_and_persist(self, summary: StrategySummary) -> None:
+        """Clear position state in summary and DB, clear TP/SL meta, cancel TP/SL orders. Shared by REST and WebSocket path."""
+        if not isinstance(summary.meta, dict):
+            summary.meta = {}
+        self.update_strategy_in_db(
+            summary.id,
+            save_to_redis=True,
+            entry_price=None,
+            position_size=0,
+            unrealized_pnl=0,
+            position_side=None,
+        )
+        summary.entry_price = None
+        summary.position_size = 0
+        summary.unrealized_pnl = 0
+        summary.position_side = None
+        has_tp_sl = bool(
+            summary.meta.get("tp_sl_orders", {}).get("tp_order_id")
+            or summary.meta.get("tp_sl_orders", {}).get("sl_order_id")
+        )
+        if has_tp_sl and self.order_manager:
+            try:
+                await self.order_manager.cancel_tp_sl_orders(summary)
+            except Exception as exc:
+                logger.debug(f"[{summary.id}] Error cancelling TP/SL orders (may already be filled): {exc}")
+        if "tp_sl_orders" in summary.meta:
+            summary.meta["tp_sl_orders"] = {}
+            self.update_strategy_in_db(summary.id, save_to_redis=True, meta=summary.meta)
+
+    async def apply_position_data(self, summary: StrategySummary, position_data: Dict) -> None:
+        """Apply position data from WebSocket (or other source) to summary and persist. Shared by User Data Stream callback."""
+        position_amt = position_data.get("position_amt", 0) or 0
+        if position_amt == 0:
+            await self._clear_position_state_and_persist(summary)
+            return
+        position_size = abs(float(position_amt))
+        entry_price = float(position_data.get("entry_price") or 0)
+        unrealized_pnl = float(position_data.get("unrealized_pnl") or 0)
+        position_side = (position_data.get("position_side") or "BOTH").upper()
+        if position_side not in ("LONG", "SHORT"):
+            position_side = "LONG" if position_amt > 0 else "SHORT"
+        current_price = summary.current_price
+        if position_data.get("mark_price") is not None:
+            try:
+                current_price = float(position_data["mark_price"])
+            except (TypeError, ValueError):
+                pass
+        summary.position_size = position_size
+        summary.entry_price = entry_price
+        summary.unrealized_pnl = unrealized_pnl
+        summary.position_side = position_side
+        if current_price is not None:
+            summary.current_price = current_price
+        updates = dict(
+            position_size=position_size,
+            entry_price=entry_price,
+            unrealized_pnl=unrealized_pnl,
+            position_side=position_side,
+        )
+        if current_price is not None:
+            updates["current_price"] = current_price
+        self.update_strategy_in_db(summary.id, save_to_redis=True, **updates)
+
     async def update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy.
         
@@ -418,69 +481,10 @@ class StrategyPersistence:
                         unrealized_pnl=new_unrealized_pnl,
                     )
             else:
-                # No open position
-                # Check None first - if position_size is None, it means no position was ever opened
+                # No open position: use shared clear path (REST and WebSocket)
                 position_was_closed = summary.position_size is not None and summary.position_size != 0
                 if position_was_closed:
-                    # CRITICAL: Update database FIRST (single source of truth)
-                    # Clear position state in database
-                    self.update_strategy_in_db(
-                        summary.id,
-                        save_to_redis=True,
-                        entry_price=None,
-                        position_size=0,
-                        unrealized_pnl=0,
-                        position_side=None,
-                    )
-                    
-                    # Update summary (memory)
-                    summary.entry_price = None
-                    summary.position_size = 0
-                    summary.unrealized_pnl = 0
-                    summary.position_side = None
-                    
-                    # Clear TP/SL order IDs when position closes
-                    has_existing_orders = bool(summary.meta.get("tp_sl_orders", {}).get("tp_order_id") or 
-                                              summary.meta.get("tp_sl_orders", {}).get("sl_order_id"))
-                    if has_existing_orders:
-                        # Check if any TP/SL orders were filled
-                        try:
-                            open_orders = await asyncio.to_thread(account_client.get_open_orders, summary.symbol)
-                            open_order_ids = {o.get("orderId") for o in open_orders}
-                            tp_order_id = summary.meta.get("tp_sl_orders", {}).get("tp_order_id")
-                            sl_order_id = summary.meta.get("tp_sl_orders", {}).get("sl_order_id")
-                            
-                            tp_filled = tp_order_id and tp_order_id not in open_order_ids
-                            sl_filled = sl_order_id and sl_order_id not in open_order_ids
-                            
-                            exit_reason = "TP" if tp_filled else ("SL" if sl_filled else "UNKNOWN")
-                            logger.info(
-                                f"[{summary.id}] 🔴 Position CLOSED via Binance native {exit_reason} order "
-                                f"(TP_filled: {tp_filled}, SL_filled: {sl_filled}). "
-                                f"Clearing TP/SL order metadata."
-                            )
-                        except Exception as exc:
-                            logger.info(
-                                f"[{summary.id}] 🔴 Position CLOSED (possibly via native TP/SL, unable to verify): {exc}. "
-                                f"Clearing TP/SL order metadata."
-                            )
-                        
-                        # Try to cancel orders (they may already be filled/executed)
-                        if self.order_manager:
-                            try:
-                                await self.order_manager.cancel_tp_sl_orders(summary)
-                            except Exception as exc:
-                                logger.debug(f"[{summary.id}] Error cancelling TP/SL orders (may already be filled): {exc}")
-                        
-                        # Clear metadata regardless
-                        if "tp_sl_orders" in summary.meta:
-                            summary.meta["tp_sl_orders"] = {}
-                            # Update database with cleared metadata
-                            self.update_strategy_in_db(
-                                summary.id,
-                                save_to_redis=True,
-                                meta=summary.meta,
-                            )
+                    await self._clear_position_state_and_persist(summary)
         except Exception as exc:
             logger.debug(f"Failed to update position info for {summary.symbol}: {exc}")
             # Calculate unrealized PnL manually if we have entry price and current price

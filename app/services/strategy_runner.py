@@ -33,6 +33,7 @@ from app.services.strategy_persistence import StrategyPersistence
 from app.services.strategy_order_manager import StrategyOrderManager
 from app.services.strategy_executor import StrategyExecutor
 from app.services.strategy_statistics import StrategyStatistics
+from app.core.futures_user_data_stream_manager import FuturesUserDataStreamManager
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
@@ -159,6 +160,8 @@ class StrategyRunner:
         self._trades: Dict[str, List[OrderResponse]] = {}  # Track trades per strategy
         self._cleanup_task: Optional[asyncio.Task] = None  # Periodic cleanup task
         self._cleanup_running: bool = False  # Flag to control cleanup loop
+        self._position_refresh_task: Optional[asyncio.Task] = None  # Periodic position refresh
+        self._position_refresh_running: bool = False  # Flag to control position refresh loop
         
         # Hot-swap support: Track parameter versions and per-strategy locks
         self._params_versions: Dict[str, int] = {}  # Track parameter version for each strategy
@@ -309,6 +312,12 @@ class StrategyRunner:
             strategy_service=strategy_service,
             user_id=user_id,
         )
+
+        # User Data Stream for real-time position updates (one WebSocket per account)
+        self.user_data_stream_manager = FuturesUserDataStreamManager(
+            account_manager=self.account_manager,
+            on_position_update=self._on_user_data_position_update,
+        )
         
         # Load strategies on startup
         if strategy_service and user_id:
@@ -328,6 +337,32 @@ class StrategyRunner:
     def _get_account_client(self, account_id: str) -> BinanceClient:
         """Get client for an account (delegates to account_manager)."""
         return self.account_manager.get_account_client(account_id)
+
+    async def _on_user_data_position_update(
+        self, account_id: str, symbol: str, position_data: Dict
+    ) -> None:
+        """Callback from User Data Stream manager: apply position update to matching strategies."""
+        account_id = (account_id or "default").lower()
+        position_side = (position_data.get("position_side") or "").upper()
+        for summary in list(self._strategies.values()):
+            if (summary.account_id or "default").lower() != account_id:
+                continue
+            if (summary.symbol or "").strip().upper() != (symbol or "").strip().upper():
+                continue
+            # In hedge mode, match position_side so we don't update LONG strategy with SHORT payload
+            if position_side in ("LONG", "SHORT") and getattr(summary, "position_side", None):
+                if (summary.position_side or "").upper() != position_side:
+                    continue
+            try:
+                await self.state_manager.apply_position_data(summary, position_data)
+            except Exception as exc:
+                logger.warning(
+                    f"[{summary.id}] apply_position_data failed from User Data Stream: {exc}",
+                    exc_info=True,
+                )
+            # In hedge mode, one event updates one side; avoid applying same payload to a second strategy
+            if position_side in ("LONG", "SHORT"):
+                break
     
     def _check_symbol_conflict(
         self,
@@ -650,6 +685,74 @@ class StrategyRunner:
         self._cleanup_task = None
         logger.info("✅ Periodic dead task cleanup stopped")
 
+    async def _periodic_position_refresh_loop(self, interval_seconds: int) -> None:
+        """Periodic background task to refresh open position info (PnL, price) for running strategies.
+
+        Runs every interval_seconds so the UI/API see up-to-date position data without waiting
+        for the next strategy evaluation (which is tied to candle interval, e.g. 1m or 5m).
+        """
+        logger.info(f"🔄 Starting periodic position refresh (interval: {interval_seconds}s)")
+        while self._position_refresh_running:
+            try:
+                # Refresh position for each running strategy (then sleep)
+                running_ids = list(self._tasks.keys())
+                for strategy_id in running_ids:
+                    summary = self._strategies.get(strategy_id)
+                    if not summary:
+                        continue
+                    try:
+                        await asyncio.wait_for(
+                            self.state_manager.update_position_info(summary),
+                            timeout=15.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            f"[{strategy_id}] Position refresh timed out (non-critical)"
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            f"[{strategy_id}] Position refresh failed: {exc} (non-critical)"
+                        )
+                await asyncio.sleep(interval_seconds)
+            except asyncio.CancelledError:
+                logger.debug("Periodic position refresh task cancelled (shutdown)")
+                break
+            except Exception as exc:
+                logger.warning(
+                    f"Error in periodic position refresh: {exc}. Continuing...",
+                    exc_info=True,
+                )
+                await asyncio.sleep(5)
+        logger.info("🛑 Periodic position refresh stopped")
+
+    def start_periodic_position_refresh(self, interval_seconds: int) -> None:
+        """Start the periodic position refresh task."""
+        if self._position_refresh_task is not None and not self._position_refresh_task.done():
+            logger.warning("Periodic position refresh is already running")
+            return
+        self._position_refresh_running = True
+        self._position_refresh_task = asyncio.create_task(
+            self._periodic_position_refresh_loop(interval_seconds)
+        )
+        logger.info(f"✅ Started periodic position refresh (interval: {interval_seconds}s)")
+
+    async def stop_periodic_position_refresh(self) -> None:
+        """Stop the periodic position refresh task gracefully."""
+        if self._position_refresh_task is None or self._position_refresh_task.done():
+            return
+        logger.info("🛑 Stopping periodic position refresh...")
+        self._position_refresh_running = False
+        self._position_refresh_task.cancel()
+        try:
+            await asyncio.wait_for(self._position_refresh_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Position refresh task did not stop within timeout")
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning(f"Error stopping position refresh task: {exc}")
+        self._position_refresh_task = None
+        logger.info("✅ Periodic position refresh stopped")
 
     def register(self, payload: CreateStrategyRequest, account_uuid: Optional["UUID"] = None) -> StrategySummary:
         """Register a new strategy.
@@ -1033,6 +1136,15 @@ class StrategyRunner:
                 # asyncio.Lock is not re-entrant, so nested acquisition would deadlock
                 self._tasks[strategy_id] = task
                 summary.status = StrategyState.running
+            
+            # Start User Data Stream for this account if enabled (real-time position updates)
+            try:
+                from app.core.config import get_settings
+                settings = get_settings()
+                if getattr(settings, "use_user_data_stream_for_position", True):
+                    asyncio.create_task(self.user_data_stream_manager.ensure_stream(account_id))
+            except Exception as stream_err:
+                logger.debug(f"User Data Stream ensure_stream skipped: {stream_err}")
             
             # CRITICAL FIX: Check if task failed immediately after creation
             # Give it a tiny moment to start, then check if it's already done (failed)

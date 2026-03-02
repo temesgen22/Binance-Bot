@@ -64,7 +64,17 @@ class StrategyExecutor:
         """Build a short user-facing reason for order execution failure (e.g. for notifications and state)."""
         msg = str(exc).strip()
         msg_lower = msg.lower()
+        # Binance -2019 = "Margin is insufficient" — check attribute first so we always show balance message
+        error_code = getattr(exc, "error_code", None) or getattr(exc, "code", None)
+        if error_code == -2019:
+            return "Insufficient balance or margin"
+        if "-2019" in msg:
+            return "Insufficient balance or margin"
         if "insufficient" in msg_lower and ("balance" in msg_lower or "margin" in msg_lower):
+            return "Insufficient balance or margin"
+        if "margin is insufficient" in msg_lower or "insufficient margin" in msg_lower:
+            return "Insufficient balance or margin"
+        if "not enough" in msg_lower and ("balance" in msg_lower or "margin" in msg_lower):
             return "Insufficient balance or margin"
         if "redisstorage" in msg_lower or "has no attribute" in msg_lower and "get" in msg_lower:
             return "Service error (cache/config)"
@@ -72,11 +82,8 @@ class StrategyExecutor:
             return "Position already closed (order rejected)"
         if "timeout" in msg_lower or "timed out" in msg_lower:
             return "Order execution timed out"
-        if "error_code" in msg_lower or "-2019" in msg or "-2022" in msg:
-            if "-2019" in msg:
-                return "Insufficient balance or margin"
-            if "-2022" in msg:
-                return "Position already closed (order rejected)"
+        if "-2022" in msg:
+            return "Position already closed (order rejected)"
         return msg[:400] if msg else type(exc).__name__
     
     async def run_loop(

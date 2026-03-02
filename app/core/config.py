@@ -67,6 +67,16 @@ class Settings(BaseSettings):
         alias="DEAD_TASK_CLEANUP_INTERVAL_SECONDS",
         description="Interval in seconds for periodic cleanup of dead strategy tasks (default: 60 seconds)"
     )
+    position_refresh_interval_seconds: int = Field(
+        default=15,
+        alias="POSITION_REFRESH_INTERVAL_SECONDS",
+        description="Interval in seconds for refreshing open position info (PnL, price) for running strategies (default: 15)"
+    )
+    use_user_data_stream_for_position: bool = Field(
+        default=True,
+        alias="USE_USER_DATA_STREAM_FOR_POSITION",
+        description="Use Binance Futures User Data WebSocket for real-time position updates (default: True). If False, only REST and periodic refresh are used.",
+    )
     api_port: int = Field(default=8000, alias="API_PORT")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")

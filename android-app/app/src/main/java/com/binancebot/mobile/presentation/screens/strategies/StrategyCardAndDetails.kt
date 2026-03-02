@@ -563,11 +563,9 @@ fun StrategyHealthIndicator(
     }
     
     val healthStatus = health?.healthStatus
-    val hasOrderFailure = health?.orderFailure?.reason != null
     
     val color = when {
         isLoading -> MaterialTheme.colorScheme.onSurfaceVariant
-        hasOrderFailure -> MaterialTheme.colorScheme.errorContainer
         healthStatus == "execution_stale" -> MaterialTheme.colorScheme.error
         healthStatus == "task_dead" -> MaterialTheme.colorScheme.error
         healthStatus == "no_execution_tracking" -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -591,24 +589,22 @@ fun StrategyHealthIndicator(
                 color = color
             )
         } else {
-            val vector = when {
-                hasOrderFailure -> Icons.Default.Warning
-                healthStatus == "execution_stale" -> Icons.Default.Warning
-                healthStatus == "task_dead" -> Icons.Default.Cancel
-                healthStatus == "no_execution_tracking" -> Icons.Default.Help
-                healthStatus == "no_recent_orders" -> Icons.Default.Warning
-                healthStatus == "healthy" -> Icons.Default.CheckCircle
+            val vector = when (healthStatus) {
+                "execution_stale" -> Icons.Default.Warning
+                "task_dead" -> Icons.Default.Cancel
+                "no_execution_tracking" -> Icons.Default.Help
+                "no_recent_orders" -> Icons.Default.Warning
+                "healthy" -> Icons.Default.CheckCircle
                 else -> Icons.Default.CheckCircle
             }
             Icon(
                 imageVector = if (health == null && !loadWhenVisible) Icons.Default.Remove else vector,
-                contentDescription = when {
-                    hasOrderFailure -> "Order not executed"
-                    healthStatus == "execution_stale" -> "Stale"
-                    healthStatus == "task_dead" -> "Dead"
-                    healthStatus == "no_execution_tracking" -> "No tracking"
-                    healthStatus == "no_recent_orders" -> "No orders"
-                    healthStatus == "healthy" -> "Healthy"
+                contentDescription = when (healthStatus) {
+                    "execution_stale" -> "Stale"
+                    "task_dead" -> "Dead"
+                    "no_execution_tracking" -> "No tracking"
+                    "no_recent_orders" -> "No orders"
+                    "healthy" -> "Healthy"
                     else -> "Health status"
                 },
                 tint = color,
@@ -639,39 +635,6 @@ fun StrategyHealthDetailsSection(
             }
             
             DetailRow("Status", statusText)
-            
-            // Show why strategy is not executing orders (e.g. insufficient balance, timeout)
-            health.orderFailure?.reason?.let { reason ->
-                HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))
-                Text(
-                    text = "Order not executed",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Text(
-                    text = reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = Spacing.Tiny)
-                )
-                health.orderFailure.at?.let { at ->
-                    Text(
-                        text = "At: $at",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(top = Spacing.Tiny)
-                    )
-                }
-                health.orderFailure.errorType?.let { errType ->
-                    Text(
-                        text = "Error type: $errType",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(top = Spacing.Tiny)
-                    )
-                }
-            }
             
             health.issues?.takeIf { it.isNotEmpty() }?.let { issues ->
                 HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.Small))

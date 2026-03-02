@@ -448,12 +448,10 @@ internal fun StrategyHealthAlertsCard(
             strategies.take(3).forEach { strategy ->
                 val health = strategyHealth[strategy.id]
                 val healthStatus = health?.healthStatus
-                val orderFailureReason = health?.orderFailure?.reason
-                val statusText = when {
-                    !orderFailureReason.isNullOrBlank() -> "Order not executed: ${orderFailureReason.take(40)}${if (orderFailureReason.length > 40) "…" else ""}"
-                    healthStatus == "execution_stale" -> "Stale"
-                    healthStatus == "task_dead" -> "Dead"
-                    healthStatus == "no_recent_orders" -> "No Orders"
+                val statusText = when (healthStatus) {
+                    "execution_stale" -> "Stale"
+                    "task_dead" -> "Dead"
+                    "no_recent_orders" -> "No Orders"
                     else -> "Issue"
                 }
                 Row(
@@ -656,13 +654,11 @@ internal fun EnhancedStrategyCard(
                     // Health indicator
                     strategyHealth?.let { health ->
                         val healthStatus = health.healthStatus
-                        val hasOrderFailure = health.orderFailure?.reason != null
-                        if (hasOrderFailure || healthStatus in listOf("execution_stale", "task_dead", "no_recent_orders")) {
-                            val (iconVector, color) = when {
-                                hasOrderFailure -> Icons.Default.Warning to MaterialTheme.colorScheme.errorContainer
-                                healthStatus == "execution_stale" -> Icons.Default.Warning to MaterialTheme.colorScheme.error
-                                healthStatus == "task_dead" -> Icons.Default.Cancel to MaterialTheme.colorScheme.error
-                                healthStatus == "no_recent_orders" -> Icons.Default.Warning to MaterialTheme.colorScheme.errorContainer
+                        if (healthStatus in listOf("execution_stale", "task_dead", "no_recent_orders")) {
+                            val (iconVector, color) = when (healthStatus) {
+                                "execution_stale" -> Icons.Default.Warning to MaterialTheme.colorScheme.error
+                                "task_dead" -> Icons.Default.Cancel to MaterialTheme.colorScheme.error
+                                "no_recent_orders" -> Icons.Default.Warning to MaterialTheme.colorScheme.errorContainer
                                 else -> Icons.Default.Help to MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             Box(
@@ -671,11 +667,10 @@ internal fun EnhancedStrategyCard(
                             ) {
                                 Icon(
                                     imageVector = iconVector,
-                                    contentDescription = when {
-                                        hasOrderFailure -> "Order not executed"
-                                        healthStatus == "execution_stale" -> "Stale"
-                                        healthStatus == "task_dead" -> "Dead"
-                                        healthStatus == "no_recent_orders" -> "No orders"
+                                    contentDescription = when (healthStatus) {
+                                        "execution_stale" -> "Stale"
+                                        "task_dead" -> "Dead"
+                                        "no_recent_orders" -> "No orders"
                                         else -> "Health"
                                     },
                                     tint = color,

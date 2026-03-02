@@ -95,7 +95,10 @@ class BinanceClient:
                 self._sync_time_with_binance()
         # Store testnet setting for WebSocket initialization
         self.testnet = testnet
-        
+        # Store credentials for User Data Stream (listenKey) and other signed REST calls
+        self._api_key = api_key
+        self._api_secret = api_secret
+
         # Cache for symbol precision info
         self._precision_cache: Dict[str, int] = {}
         # Cache for minimum notional values
@@ -304,6 +307,78 @@ class BinanceClient:
                 raise BinanceAPIError(error_msg, status_code=status_code, error_code=error_code, details={"symbol": symbol, "leverage": leverage}) from exc
         except (ConnectionError, TimeoutError, OSError) as exc:
             raise BinanceNetworkError(f"Network error setting leverage for {symbol}: {exc}", details={"symbol": symbol}) from exc
+
+    def create_listen_key(self) -> str:
+        """Create a listen key for Futures User Data Stream (WebSocket).
+        Required for real-time position/order updates. Key is valid 60 minutes.
+        Raises:
+            BinanceAPIError: If API call fails
+        """
+        import hashlib
+        import hmac as hm
+
+        import requests
+
+        rest = self._ensure()
+        try:
+            if hasattr(rest, "futures_create_listen_key"):
+                out = rest.futures_create_listen_key()
+                return str(out.get("listenKey", ""))
+        except AttributeError:
+            pass
+
+        base = "https://testnet.binancefuture.com" if self.testnet else "https://fapi.binance.com"
+        url = f"{base}/fapi/v1/listenKey"
+        ts = int(time.time() * 1000) + getattr(self, "_time_offset_ms", 0)
+        params = f"timestamp={ts}"
+        sig = hm.new(
+            self._api_secret.encode("utf-8"),
+            params.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        resp = requests.post(
+            f"{url}?{params}&signature={sig}",
+            headers={"X-MBX-APIKEY": self._api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return str(data.get("listenKey", ""))
+
+    def keepalive_listen_key(self, listen_key: str) -> None:
+        """Extend listen key validity by 60 minutes.
+        Raises:
+            BinanceAPIError: If API call fails
+        """
+        import hashlib
+        import hmac as hm
+        import urllib.parse
+
+        import requests
+
+        rest = self._ensure()
+        try:
+            if hasattr(rest, "futures_keepalive_listen_key"):
+                rest.futures_keepalive_listen_key(listenKey=listen_key)
+                return
+        except AttributeError:
+            pass
+
+        base = "https://testnet.binancefuture.com" if self.testnet else "https://fapi.binance.com"
+        url = f"{base}/fapi/v1/listenKey"
+        ts = int(time.time() * 1000) + getattr(self, "_time_offset_ms", 0)
+        params_str = f"listenKey={urllib.parse.quote(listen_key)}&timestamp={ts}"
+        sig = hm.new(
+            self._api_secret.encode("utf-8"),
+            params_str.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        resp = requests.put(
+            f"{url}?{params_str}&signature={sig}",
+            headers={"X-MBX-APIKEY": self._api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_price(self, symbol: str) -> float:

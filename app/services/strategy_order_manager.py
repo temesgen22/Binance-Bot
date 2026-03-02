@@ -582,9 +582,10 @@ class StrategyOrderManager:
                 "error_type": type(underlying_error).__name__,
             }
             
-            # Add Binance error code if available
-            if hasattr(underlying_error, 'error_code'):
-                error_details["binance_error_code"] = underlying_error.error_code
+            # Add Binance error code if available (library uses .code, our exceptions use .error_code)
+            binance_code = getattr(underlying_error, 'error_code', None) or getattr(underlying_error, 'code', None)
+            if binance_code is not None:
+                error_details["binance_error_code"] = binance_code
             if hasattr(underlying_error, 'status_code'):
                 error_details["status_code"] = underlying_error.status_code
             
@@ -602,6 +603,8 @@ class StrategyOrderManager:
             
             raise BinanceAPIError(
                 error_msg,
+                status_code=getattr(underlying_error, 'status_code', None),
+                error_code=binance_code,
                 details=error_details
             ) from underlying_error
         
