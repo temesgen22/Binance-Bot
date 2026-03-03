@@ -767,6 +767,11 @@ async def run_backtest(
     }
     interval_seconds = interval_seconds_map.get(interval, 60)
     
+    # For scalping/reverse_scalping, merge extracted params (including trailing_stop_activation_pct) so backtest uses same activation as live
+    backtest_params = request.params
+    if request.strategy_type in ("scalping", "reverse_scalping"):
+        backtest_params = {**extract_scalping_params(request.params), **request.params}
+    
     # Create strategy context
     context = StrategyContext(
         id="backtest",
@@ -774,7 +779,7 @@ async def run_backtest(
         symbol=request.symbol,
         leverage=request.leverage,
         risk_per_trade=request.risk_per_trade,
-        params=request.params,
+        params=backtest_params,
         interval_seconds=interval_seconds
     )
     

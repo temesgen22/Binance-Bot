@@ -113,6 +113,33 @@ class TestCircuitBreaker:
         
         # Should not trigger (below threshold of 5)
         assert breaker_state is None
+
+    def test_consecutive_losses_trigger_at_three_when_config_is_three(
+        self, mock_db_service, mock_strategy_runner, mock_trade_service
+    ):
+        """When risk config has max_consecutive_losses=3, exactly 3 consecutive losses trigger the breaker."""
+        config = Mock(spec=RiskManagementConfigResponse)
+        config.circuit_breaker_enabled = True
+        config.max_consecutive_losses = 3
+        config.rapid_loss_threshold_pct = 0.05
+        config.circuit_breaker_cooldown_minutes = 60
+        breaker = CircuitBreaker(
+            account_id="test_account",
+            config=config,
+            db_service=mock_db_service,
+            user_id=uuid4(),
+            strategy_runner=mock_strategy_runner,
+            trade_service=mock_trade_service,
+        )
+        strategy_id = "my_strategy"
+        trades = [Mock(net_pnl=-5.0), Mock(net_pnl=-3.0), Mock(net_pnl=-2.0)]  # 3 consecutive losses
+        breaker_state = breaker.check_consecutive_losses(strategy_id, trades)
+        assert breaker_state is not None
+        assert breaker_state.breaker_type == "consecutive_losses"
+        assert breaker_state.trigger_value == 3
+        assert breaker_state.threshold_value == 3
+        assert breaker_state.strategy_id == strategy_id
+        assert breaker.is_active("test_account", strategy_id) is True
     
     def test_consecutive_losses_win_breaks_streak(self, circuit_breaker):
         """Test that a win breaks the consecutive loss streak."""

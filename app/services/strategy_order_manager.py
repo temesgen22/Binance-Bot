@@ -1,7 +1,9 @@
 """Order execution and TP/SL management for strategies."""
 
 import asyncio
+from datetime import datetime, timezone
 from functools import partial
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional, Callable, List
 
 from loguru import logger
@@ -930,14 +932,41 @@ class StrategyOrderManager:
                             db_strategy_cb = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
                             if db_strategy_cb:
                                 def _run_breaker_checks() -> None:
-                                    recent = self.trade_service.get_recent_trades(
-                                        self.user_id,
-                                        strategy_id=db_strategy_cb.id,
-                                        limit=100,
-                                    )
-                                    # Include this close so consecutive loss count is up to date
-                                    recent = [order_response] + [t for t in recent if getattr(t, "order_id", None) != order_response.order_id]
-                                    breaker.check_consecutive_losses(summary.id, recent)
+                                    db = self.strategy_service.db_service
+                                    # Prefer pre-computed completed_trades table (no matching of raw trades)
+                                    recent_completed: List[any] = []
+                                    try:
+                                        recent_completed = db.get_recent_completed_trades(
+                                            self.user_id,
+                                            db_strategy_cb.id,
+                                            limit=100,
+                                        )
+                                    except Exception as e:
+                                        logger.debug(
+                                            f"[{summary.id}] Circuit breaker: completed_trades table unavailable ({e}), "
+                                            "falling back to raw trades + matching"
+                                        )
+                                    # Include current close if not already in DB (write may be async)
+                                    if recent_completed and getattr(recent_completed[0], "exit_order_id", None) == order_response.order_id:
+                                        pass  # already have this close
+                                    else:
+                                        synthetic = SimpleNamespace(
+                                            pnl_usd=float(order_response.realized_pnl or 0),
+                                            exit_time=order_response.timestamp or datetime.now(timezone.utc),
+                                            exit_order_id=order_response.order_id,
+                                        )
+                                        recent_completed = [synthetic] + list(recent_completed)
+                                    if recent_completed:
+                                        breaker.check_consecutive_losses(summary.id, recent_completed)
+                                    else:
+                                        # Fallback: use raw trades + matching (legacy path)
+                                        recent = self.trade_service.get_recent_trades(
+                                            self.user_id,
+                                            strategy_id=db_strategy_cb.id,
+                                            limit=100,
+                                        )
+                                        recent = [order_response] + [t for t in recent if getattr(t, "order_id", None) != order_response.order_id]
+                                        breaker.check_consecutive_losses(summary.id, recent)
                                     if breaker.config and getattr(breaker.config, "rapid_loss_timeframe_minutes", None):
                                         breaker.check_rapid_loss(account_id, breaker.config.rapid_loss_timeframe_minutes)
                                     elif breaker.config:

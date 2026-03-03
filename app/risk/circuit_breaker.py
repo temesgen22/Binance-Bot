@@ -229,12 +229,12 @@ class CircuitBreaker:
             if pnl < 0:
                 consecutive_losses += 1
             else:
-                break  # Win breaks the streak
-                # Can't determine - skip
-                continue
+                break  # Win or breakeven breaks the streak
         
         if consecutive_losses >= max_consecutive:
-            # Trigger breaker
+            # Trigger breaker (cooldown from risk config, e.g. 60 minutes)
+            cooldown_mins = (getattr(self.config, "circuit_breaker_cooldown_minutes", None) or 60) if self.config else 60
+            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=cooldown_mins)
             breaker_state = CircuitBreakerState(
                 breaker_type='consecutive_losses',
                 scope='strategy',
@@ -243,7 +243,7 @@ class CircuitBreaker:
                 threshold_value=max_consecutive,
                 status='active',
                 strategy_id=strategy_id,
-                cooldown_until=datetime.now(timezone.utc) + timedelta(hours=1)  # 1 hour cooldown
+                cooldown_until=cooldown_until
             )
             
             # Store breaker

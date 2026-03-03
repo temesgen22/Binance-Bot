@@ -11,6 +11,11 @@ Activation:
 - When activation_pct > 0%: trailing only starts after price reaches the
   activation threshold (entry ± activation_pct). Until then, TP/SL stay at entry-based levels.
 
+Trail step (standard behavior):
+- When trail_step_pct > 0%: best price is only updated when price has moved at least that
+  percentage from the *previous* best (e.g. 0.005 = 0.5%). Reduces noise and order churn.
+- When trail_step_pct == 0: best price updates on every favorable tick (legacy behavior).
+
 Example (Long Position):
 - Entry: 100,000
 - Initial TP: 105,000 (+5%)
@@ -61,6 +66,7 @@ class TrailingStopManager:
         position_type: Literal["LONG", "SHORT"],
         enabled: bool = True,
         activation_pct: float = 0.0,
+        trail_step_pct: float = 0.0,
     ) -> None:
         """
         Initialize trailing stop manager.
@@ -75,14 +81,19 @@ class TrailingStopManager:
                            If 0, trailing is active from the start: the first TP/SL update happens
                            when price moves past the initial best price (entry) in the favorable
                            direction. Default: 0.0
+            trail_step_pct: Minimum % price must move from *previous best* before best price updates
+                           (e.g. 0.005 = 0.5%). 0 = update on every favorable tick. Standard
+                           behavior to reduce noise and order churn.
         """
         self.entry_price = entry_price
         self.take_profit_pct = take_profit_pct
         self.stop_loss_pct = stop_loss_pct
         self.position_type = position_type
         self.enabled = enabled
-        self.activation_pct = activation_pct
-        
+        # Clamp to valid range in case params come from unvalidated source
+        self.activation_pct = max(0.0, min(0.1, float(activation_pct)))
+        self.trail_step_pct = max(0.0, min(0.1, float(trail_step_pct)))
+
         # Calculate activation threshold price
         if position_type == "LONG":
             self.activation_price = entry_price * (1 + activation_pct)
@@ -109,6 +120,7 @@ class TrailingStopManager:
             f"tp={self.current_tp:.8f}, sl={self.current_sl:.8f}, "
             f"type={position_type}, enabled={enabled}, "
             f"activation_pct={activation_pct:.4f} ({activation_pct*100:.2f}%), "
+            f"trail_step_pct={trail_step_pct:.4f} ({trail_step_pct*100:.2f}%), "
             f"activation_price={self.activation_price:.8f}, activated={self.activated}"
         )
     
@@ -159,13 +171,24 @@ class TrailingStopManager:
         should_update = False
         
         if self.position_type == "LONG":
-            # For long positions, trail up when price moves up
-            if current_price > self.best_price:
+            # For long positions, trail up when price moves up by at least trail_step_pct from best
+            # When trail_step_pct == 0: only strict move up (current_price > best) to avoid redundant updates.
+            # When trail_step_pct > 0: at least step (current_price >= threshold).
+            if self.trail_step_pct > 0:
+                threshold = self.best_price * (1 + self.trail_step_pct)
+                if current_price >= threshold:
+                    self.best_price = current_price
+                    should_update = True
+            elif current_price > self.best_price:
                 self.best_price = current_price
                 should_update = True
         else:  # SHORT
-            # For short positions, trail down when price moves down
-            if current_price < self.best_price:
+            if self.trail_step_pct > 0:
+                threshold = self.best_price * (1 - self.trail_step_pct)
+                if current_price <= threshold:
+                    self.best_price = current_price
+                    should_update = True
+            elif current_price < self.best_price:
                 self.best_price = current_price
                 should_update = True
         
@@ -253,7 +276,7 @@ class TrailingStopManager:
         """
         self.entry_price = entry_price
         self.best_price = entry_price
-        
+
         # Recalculate activation threshold
         if self.position_type == "LONG":
             self.activation_price = entry_price * (1 + self.activation_pct)

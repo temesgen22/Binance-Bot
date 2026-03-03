@@ -46,6 +46,7 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         "take_profit_pct": float(params.get("take_profit_pct", 0.004)),
         "stop_loss_pct": float(params.get("stop_loss_pct", 0.002)),
         "trailing_stop_enabled": params.get("trailing_stop_enabled", False),
+        "trailing_stop_activation_pct": float(params.get("trailing_stop_activation_pct", 0.0)),
     }
 
 

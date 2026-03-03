@@ -22,7 +22,8 @@ from app.models.db_models import (
     Backtest, BacktestTrade, StrategyMetric, SystemEvent,
     WalkForwardAnalysis, WalkForwardWindow, WalkForwardEquityPoint,
     SensitivityAnalysis, SensitivityParameterResult,
-    StrategyParameterHistory, StrategyRiskConfig
+    StrategyParameterHistory, StrategyRiskConfig,
+    CompletedTrade,
 )
 
 
@@ -683,8 +684,6 @@ class DatabaseService:
         - All trade_pairs (via CASCADE relationship)
         - All metrics (via CASCADE relationship)
         """
-        from app.models.db_models import CompletedTrade
-        
         strategy = self.get_strategy(user_id, strategy_id)
         if not strategy:
             return False
@@ -988,6 +987,49 @@ class DatabaseService:
             query = query.filter(Trade.strategy_id == strategy_id)
         
         return query.order_by(Trade.timestamp.desc()).limit(limit).all()
+    
+    def get_recent_completed_trades(
+        self,
+        user_id: UUID,
+        strategy_id: UUID,
+        limit: int = 100,
+        include_paper_trades: Optional[bool] = None,
+    ) -> List[CompletedTrade]:
+        """Get most recent completed trades for a strategy from the completed_trades table (pre-computed).
+        
+        Used by circuit breaker and any logic that needs completed position PnL without
+        re-matching raw trades. Order: exit_time desc (most recent first).
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy UUID
+            limit: Max number of rows
+            include_paper_trades: If None, inferred from strategy's account (paper_trading)
+        
+        Returns:
+            List of CompletedTrade ordered by exit_time desc
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_get_recent_completed_trades() with AsyncSession")
+        query = self.db.query(CompletedTrade).filter(
+            CompletedTrade.user_id == user_id,
+            CompletedTrade.strategy_id == strategy_id,
+        )
+        if include_paper_trades is None:
+            strategy = self.db.query(Strategy).filter(
+                Strategy.id == strategy_id,
+                Strategy.user_id == user_id,
+            ).first()
+            if strategy and strategy.account_id:
+                account = self.db.query(Account).filter(Account.id == strategy.account_id).first()
+                include_paper_trades = bool(account and account.paper_trading)
+            else:
+                include_paper_trades = False
+        if include_paper_trades:
+            query = query.filter(CompletedTrade.paper_trading == True)
+        else:
+            query = query.filter(CompletedTrade.paper_trading == False)
+        return query.order_by(CompletedTrade.exit_time.desc()).limit(limit).all()
     
     async def async_get_user_trades(
         self,

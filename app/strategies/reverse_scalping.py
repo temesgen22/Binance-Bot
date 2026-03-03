@@ -360,7 +360,8 @@ class ReverseScalpingStrategy(Strategy):
                     stop_loss_pct=self.stop_loss_pct,
                     position_type=position_side,
                     enabled=True,
-                    activation_pct=activation_pct
+                    activation_pct=activation_pct,
+                    trail_step_pct=activation_pct,  # same value: step = activation %
                 )
                 logger.debug(
                     f"[{self.context.id}] Trailing stop reinitialized for {position_side} "
@@ -395,7 +396,8 @@ class ReverseScalpingStrategy(Strategy):
                     stop_loss_pct=self.stop_loss_pct,
                     position_type=position_side,
                     enabled=True,
-                    activation_pct=activation_pct
+                    activation_pct=activation_pct,
+                    trail_step_pct=activation_pct,  # same value: step = activation %
                 )
         
     async def evaluate(self) -> StrategySignal:
@@ -764,7 +766,8 @@ class ReverseScalpingStrategy(Strategy):
                                 stop_loss_pct=self.stop_loss_pct,
                                 position_type="LONG",
                                 enabled=True,
-                                activation_pct=activation_pct
+                                activation_pct=activation_pct,
+                                trail_step_pct=activation_pct,  # same value: step = activation %
                             )
                             # Trailing stop initialization - use DEBUG for backtests, INFO for live
                             log_level = logger.debug if self.context.id == "backtest" else logger.info
@@ -924,7 +927,8 @@ class ReverseScalpingStrategy(Strategy):
                                 stop_loss_pct=self.stop_loss_pct,
                                 position_type="SHORT",
                                 enabled=True,
-                                activation_pct=activation_pct
+                                activation_pct=activation_pct,
+                                trail_step_pct=activation_pct,  # same value: step = activation %
                             )
                             # Trailing stop initialization - use DEBUG for backtests, INFO for live
                             log_level = logger.debug if self.context.id == "backtest" else logger.info

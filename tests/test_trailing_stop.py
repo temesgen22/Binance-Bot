@@ -197,6 +197,32 @@ def test_trailing_stop_short_doesnt_trail_up():
     assert manager.get_best_price() == 98900.0  # Best price unchanged
 
 
+def test_trailing_stop_short_step_pct_only_updates_when_move_at_least_step():
+    """With trail_step_pct=0.005 (0.5%), best price only updates when price moves at least 0.5% from previous best."""
+    manager = TrailingStopManager(
+        entry_price=100000.0,
+        take_profit_pct=0.04,
+        stop_loss_pct=0.02,
+        position_type="SHORT",
+        enabled=True,
+        activation_pct=0.0,
+        trail_step_pct=0.005,  # 0.5% step
+    )
+    assert manager.get_best_price() == 100000.0
+    # Move 0.3% down: 99,700. Threshold for update = 100000 * 0.995 = 99,500. 99700 > 99500 so no update.
+    manager.update(99700.0)
+    assert manager.get_best_price() == 100000.0  # No update (move < 0.5%)
+    # Move 0.5% down: 99,500. Need price < 99500 to update, so 99500 is not < 99500. Use 99400.
+    manager.update(99400.0)
+    assert manager.get_best_price() == 99400.0  # Updated (move >= 0.5%)
+    # Move another 0.3% down from 99400: 99400*0.997 = 99101.8. Threshold = 99400*0.995 = 98903. 99101 > 98903, no update.
+    manager.update(99100.0)
+    assert manager.get_best_price() == 99400.0  # No update
+    # Move another 0.5% down from 99400: threshold 98903. 98900 < 98903, update.
+    manager.update(98900.0)
+    assert manager.get_best_price() == 98900.0  # Updated
+
+
 def test_trailing_stop_disabled():
     """Test that trailing stop doesn't update when disabled."""
     manager = TrailingStopManager(

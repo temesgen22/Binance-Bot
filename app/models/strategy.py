@@ -33,7 +33,7 @@ class StrategyParams(BaseModel):
     enable_htf_bias: bool = Field(default=True, description="Enable higher timeframe bias (5m trend check for shorts)")
     cooldown_candles: int = Field(default=2, ge=0, le=10, description="Candles to wait after exit before new entry")
     trailing_stop_enabled: bool = Field(default=False, description="Enable dynamic trailing stop loss (trails TP/SL as price moves favorably)")
-    trailing_stop_activation_pct: float = Field(default=0.0, ge=0, le=0.1, description="Percentage price must move before trailing activates (e.g., 0.01 = 1%). 0 = start immediately")
+    trailing_stop_activation_pct: float = Field(default=0.0, ge=0, le=0.1, description="Trailing uses this % for both: (1) when trailing starts (price must move this % from entry), (2) how often levels update (price must move this % from previous best). e.g. 0.005 = 0.5%. 0 = start immediately and update every tick.")
     enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
     
     # Range Mean-Reversion Strategy parameters
