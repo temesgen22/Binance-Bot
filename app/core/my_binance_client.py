@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - executed in CI without dependency
     ClientError = Exception  # type: ignore[assignment]
     Client = None  # type: ignore[assignment]
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_unless_exception_type, stop_after_attempt, wait_exponential
 
 from app.models.order import OrderResponse
 from app.core.exceptions import (
@@ -575,7 +575,11 @@ class BinanceClient:
         rest = self._ensure()
         return rest.futures_get_order(symbol=symbol, orderId=order_id)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_unless_exception_type(OrderExecutionError),
+    )
     def place_order(
         self,
         *,
@@ -745,6 +749,14 @@ class BinanceClient:
                     f"Reduce-only order rejected: {error_msg}. No position to reduce.",
                     symbol=symbol,
                     details={"error_code": error_code, "reduce_only": reduce_only}
+                ) from exc
+            elif error_code == -2019:  # Margin is insufficient
+                logger.error(f"Binance margin insufficient: {error_msg}")
+                raise OrderExecutionError(
+                    f"Margin is insufficient: cannot open or increase position for {side} {symbol}. "
+                    "Check account balance, margin usage, and leverage. Retrying will not help.",
+                    symbol=symbol,
+                    details={"error_code": error_code, "side": side, "reduce_only": reduce_only}
                 ) from exc
             else:
                 # Generic API error
@@ -1594,7 +1606,9 @@ class BinanceClient:
             error_code = getattr(exc, 'code', None)
             # Handle API key format invalid error (-2014)
             if error_code == -2014:
-                api_key_preview = self._rest.api_key[:10] + "..." if self._rest and self._rest.api_key else "None"
+                # Use getattr: python-binance Client may use _api_key or different attribute name
+                _key = getattr(self._rest, "api_key", None) or getattr(self._rest, "_api_key", None) if self._rest else None
+                api_key_preview = (_key[:10] + "...") if _key else "None"
                 logger.error(
                     f"❌ API key format invalid (code -2014) for {symbol}. "
                     f"API key preview: {api_key_preview}. "

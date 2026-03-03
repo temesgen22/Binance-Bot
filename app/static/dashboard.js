@@ -57,6 +57,16 @@ function applyPositionUpdate(detail) {
         cell.classList.toggle('negative', (val || 0) < 0);
     }
 }
+// Re-apply all stored WebSocket updates to the strategy table (e.g. after table is rendered or re-rendered)
+function applyStoredPositionUpdates() {
+    if (typeof window.PositionUpdates === 'undefined' || !window.PositionUpdates.getAll) return;
+    const all = window.PositionUpdates.getAll();
+    for (const sid in all) {
+        if (Object.prototype.hasOwnProperty.call(all, sid)) {
+            applyPositionUpdate(all[sid]);
+        }
+    }
+}
 if (typeof window !== 'undefined') {
     window.addEventListener('position-update', function(e) { applyPositionUpdate(e.detail); });
 }
@@ -884,6 +894,8 @@ function renderStrategies(data) {
     `;
     
     container.innerHTML = table;
+    // Apply any WebSocket position updates we already have so Unrealized PnL is real-time from first paint
+    applyStoredPositionUpdates();
 }
 
 // Strategy comparison chart instance

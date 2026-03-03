@@ -918,6 +918,9 @@
 
             html += '</tbody></table>';
             content.innerHTML = '<div class="strategies-table-wrapper">' + html + '</div>';
+            if (window.PositionUpdates && typeof window.PositionUpdates.applyStoredToDOM === 'function') {
+                window.PositionUpdates.applyStoredToDOM();
+            }
         }
 
         function generateStrategyDetails(strategy) {

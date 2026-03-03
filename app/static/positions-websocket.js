@@ -3,10 +3,12 @@
  * Connect when authenticated; store latest per-strategy updates; dispatch 'position-update' event.
  */
 (function() {
-    const STORAGE_KEY = 'binance_bot_auth';
     const TOKEN_KEY = 'binance_bot_token';
 
     function getToken() {
+        if (typeof window !== 'undefined' && window.Auth && typeof window.Auth.getToken === 'function') {
+            return window.Auth.getToken();
+        }
         return localStorage.getItem(TOKEN_KEY);
     }
 
@@ -26,6 +28,16 @@
 
         getAll() {
             return Object.assign({}, this._updates);
+        },
+
+        /** Call after rendering strategy table so Unrealized PnL shows latest WebSocket data immediately */
+        applyStoredToDOM() {
+            const all = this.getAll();
+            for (const sid in all) {
+                if (Object.prototype.hasOwnProperty.call(all, sid)) {
+                    window.dispatchEvent(new CustomEvent('position-update', { detail: all[sid] }));
+                }
+            }
         },
 
         connect() {
@@ -69,10 +81,15 @@
                     this._ws = null;
                     if (event.code === 4001 && this._reconnectAttempts < this._maxReconnectAttempts) {
                         this._reconnectAttempts++;
+                        console.warn('[positions-ws] Auth rejected (4001), reconnecting in 2s…');
                         setTimeout(() => this.connect(), 2000);
+                    } else if (event.code !== 1000) {
+                        console.warn('[positions-ws] Closed', event.code, event.reason || '');
                     }
                 };
-                this._ws.onerror = () => {};
+                this._ws.onerror = () => {
+                    console.warn('[positions-ws] Connection error');
+                };
             } catch (e) {
                 console.debug('[positions-ws] Connect error', e);
             }
@@ -86,11 +103,22 @@
         }
     };
 
+    function maybeConnect() {
+        if (isAuthenticated()) window.PositionUpdates.connect();
+    }
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            if (isAuthenticated()) window.PositionUpdates.connect();
+        document.addEventListener('DOMContentLoaded', maybeConnect);
+    } else {
+        maybeConnect();
+    }
+    // Reconnect when page becomes visible (e.g. tab focus) in case connection dropped
+    if (typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible' && isAuthenticated()) {
+                if (!window.PositionUpdates._ws || window.PositionUpdates._ws.readyState !== WebSocket.OPEN) {
+                    window.PositionUpdates.connect();
+                }
+            }
         });
-    } else if (isAuthenticated()) {
-        window.PositionUpdates.connect();
     }
 })();
