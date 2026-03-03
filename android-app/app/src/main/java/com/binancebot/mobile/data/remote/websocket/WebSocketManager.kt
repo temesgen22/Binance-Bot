@@ -77,6 +77,27 @@ class WebSocketManager @Inject constructor(
                         val message = when (messageType) {
                             "connected" -> UpdateMessage.Connected
                             "disconnected" -> UpdateMessage.Disconnected
+                            "position_update" -> {
+                                val strategyId = jsonObject.get("strategy_id")?.asString ?: jsonObject.get("strategyId")?.asString ?: ""
+                                if (strategyId.isBlank()) return@launch
+                                val symbol = jsonObject.get("symbol")?.asString ?: ""
+                                val accountId = jsonObject.get("account_id")?.asString ?: "default"
+                                val positionSize = try { jsonObject.get("position_size")?.takeIf { !it.isJsonNull }?.getAsDouble() ?: 0.0 } catch (_: Exception) { 0.0 }
+                                val entryPrice = try { jsonObject.get("entry_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val unrealizedPnl = try { jsonObject.get("unrealized_pnl")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val positionSide = try { jsonObject.get("position_side")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
+                                val currentPrice = try { jsonObject.get("current_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                UpdateMessage.PositionUpdate(
+                                    strategyId = strategyId,
+                                    symbol = symbol,
+                                    accountId = accountId,
+                                    positionSize = positionSize,
+                                    entryPrice = entryPrice,
+                                    unrealizedPnl = unrealizedPnl,
+                                    positionSide = positionSide,
+                                    currentPrice = currentPrice
+                                )
+                            }
                             "strategy_update" -> {
                                 val data = jsonObject.getAsJsonObject("data")
                                 val strategyId = data.get("strategyId")?.asString ?: ""
@@ -200,6 +221,17 @@ sealed class UpdateMessage {
         val limitValue: String? = null,
         val message: String,
         val data: Map<String, Any>? = null
+    ) : UpdateMessage()
+    /** Real-time position/PnL update from backend (mark price stream or position event). */
+    data class PositionUpdate(
+        val strategyId: String,
+        val symbol: String,
+        val accountId: String,
+        val positionSize: Double,
+        val entryPrice: Double?,
+        val unrealizedPnl: Double?,
+        val positionSide: String?,
+        val currentPrice: Double?
     ) : UpdateMessage()
     data class Error(val message: String) : UpdateMessage()
 }

@@ -108,4 +108,7 @@ class FuturesUserDataConnection:
         self._ws = None
 
     def is_connected(self) -> bool:
-        return self._ws is not None and not self._ws.closed
+        if self._ws is None:
+            return False
+        # websockets 14+ may use ClientConnection without .closed; use getattr for compatibility
+        return not getattr(self._ws, "closed", True)

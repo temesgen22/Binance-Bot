@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from uuid import UUID
     from app.services.strategy_service import StrategyService
     from app.services.trade_service import TradeService
+    from app.core.position_broadcast import PositionBroadcastService
+    from app.core.mark_price_stream_manager import MarkPriceStreamManager
 
 
 async def _run_completed_trade_on_manual_close(
@@ -97,6 +99,8 @@ class StrategyRunner:
         testnet: Optional[bool] = None,
         trade_service: Optional["TradeService"] = None,
         skip_strategy_load: bool = False,
+        position_broadcast_service: Optional["PositionBroadcastService"] = None,
+        mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
     ) -> None:
         """Initialize StrategyRunner.
         
@@ -113,6 +117,8 @@ class StrategyRunner:
             use_websocket: Whether to use WebSocket for klines (optional, defaults to config)
             testnet: Whether to use testnet (optional, inferred from client if not provided)
             trade_service: TradeService for trade persistence (optional, will be created if not provided and strategy_service/user_id are available)
+            position_broadcast_service: Optional service to push real-time position updates to client WebSockets
+            mark_price_stream_manager: Optional manager for mark price streams (real-time PnL push)
         """
         # Support both single client (backward compatibility) and client manager (multi-account)
         if client_manager:
@@ -232,7 +238,11 @@ class StrategyRunner:
             strategies=self._strategies,
             trades=self._trades,
             account_manager=self.account_manager,
+            position_broadcast_service=position_broadcast_service,
+            mark_price_stream_manager=mark_price_stream_manager,
         )
+        self.position_broadcast_service = position_broadcast_service
+        self.mark_price_stream_manager = mark_price_stream_manager
         
         # Initialize trade service if not provided and strategy_service/user_id are available
         # This allows dependency injection (deps.py) to provide trade_service, avoiding wasteful creation

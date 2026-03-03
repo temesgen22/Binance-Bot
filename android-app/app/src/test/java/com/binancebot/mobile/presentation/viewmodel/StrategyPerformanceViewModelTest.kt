@@ -1,6 +1,7 @@
 package com.binancebot.mobile.presentation.viewmodel
 
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceListDto
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
 import com.binancebot.mobile.domain.repository.StrategyPerformanceRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,6 +26,9 @@ class StrategyPerformanceViewModelTest {
 
     @Mock
     lateinit var repository: StrategyPerformanceRepository
+
+    @Mock
+    lateinit var positionUpdateStore: PositionUpdateStore
 
     private lateinit var viewModel: StrategyPerformanceViewModel
     private val testDispatcher = UnconfinedTestDispatcher()
@@ -55,7 +59,7 @@ class StrategyPerformanceViewModelTest {
                 accountId = any()
             )
         ).thenReturn(Result.success(list))
-        viewModel = StrategyPerformanceViewModel(repository)
+        viewModel = StrategyPerformanceViewModel(repository, positionUpdateStore)
         yield() // let init's suspend repo call complete and set Success
         assertEquals(StrategyPerformanceUiState.Success, viewModel.uiState.value)
         assertNotNull(viewModel.performanceList.value)
@@ -76,7 +80,7 @@ class StrategyPerformanceViewModelTest {
                 accountId = any()
             )
         ).thenReturn(Result.failure(RuntimeException("Server error")))
-        viewModel = StrategyPerformanceViewModel(repository)
+        viewModel = StrategyPerformanceViewModel(repository, positionUpdateStore)
         yield() // let init's suspend repo call complete and set Error
         val state = viewModel.uiState.value
         assert(state is StrategyPerformanceUiState.Error) { "Expected Error, got $state" }

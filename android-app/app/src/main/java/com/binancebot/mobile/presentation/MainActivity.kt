@@ -10,7 +10,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
+import com.binancebot.mobile.data.remote.websocket.WebSocketManager
 import com.binancebot.mobile.presentation.navigation.BinanceBotNavGraph
+import com.binancebot.mobile.util.Constants
+import kotlinx.coroutines.flow.filterIsInstance
 import com.binancebot.mobile.presentation.navigation.Screen
 import com.binancebot.mobile.presentation.theme.BinanceBotTheme
 import com.binancebot.mobile.util.ConnectivityManager
@@ -40,29 +44,32 @@ class MainActivity : ComponentActivity() {
     
     @Inject
     lateinit var syncManager: SyncManager
+
+    @Inject
+    lateinit var webSocketManager: WebSocketManager
+
+    @Inject
+    lateinit var positionUpdateStore: PositionUpdateStore
+
+    @Inject
+    lateinit var notificationTrigger: com.binancebot.mobile.util.NotificationTrigger
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Note: WebSocket connection disabled - backend doesn't have WebSocket server yet
-        // The backend returns 404 for /ws endpoint, confirming no WebSocket server exists
-        // 
-        // Notifications will work via:
-        // 1. FCM push notifications (when backend sends them)
-        // 2. Polling-based detection (future enhancement)
-        //
-        // When backend implements WebSocket server, uncomment below:
-        // @Inject lateinit var webSocketManager: com.binancebot.mobile.data.remote.websocket.WebSocketManager
-        // @Inject lateinit var notificationTrigger: com.binancebot.mobile.util.NotificationTrigger
-        // if (tokenManager.isLoggedIn()) {
-        //     val baseUrl = com.binancebot.mobile.util.Constants.BASE_URL
-        //     val wsUrl = baseUrl
-        //         .replace("http://", "ws://")
-        //         .replace("https://", "wss://")
-        //         .replace("/api/", "/ws")
-        //     webSocketManager.connect(wsUrl)
-        //     notificationTrigger.startListening()
-        // }
+        if (tokenManager.isLoggedIn()) {
+            val wsUrl = Constants.BASE_URL
+                .replace("http://", "ws://")
+                .replace("https://", "wss://")
+                .replace("/api/", "/") + "ws/positions"
+            webSocketManager.connect(wsUrl)
+            lifecycleScope.launch {
+                webSocketManager.updates
+                    .filterIsInstance<WebSocketManager.PositionUpdate>()
+                    .collect { positionUpdateStore.apply(it) }
+            }
+            notificationTrigger.startListening()
+        }
         
         // Handle deep link from notification
         handleDeepLink(intent)

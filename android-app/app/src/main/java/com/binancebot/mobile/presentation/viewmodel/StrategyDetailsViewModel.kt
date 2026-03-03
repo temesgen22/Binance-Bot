@@ -2,6 +2,8 @@ package com.binancebot.mobile.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
 import com.binancebot.mobile.domain.model.Strategy
 import com.binancebot.mobile.domain.repository.StrategyRepository
 import com.binancebot.mobile.domain.repository.StrategyPerformanceRepository
@@ -9,6 +11,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,7 +21,8 @@ import javax.inject.Inject
 @HiltViewModel
 class StrategyDetailsViewModel @Inject constructor(
     private val strategyRepository: StrategyRepository,
-    private val performanceRepository: StrategyPerformanceRepository
+    private val performanceRepository: StrategyPerformanceRepository,
+    private val positionUpdateStore: PositionUpdateStore
 ) : ViewModel() {
     
     private val _strategy = MutableStateFlow<Strategy?>(null)
@@ -26,8 +31,23 @@ class StrategyDetailsViewModel @Inject constructor(
     private val _stats = MutableStateFlow<com.binancebot.mobile.data.remote.dto.StrategyStatsDto?>(null)
     val stats: StateFlow<com.binancebot.mobile.data.remote.dto.StrategyStatsDto?> = _stats.asStateFlow()
     
-    private val _performance = MutableStateFlow<com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto?>(null)
-    val performance: StateFlow<com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto?> = _performance.asStateFlow()
+    private val _performance = MutableStateFlow<StrategyPerformanceDto?>(null)
+    val performance: StateFlow<StrategyPerformanceDto?> = _performance.asStateFlow()
+
+    /** Same as performance but with real-time position/PnL overlaid from WebSocket. */
+    val performanceWithLivePosition: StateFlow<StrategyPerformanceDto?> = combine(
+        _performance,
+        positionUpdateStore.updates
+    ) { perf, updates ->
+        val u = perf?.let { updates[it.strategyId] }
+        if (perf != null && u != null) perf.copy(
+            positionSize = u.positionSize,
+            totalUnrealizedPnl = u.unrealizedPnl ?: perf.totalUnrealizedPnl,
+            currentPrice = u.currentPrice,
+            entryPrice = u.entryPrice ?: perf.entryPrice,
+            positionSide = u.positionSide ?: perf.positionSide
+        ) else perf
+    }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
     
     private val _activity = MutableStateFlow<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>>(emptyList())
     val activity: StateFlow<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>> = _activity.asStateFlow()

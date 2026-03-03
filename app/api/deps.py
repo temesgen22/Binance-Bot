@@ -278,6 +278,8 @@ def get_strategy_runner(
                 testnet=testnet_value,  # Get testnet from kline_manager or client
                 trade_service=trade_service,  # Pass TradeService directly to avoid wasteful creation in __init__
                 skip_strategy_load=skip_load,  # Skip if already loaded or currently loading
+                position_broadcast_service=getattr(base_runner, "position_broadcast_service", None),
+                mark_price_stream_manager=getattr(base_runner, "mark_price_stream_manager", None),
             )
             
             # Mark strategies as loaded for this user (app-level cache)

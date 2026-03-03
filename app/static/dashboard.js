@@ -42,6 +42,25 @@ let autoRefreshInterval = null;
 let autoRefreshEnabled = false;
 let autoRefreshIntervalMs = 30000; // Default: 30 seconds
 
+// Live position updates: when WebSocket sends position_update, refresh strategy row
+function applyPositionUpdate(detail) {
+    if (!detail || !detail.strategy_id) return;
+    const id = String(detail.strategy_id).replace(/"/g, '\\"');
+    const row = document.querySelector('tr[data-strategy-id="' + id + '"]');
+    if (!row) return;
+    const cell = row.querySelector('td[data-live-unrealized]');
+    if (cell) {
+        const val = detail.unrealized_pnl != null ? detail.unrealized_pnl : (detail.position_size <= 0 ? null : undefined);
+        const text = val != null ? new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val) + ' USDT' : 'N/A';
+        cell.textContent = text;
+        cell.classList.toggle('positive', (val || 0) >= 0);
+        cell.classList.toggle('negative', (val || 0) < 0);
+    }
+}
+if (typeof window !== 'undefined') {
+    window.addEventListener('position-update', function(e) { applyPositionUpdate(e.detail); });
+}
+
 // Initialize dashboard on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadOverview();
@@ -846,14 +865,14 @@ function renderStrategies(data) {
             </thead>
             <tbody>
                 ${data.strategies.map(s => `
-                    <tr>
+                    <tr data-strategy-id="${s.strategy_id || s.id || ''}">
                         <td>${s.rank || 'N/A'}</td>
                         <td>${s.strategy_name}</td>
                         <td>${s.symbol}</td>
                         <td><span class="badge badge-${s.status.value}">${s.status.value}</span></td>
                         <td class="${s.total_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(s.total_pnl)}</td>
                         <td>${formatCurrency(s.total_realized_pnl)}</td>
-                        <td>${formatCurrency(s.total_unrealized_pnl)}</td>
+                        <td data-live-unrealized class="${(s.total_unrealized_pnl || 0) >= 0 ? 'positive' : 'negative'}">${formatCurrency(s.total_unrealized_pnl)}</td>
                         <td>${s.win_rate.toFixed(2)}%</td>
                         <td>${s.completed_trades} / ${s.total_trades}</td>
                         <td>${formatCurrency(s.total_trade_fees || 0)}</td>

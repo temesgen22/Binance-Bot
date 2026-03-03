@@ -44,7 +44,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val currentRoute = navController.currentDestination?.route
     
-    val strategies by dashboardViewModel.strategies.collectAsState()
+    val strategies by dashboardViewModel.strategiesWithLivePosition.collectAsState()
     val dashboardOverview by dashboardViewModel.dashboardOverview.collectAsState()
     val uiState by dashboardViewModel.uiState.collectAsState()
     val accounts by accountViewModel.accounts.collectAsState()

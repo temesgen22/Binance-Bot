@@ -31,6 +31,9 @@ from app.api.routes.risk_metrics import router as risk_metrics_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.price_alerts import router as price_alerts_router
+from app.api.routes.ws_positions import router as ws_positions_router
+from app.core.position_broadcast import PositionConnectionManager, PositionBroadcastService
+from app.core.mark_price_stream_manager import MarkPriceStreamManager
 from app.api.exception_handlers import (
     binance_rate_limit_handler,
     binance_api_error_handler,
@@ -206,6 +209,17 @@ def create_app() -> FastAPI:
             loss_threshold_usd=settings.telegram_loss_threshold_usd,
         )
     
+    # Real-time position updates: connection manager for client WebSockets + broadcast service
+    position_connection_manager = PositionConnectionManager()
+    position_broadcast_service = PositionBroadcastService(position_connection_manager)
+    # Mark price streams for real-time PnL (optional)
+    mark_price_stream_manager = None
+    if settings.use_mark_price_stream:
+        mark_price_stream_manager = MarkPriceStreamManager(
+            broadcast_service=position_broadcast_service,
+            testnet=settings.binance_testnet,
+        )
+
     runner = StrategyRunner(
         client_manager=client_manager,
         client=default_client,  # For backward compatibility
@@ -216,6 +230,8 @@ def create_app() -> FastAPI:
         notification_service=notification_service,
         use_websocket=settings.use_websocket_klines,  # Enable WebSocket from config
         testnet=settings.binance_testnet,  # Get testnet from config
+        position_broadcast_service=position_broadcast_service,
+        mark_price_stream_manager=mark_price_stream_manager,
     )
     
     # Initialize Telegram command handler if enabled
@@ -354,6 +370,7 @@ def create_app() -> FastAPI:
             app.state.binance_client = default_client  # For backward compatibility
             app.state.binance_client_manager = client_manager
             app.state.strategy_runner = runner
+            app.state.position_connection_manager = position_connection_manager
             app.state.background_tasks: list[asyncio.Task] = []
             logger.info("✅ Application state configured")
             
@@ -471,6 +488,8 @@ def create_app() -> FastAPI:
                         runner_instance = app.state.strategy_runner
                         if hasattr(runner_instance, 'user_data_stream_manager') and hasattr(runner_instance.user_data_stream_manager, 'stop_all'):
                             await runner_instance.user_data_stream_manager.stop_all()
+                        if hasattr(runner_instance, 'mark_price_stream_manager') and runner_instance.mark_price_stream_manager and hasattr(runner_instance.mark_price_stream_manager, 'stop_all'):
+                            await runner_instance.mark_price_stream_manager.stop_all()
                         if hasattr(runner_instance, 'stop_periodic_position_refresh'):
                             await runner_instance.stop_periodic_position_refresh()
                         if hasattr(runner_instance, 'stop_periodic_cleanup'):
@@ -732,6 +751,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)  # Dashboard overview API
     app.include_router(notifications_router)  # FCM token management for push notifications
     app.include_router(price_alerts_router)  # Price alerts (Binance-style push)
+    app.include_router(ws_positions_router)  # WebSocket for real-time position updates
     
     # GUI route for backtesting
     @app.get("/backtesting", tags=["gui"], include_in_schema=False)

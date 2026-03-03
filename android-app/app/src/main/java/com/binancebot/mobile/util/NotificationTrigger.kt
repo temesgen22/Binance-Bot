@@ -180,6 +180,9 @@ class NotificationTrigger @Inject constructor(
                         //     message = "WebSocket connection lost"
                         // )
                     }
+                    is UpdateMessage.PositionUpdate -> {
+                        // Real-time position/PnL tick from backend; no notification
+                    }
                 }
             }
         }

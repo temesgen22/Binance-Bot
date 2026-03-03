@@ -4,21 +4,44 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceListDto
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
 import com.binancebot.mobile.domain.repository.StrategyPerformanceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class StrategyPerformanceViewModel @Inject constructor(
-    private val repository: StrategyPerformanceRepository
+    private val repository: StrategyPerformanceRepository,
+    private val positionUpdateStore: PositionUpdateStore
 ) : ViewModel() {
     
     private val _performanceList = MutableStateFlow<StrategyPerformanceListDto?>(null)
     val performanceList: StateFlow<StrategyPerformanceListDto?> = _performanceList.asStateFlow()
+
+    /** Same as performanceList but with real-time position/PnL overlaid from WebSocket. */
+    val performanceListWithLivePosition: StateFlow<StrategyPerformanceListDto?> = combine(
+        _performanceList,
+        positionUpdateStore.updates
+    ) { list, updates ->
+        if (list == null) null else list.copy(
+            strategies = list.strategies.map { s ->
+                val u = updates[s.strategyId]
+                if (u != null) s.copy(
+                    positionSize = u.positionSize,
+                    totalUnrealizedPnl = u.unrealizedPnl ?: s.totalUnrealizedPnl,
+                    currentPrice = u.currentPrice,
+                    entryPrice = u.entryPrice ?: s.entryPrice,
+                    positionSide = u.positionSide ?: s.positionSide
+                ) else s
+            }
+        )
+    }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
     
     private val _uiState = MutableStateFlow<StrategyPerformanceUiState>(StrategyPerformanceUiState.Idle)
     val uiState: StateFlow<StrategyPerformanceUiState> = _uiState.asStateFlow()

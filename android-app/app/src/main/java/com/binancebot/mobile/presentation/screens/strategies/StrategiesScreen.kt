@@ -53,7 +53,7 @@ fun StrategiesScreen(
     accountViewModel: AccountViewModel = hiltViewModel(),
     riskManagementViewModel: com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel = hiltViewModel()
 ) {
-    val performanceList by performanceViewModel.performanceList.collectAsState()
+    val performanceList by performanceViewModel.performanceListWithLivePosition.collectAsState()
     val performanceUiState by performanceViewModel.uiState.collectAsState()
     val accounts by accountViewModel.accounts.collectAsState()
     val actionInProgress by strategiesViewModel.actionInProgress.collectAsState()

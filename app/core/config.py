@@ -77,6 +77,11 @@ class Settings(BaseSettings):
         alias="USE_USER_DATA_STREAM_FOR_POSITION",
         description="Use Binance Futures User Data WebSocket for real-time position updates (default: True). If False, only REST and periodic refresh are used.",
     )
+    use_mark_price_stream: bool = Field(
+        default=True,
+        alias="USE_MARK_PRICE_STREAM",
+        description="Subscribe to Binance mark price streams for symbols with open positions and push real-time PnL to client WebSockets (default: True). If False, only position events and periodic REST refresh are pushed.",
+    )
     api_port: int = Field(default=8000, alias="API_PORT")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_enabled: bool = Field(default=True, alias="REDIS_ENABLED")

@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from app.services.strategy_service import StrategyService
     from app.services.strategy_account_manager import StrategyAccountManager
     from app.services.strategy_order_manager import StrategyOrderManager
+    from app.core.position_broadcast import PositionBroadcastService
+    from app.core.mark_price_stream_manager import MarkPriceStreamManager
 
 
 class StrategyPersistence:
@@ -30,6 +32,8 @@ class StrategyPersistence:
         trades: Optional[Dict[str, List[OrderResponse]]] = None,
         account_manager: Optional["StrategyAccountManager"] = None,
         order_manager: Optional["StrategyOrderManager"] = None,
+        position_broadcast_service: Optional["PositionBroadcastService"] = None,
+        mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
     ):
         """Initialize persistence handler.
         
@@ -41,6 +45,8 @@ class StrategyPersistence:
             trades: Reference to trades dictionary
             account_manager: Account manager for getting clients (optional)
             order_manager: Order manager for canceling TP/SL orders (optional)
+            position_broadcast_service: Optional service to push position updates to client WebSockets
+            mark_price_stream_manager: Optional manager for mark price streams (real-time PnL)
         """
         self.redis = redis_storage
         self.strategy_service = strategy_service
@@ -49,6 +55,8 @@ class StrategyPersistence:
         self._trades = trades or {}
         self.account_manager = account_manager
         self.order_manager = order_manager
+        self.position_broadcast_service = position_broadcast_service
+        self.mark_price_stream_manager = mark_price_stream_manager
     
     @staticmethod
     def _get_or_generate_position_instance_id(
@@ -360,6 +368,13 @@ class StrategyPersistence:
         if "tp_sl_orders" in summary.meta:
             summary.meta["tp_sl_orders"] = {}
             self.update_strategy_in_db(summary.id, save_to_redis=True, meta=summary.meta)
+        if self.mark_price_stream_manager:
+            try:
+                self.mark_price_stream_manager.unregister_position(summary.symbol, summary.id)
+                await self.mark_price_stream_manager.maybe_unsubscribe(summary.symbol)
+            except Exception as exc:
+                logger.debug(f"[{summary.id}] mark price unregister/unsubscribe failed: {exc}")
+        await self._broadcast_position(summary, position_size=0)
 
     async def apply_position_data(self, summary: StrategySummary, position_data: Dict) -> None:
         """Apply position data from WebSocket (or other source) to summary and persist. Shared by User Data Stream callback."""
@@ -394,6 +409,56 @@ class StrategyPersistence:
         if current_price is not None:
             updates["current_price"] = current_price
         self.update_strategy_in_db(summary.id, save_to_redis=True, **updates)
+        await self._broadcast_position(
+            summary,
+            position_size=position_size,
+            entry_price=entry_price,
+            unrealized_pnl=unrealized_pnl,
+            position_side=position_side,
+            current_price=current_price,
+        )
+        if self.user_id and self.mark_price_stream_manager:
+            try:
+                self.mark_price_stream_manager.register_position(
+                    summary.symbol,
+                    summary.id,
+                    self.user_id,
+                    entry_price,
+                    position_size,
+                    position_side,
+                    summary.account_id,
+                )
+                await self.mark_price_stream_manager.subscribe(summary.symbol)
+            except Exception as exc:
+                logger.debug(f"[{summary.id}] mark price register/subscribe failed: {exc}")
+
+    async def _broadcast_position(
+        self,
+        summary: StrategySummary,
+        *,
+        position_size: float = 0,
+        entry_price: Optional[float] = None,
+        unrealized_pnl: Optional[float] = None,
+        position_side: Optional[str] = None,
+        current_price: Optional[float] = None,
+    ) -> None:
+        """If position_broadcast_service and user_id are set, push update to client WebSockets."""
+        if not self.user_id or not self.position_broadcast_service:
+            return
+        try:
+            await self.position_broadcast_service.broadcast_position_update(
+                self.user_id,
+                summary.id,
+                symbol=summary.symbol,
+                account_id=summary.account_id,
+                position_size=position_size,
+                entry_price=entry_price,
+                unrealized_pnl=unrealized_pnl,
+                position_side=position_side,
+                current_price=current_price,
+            )
+        except Exception as exc:
+            logger.debug(f"[{summary.id}] position broadcast failed: {exc}")
 
     async def update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy.
@@ -480,6 +545,28 @@ class StrategyPersistence:
                         position_side=new_position_side,
                         unrealized_pnl=new_unrealized_pnl,
                     )
+                    await self._broadcast_position(
+                        summary,
+                        position_size=new_position_size,
+                        entry_price=new_entry_price,
+                        unrealized_pnl=new_unrealized_pnl,
+                        position_side=new_position_side,
+                        current_price=new_current_price,
+                    )
+                    if self.user_id and self.mark_price_stream_manager:
+                        try:
+                            self.mark_price_stream_manager.register_position(
+                                summary.symbol,
+                                summary.id,
+                                self.user_id,
+                                new_entry_price,
+                                new_position_size,
+                                new_position_side,
+                                summary.account_id,
+                            )
+                            await self.mark_price_stream_manager.subscribe(summary.symbol)
+                        except Exception as exc:
+                            logger.debug(f"[{summary.id}] mark price register/subscribe failed: {exc}")
             else:
                 # No open position: use shared clear path (REST and WebSocket)
                 position_was_closed = summary.position_size is not None and summary.position_size != 0
@@ -509,6 +596,14 @@ class StrategyPersistence:
                     save_to_redis=True,
                     current_price=summary.current_price,
                     unrealized_pnl=summary.unrealized_pnl,
+                )
+                await self._broadcast_position(
+                    summary,
+                    position_size=summary.position_size or 0,
+                    entry_price=summary.entry_price,
+                    unrealized_pnl=summary.unrealized_pnl,
+                    position_side=summary.position_side,
+                    current_price=summary.current_price,
                 )
     
     async def reconcile_position_state(self, summary: StrategySummary) -> None:

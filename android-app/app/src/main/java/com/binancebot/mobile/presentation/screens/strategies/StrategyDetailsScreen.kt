@@ -41,7 +41,7 @@ fun StrategyDetailsScreen(
 ) {
     val strategy by viewModel.strategy.collectAsState()
     val stats by viewModel.stats.collectAsState()
-    val performance by viewModel.performance.collectAsState()
+    val performance by viewModel.performanceWithLivePosition.collectAsState()
     val activity by viewModel.activity.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val actionInProgress by viewModel.actionInProgress.collectAsState()

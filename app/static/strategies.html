@@ -691,6 +691,7 @@
 
     <script src="/static/auth.js"></script>
     <script src="/static/utils.js"></script>
+    <script src="/static/positions-websocket.js"></script>
     <script>
         // Check authentication IMMEDIATELY - before any other code runs
         (function() {
@@ -703,6 +704,22 @@
         let autoRefreshInterval = null;
         let expandedStrategies = new Set();
         let availableAccounts = {};
+
+        // Live position updates from WebSocket
+        window.addEventListener('position-update', function(e) {
+            const d = e.detail;
+            if (!d || !d.strategy_id) return;
+            const id = String(d.strategy_id).replace(/"/g, '\\"');
+            const row = document.querySelector('tr[data-strategy-id="' + id + '"]');
+            if (!row) return;
+            const cell = row.querySelector('td[data-live-unrealized]');
+            if (cell) {
+                const val = d.unrealized_pnl != null ? d.unrealized_pnl : (d.position_size <= 0 ? null : undefined);
+                const text = val != null ? (val.toFixed(2) + ' USDT') : 'N/A';
+                cell.textContent = text;
+                cell.className = (val || 0) >= 0 ? 'positive' : 'negative';
+            }
+        });
 
         async function loadAccounts() {
             try {
@@ -814,7 +831,7 @@
 
             data.strategies.forEach((strategy, index) => {
                 const isExpanded = expandedStrategies.has(strategy.strategy_id);
-                html += `<tr class="${isExpanded ? 'expanded' : ''}">`;
+                html += `<tr class="${isExpanded ? 'expanded' : ''}" data-strategy-id="${strategy.strategy_id || ''}">`;
                 
                 // Rank badge
                 const rankClass = strategy.rank === 1 ? 'gold' : strategy.rank === 2 ? 'silver' : strategy.rank === 3 ? 'bronze' : 'other';
@@ -851,8 +868,8 @@
                 // Realized PnL
                 html += `<td class="${strategy.total_realized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(strategy.total_realized_pnl)}</td>`;
                 
-                // Unrealized PnL
-                html += `<td class="${strategy.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(strategy.total_unrealized_pnl)}</td>`;
+                // Unrealized PnL (live-updated via WebSocket)
+                html += `<td data-live-unrealized class="${strategy.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(strategy.total_unrealized_pnl)}</td>`;
                 
                 // Win rate
                 html += `<td>${strategy.win_rate.toFixed(2)}%</td>`;

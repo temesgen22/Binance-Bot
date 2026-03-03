@@ -3,23 +3,45 @@ package com.binancebot.mobile.presentation.viewmodel
 import com.binancebot.mobile.util.AppLogger
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
+import com.binancebot.mobile.domain.model.Strategy
 import com.binancebot.mobile.domain.repository.DashboardRepository
 import com.binancebot.mobile.domain.repository.StrategyRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
     private val dashboardRepository: DashboardRepository,
-    private val strategyRepository: StrategyRepository
+    private val strategyRepository: StrategyRepository,
+    private val positionUpdateStore: PositionUpdateStore
 ) : ViewModel() {
     
-    private val _strategies = MutableStateFlow<List<com.binancebot.mobile.domain.model.Strategy>>(emptyList())
-    val strategies: StateFlow<List<com.binancebot.mobile.domain.model.Strategy>> = _strategies.asStateFlow()
+    private val _strategies = MutableStateFlow<List<Strategy>>(emptyList())
+    val strategies: StateFlow<List<Strategy>> = _strategies.asStateFlow()
+
+    /** Same as strategies but with real-time position/PnL overlaid from WebSocket. */
+    val strategiesWithLivePosition: StateFlow<List<Strategy>> = combine(
+        _strategies,
+        positionUpdateStore.updates
+    ) { list, updates ->
+        list.map { s ->
+            val u = updates[s.id]
+            if (u != null) s.copy(
+                positionSize = u.positionSize,
+                unrealizedPnL = u.unrealizedPnl,
+                currentPrice = u.currentPrice,
+                entryPrice = u.entryPrice,
+                positionSide = u.positionSide
+            ) else s
+        }
+    }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptyList())
     
     private val _dashboardOverview = MutableStateFlow<com.binancebot.mobile.data.remote.dto.DashboardOverviewDto?>(null)
     val dashboardOverview: StateFlow<com.binancebot.mobile.data.remote.dto.DashboardOverviewDto?> = _dashboardOverview.asStateFlow()
