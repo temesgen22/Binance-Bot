@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
 import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
+import com.binancebot.mobile.data.remote.websocket.UpdateMessage
 import com.binancebot.mobile.data.remote.websocket.WebSocketManager
 import com.binancebot.mobile.presentation.navigation.BinanceBotNavGraph
 import com.binancebot.mobile.util.Constants
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
             webSocketManager.connect(wsUrl)
             lifecycleScope.launch {
                 webSocketManager.updates
-                    .filterIsInstance<WebSocketManager.PositionUpdate>()
+                    .filterIsInstance<UpdateMessage.PositionUpdate>()
                     .collect { positionUpdateStore.apply(it) }
             }
             notificationTrigger.startListening()

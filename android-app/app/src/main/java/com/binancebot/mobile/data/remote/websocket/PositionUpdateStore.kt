@@ -15,7 +15,7 @@ class PositionUpdateStore @Inject constructor() {
     private val _updates = MutableStateFlow<Map<String, PositionUpdateData>>(emptyMap())
     val updates: StateFlow<Map<String, PositionUpdateData>> = _updates.asStateFlow()
 
-    fun apply(update: WebSocketManager.PositionUpdate) {
+    fun apply(update: UpdateMessage.PositionUpdate) {
         if (update.strategyId.isBlank()) return
         val data = PositionUpdateData(
             strategyId = update.strategyId,
