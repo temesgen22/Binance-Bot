@@ -34,43 +34,30 @@ class OrderExecutor:
         signal: StrategySignal,
         sizing: PositionSizingResult,
         reduce_only: bool,
+        strategy_id: Optional[str] = None,
     ) -> str:
         """Generate a unique idempotency key for an order.
         
         The key is based on:
-        - Strategy signal (symbol, action, price)
-        - Position sizing (quantity)
+        - Strategy id (so different strategies don't collide)
+        - Strategy signal (symbol, action, quantity)
         - Reduce-only flag
-        - Timestamp (rounded to nearest second to allow retries within same second)
+        - Time window (1 minute) so the same signal within 1 minute = same key.
         
-        This ensures that the same order parameters within the same second
-        will generate the same key, preventing duplicate orders.
-        
-        Args:
-            signal: Strategy signal
-            sizing: Position sizing result
-            reduce_only: Whether order is reduce-only
-            
-        Returns:
-            Unique idempotency key (hex string)
+        This prevents the same entry/exit from being executed multiple times when
+        the strategy loop runs every few seconds (e.g. same candle processed repeatedly).
         """
-        # Round timestamp to nearest second to allow retries within same second
         timestamp_sec = int(time.time())
-        
-        # Create deterministic key from order parameters
+        # 1-minute window: same signal in same minute gets same key (prevents duplicate orders)
+        time_window = timestamp_sec // 60
+        strategy_part = (strategy_id or "")
         key_data = (
-            f"{signal.symbol}:{signal.action}:{sizing.quantity:.8f}:"
-            f"{reduce_only}:{timestamp_sec}"
+            f"{strategy_part}:{signal.symbol}:{signal.action}:{sizing.quantity:.8f}:"
+            f"{reduce_only}:{time_window}"
         )
-        
-        # Add price if available (for limit orders or price-based idempotency)
         if signal.price:
             key_data += f":{signal.price:.8f}"
-        
-        # Generate hash
-        idempotency_key = hashlib.sha256(key_data.encode()).hexdigest()[:32]  # 32 chars
-        
-        return idempotency_key
+        return hashlib.sha256(key_data.encode()).hexdigest()[:32]
 
     def _check_duplicate_order(
         self,
@@ -261,8 +248,8 @@ class OrderExecutor:
         if reduce_only_override is not None:
             reduce_only = reduce_only_override
         
-        # CRITICAL: Generate idempotency key to prevent duplicate orders
-        idempotency_key = self._generate_idempotency_key(signal, sizing, reduce_only)
+        # CRITICAL: Generate idempotency key to prevent duplicate orders (same signal + 1-min window = same key)
+        idempotency_key = self._generate_idempotency_key(signal, sizing, reduce_only, strategy_id)
         
         # Check for duplicate order before execution
         duplicate_order_id = self._check_duplicate_order(idempotency_key, signal.symbol)

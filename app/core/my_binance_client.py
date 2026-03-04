@@ -783,7 +783,9 @@ class BinanceClient:
 
         # Parse response - handle different field name variations
         # Binance may return price/avgPrice/executedQty in different formats
-        price_str = response.get("price", "0") or response.get("price", "0") or "0"
+        # CRITICAL: If parsing raises, return minimal OrderResponse so tenacity does not retry (no duplicate orders)
+        try:
+            price_str = response.get("price", "0") or response.get("price", "0") or "0"
         avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
         executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
         orig_qty_str = response.get("origQty") or response.get("origQty") or None
@@ -1026,42 +1028,102 @@ class BinanceClient:
                 f"avg_price={avg_price}. Order may not be filled yet or response format unexpected."
             )
         
-        order_response = OrderResponse(
-            symbol=response["symbol"],
+        try:
+            order_response = OrderResponse(
+                symbol=response.get("symbol") or symbol,
+                order_id=order_id,
+                status=status,
+                side=response.get("side") or side,
+                price=price,
+                avg_price=avg_price,
+                executed_qty=executed_qty,
+                orig_qty=orig_qty,
+                timestamp=timestamp,
+                commission=commission,
+                commission_asset=commission_asset,
+                leverage=leverage,
+                position_side=position_side,
+                update_time=update_time,
+                time_in_force=time_in_force,
+                order_type=order_type_from_response,
+                notional_value=notional_value,
+                cummulative_quote_qty=cummulative_quote_qty,
+                initial_margin=initial_margin,
+                margin_type=margin_type,
+                client_order_id=client_order_id,
+                working_type=working_type,
+                realized_pnl=realized_pnl,
+                stop_price=stop_price,
+            )
+        
+            logger.info(
+                f"Order response: {order_response.side} {order_response.symbol} "
+                f"order_id={order_response.order_id} status={order_response.status} "
+                f"executed_qty={order_response.executed_qty} avg_price={order_response.avg_price} "
+                f"commission={commission} {commission_asset} timestamp={timestamp} leverage={leverage}x "
+                f"notional={notional_value} initial_margin={initial_margin} margin_type={margin_type}"
+            )
+            return order_response
+        except Exception as parse_exc:
+            logger.warning(
+                f"Order {order_id} placed but building OrderResponse failed: {parse_exc}. "
+                "Returning minimal response to avoid duplicate order retry."
+            )
+            return self._minimal_order_response_from_raw(response, symbol, side)
+
+    def _minimal_order_response_from_raw(
+        self, raw: Dict[str, Any], symbol: str, side: str
+    ) -> OrderResponse:
+        """Build a minimal OrderResponse from raw API response so we never raise after order placed."""
+        from datetime import datetime, timezone
+        order_id = raw.get("orderId") or 0
+        status = raw.get("status") or "FILLED"
+        exec_qty = 0.0
+        try:
+            eq = raw.get("executedQty") or raw.get("executedQty") or "0"
+            if eq:
+                exec_qty = float(eq)
+        except (TypeError, ValueError):
+            pass
+        avg = None
+        try:
+            av = raw.get("avgPrice")
+            if av and str(av).strip() and str(av).strip() != "0":
+                avg = float(av)
+        except (TypeError, ValueError):
+            pass
+        ts = None
+        try:
+            if raw.get("time"):
+                ts = datetime.fromtimestamp(int(raw.get("time", 0)) / 1000.0, tz=timezone.utc)
+        except (TypeError, ValueError):
+            pass
+        return OrderResponse(
+            symbol=raw.get("symbol") or symbol,
             order_id=order_id,
             status=status,
-            side=response["side"],
-            price=price,
-            avg_price=avg_price,
-            executed_qty=executed_qty,
-            orig_qty=orig_qty,
-            timestamp=timestamp,
-            commission=commission,
-            commission_asset=commission_asset,
-            leverage=leverage,
-            position_side=position_side,
-            update_time=update_time,
-            time_in_force=time_in_force,
-            order_type=order_type_from_response,
-            notional_value=notional_value,
-            cummulative_quote_qty=cummulative_quote_qty,
-            initial_margin=initial_margin,
-            margin_type=margin_type,
-            client_order_id=client_order_id,
-            working_type=working_type,
-            realized_pnl=realized_pnl,
-            stop_price=stop_price,
+            side=raw.get("side") or side,
+            price=0.0,
+            avg_price=avg,
+            executed_qty=exec_qty,
+            orig_qty=None,
+            timestamp=ts,
+            commission=None,
+            commission_asset=None,
+            leverage=None,
+            position_side=None,
+            update_time=None,
+            time_in_force=None,
+            order_type=raw.get("type"),
+            notional_value=None,
+            cummulative_quote_qty=None,
+            initial_margin=None,
+            margin_type=None,
+            client_order_id=raw.get("clientOrderId"),
+            working_type=None,
+            realized_pnl=None,
+            stop_price=None,
         )
-        
-        logger.info(
-            f"Order response: {order_response.side} {order_response.symbol} "
-            f"order_id={order_response.order_id} status={order_response.status} "
-            f"executed_qty={order_response.executed_qty} avg_price={order_response.avg_price} "
-            f"commission={commission} {commission_asset} timestamp={timestamp} leverage={leverage}x "
-            f"notional={notional_value} initial_margin={initial_margin} margin_type={margin_type}"
-        )
-        
-        return order_response
 
     def _parse_order_response(self, response: Dict[str, Any], symbol: str) -> OrderResponse:
         """Parse Binance order response into OrderResponse model.
