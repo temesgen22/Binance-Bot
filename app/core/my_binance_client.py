@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - executed in CI without dependency
     ClientError = Exception  # type: ignore[assignment]
     Client = None  # type: ignore[assignment]
 from loguru import logger
-from tenacity import retry, retry_unless_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.models.order import OrderResponse
 from app.core.exceptions import (
@@ -575,10 +575,14 @@ class BinanceClient:
         rest = self._ensure()
         return rest.futures_get_order(symbol=symbol, orderId=order_id)
 
+    # Use retry_if_exception so we do NOT retry on success (retry_unless_exception_type
+    # retries when no exception is raised, causing duplicate orders).
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=8),
-        retry=retry_unless_exception_type(OrderExecutionError),
+        retry=retry_if_exception(
+            lambda e: not isinstance(e, (OrderExecutionError, BinanceAPIError))
+        ),
     )
     def place_order(
         self,
@@ -784,8 +788,7 @@ class BinanceClient:
         # Parse response - handle different field name variations
         # Binance may return price/avgPrice/executedQty in different formats
         # CRITICAL: If parsing raises, return minimal OrderResponse so tenacity does not retry (no duplicate orders)
-        try:
-            price_str = response.get("price", "0") or response.get("price", "0") or "0"
+        price_str = response.get("price", "0") or response.get("price", "0") or "0"
         avg_price_str = response.get("avgPrice") or response.get("avgPrice") or None
         executed_qty_str = response.get("executedQty", "0") or response.get("executedQty", "0") or "0"
         orig_qty_str = response.get("origQty") or response.get("origQty") or None
@@ -1358,6 +1361,9 @@ class BinanceClient:
         try:
             response = rest.futures_create_order(**params)
             logger.info(f"STOP_MARKET order placed: orderId={response.get('orderId')}")
+            # Normalize: Binance returns "type"; some code expects "order_type"
+            if isinstance(response, dict) and "order_type" not in response:
+                response = {**response, "order_type": response.get("type", "STOP_MARKET")}
             return response
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
@@ -1431,6 +1437,9 @@ class BinanceClient:
         try:
             response = rest.futures_create_order(**params)
             logger.info(f"TAKE_PROFIT_MARKET order placed: orderId={response.get('orderId')}")
+            # Normalize: Binance returns "type"; some code expects "order_type"
+            if isinstance(response, dict) and "order_type" not in response:
+                response = {**response, "order_type": response.get("type", "TAKE_PROFIT_MARKET")}
             return response
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)

@@ -355,6 +355,21 @@ class OrderExecutor:
                 return order_response
             return None
         except Exception as exc:
+            # RetryError with successful last attempt: use result and avoid misleading "Failed to create order"
+            try:
+                from tenacity import RetryError
+                la = getattr(exc, "last_attempt", None)
+                if isinstance(exc, RetryError) and la is not None and not getattr(la, "failed", True):
+                    res = la.result()
+                    if res is not None and hasattr(res, "order_id"):
+                        logger.debug(
+                            "RetryError but last attempt succeeded (order_id=%s), using result.",
+                            res.order_id,
+                        )
+                        self._recent_orders[idempotency_key] = (res.order_id, time.time())
+                        return res
+            except Exception:
+                pass
             logger.error(
                 f"Failed to create order: {side} {sizing.quantity} {signal.symbol} | "
                 f"Error: {type(exc).__name__}: {exc}"

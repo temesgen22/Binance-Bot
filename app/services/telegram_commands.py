@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import httpx
@@ -41,6 +42,7 @@ class TelegramCommandHandler:
             self.base_url = f"https://api.telegram.org/bot{bot_token}"
             self._running = False
             self._task: Optional[asyncio.Task] = None
+            self._last_connection_error_log = 0.0  # Throttle connection-error logs when no network
             logger.info("Telegram command handler enabled")
         else:
             self.base_url = None
@@ -105,7 +107,14 @@ class TelegramCommandHandler:
             logger.warning("Telegram API request timeout (this is normal for long polling)")
             return {"ok": False, "result": [], "error": "Timeout"}
         except httpx.RequestError as e:
-            logger.error(f"Telegram API request error: {e}")
+            # Throttle logs when there is no network (e.g. getaddrinfo failed)
+            now = time.monotonic()
+            if now - getattr(self, "_last_connection_error_log", 0) >= 60:
+                logger.warning(
+                    "Telegram API connection error (no network?): %s. Will retry every 30s.",
+                    e,
+                )
+                self._last_connection_error_log = now
             return {"ok": False, "result": [], "error": "RequestError"}
         except Exception as e:
             logger.error(f"Unexpected error getting Telegram updates: {e}")
@@ -1024,6 +1033,11 @@ class TelegramCommandHandler:
                             await asyncio.sleep(60)  # Wait 1 minute before trying again
                             conflict_retry_count = 0  # Reset counter
                             continue
+                    elif error_type == "RequestError":
+                        # No network / connection error: back off to avoid log spam
+                        conflict_retry_count = 0
+                        await asyncio.sleep(30)
+                        continue
                     else:
                         # Reset conflict counter on other errors
                         conflict_retry_count = 0

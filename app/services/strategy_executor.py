@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Optional
 from loguru import logger
 
 from app.core.binance_client_manager import BinanceClientManager
-from app.core.exceptions import RiskLimitExceededError, CircuitBreakerActiveError
+from app.core.exceptions import (
+    RiskLimitExceededError,
+    CircuitBreakerActiveError,
+    BinanceAPIError,
+    BinanceNetworkError,
+)
+from app.core.circuit_breaker import CircuitBreakerOpenError
 from app.models.strategy import StrategyState, StrategySummary
 from app.risk.manager import RiskManager
 from app.services.notifier import NotificationService
@@ -130,8 +136,8 @@ class StrategyExecutor:
         last_reconciliation = datetime.now(timezone.utc)
         reconciliation_interval = 300  # Reconcile every 5 minutes
         
-        try:
-            while True:
+        while True:
+            try:
                 # CRITICAL FIX: Refresh strategy status from database to catch pause_by_risk updates
                 # This ensures strategies see their paused status even if they're already in the loop
                 if self.order_manager.strategy_service and self.order_manager.user_id:
@@ -423,80 +429,99 @@ class StrategyExecutor:
                 
                 # Wait for new candle event or timeout (for TP/SL checks)
                 await self._wait_for_next_evaluation(strategy, summary)
-        except asyncio.CancelledError:
-            # Get final PnL before sending notification
-            final_pnl = None
-            if summary.unrealized_pnl is not None:
-                final_pnl = summary.unrealized_pnl
-            
-            # Log strategy cancellation
-            account_id = summary.account_id or "default"
-            account_name = self.client_manager.get_account_config(account_id)
-            account_display = account_name.name if account_name else account_id
-            pnl_str = f" | Final PnL: ${final_pnl:.2f}" if final_pnl is not None else ""
-            logger.info(
-                f"⏹️ Strategy CANCELLED: {summary.id} ({summary.name}) | "
-                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display})"
-                f"{pnl_str} | Reason: Task cancelled"
-            )
-            
-            # Send notification that strategy stopped
-            if self.notifications:
-                asyncio.create_task(
-                    self.notifications.notify_strategy_stopped(
-                        summary,
-                        reason="Strategy cancelled",
-                        final_pnl=final_pnl,
-                        user_id=self.order_manager.user_id,
-                    )
+            except asyncio.CancelledError:
+                # Get final PnL before sending notification
+                final_pnl = None
+                if summary.unrealized_pnl is not None:
+                    final_pnl = summary.unrealized_pnl
+
+                # Log strategy cancellation
+                account_id = summary.account_id or "default"
+                account_name = self.client_manager.get_account_config(account_id)
+                account_display = account_name.name if account_name else account_id
+                pnl_str = f" | Final PnL: ${final_pnl:.2f}" if final_pnl is not None else ""
+                logger.info(
+                    f"⏹️ Strategy CANCELLED: {summary.id} ({summary.name}) | "
+                    f"Symbol: {summary.symbol} | Account: {account_id} ({account_display})"
+                    f"{pnl_str} | Reason: Task cancelled"
                 )
-            
-            await strategy.teardown()
-            raise
-        except (RiskLimitExceededError, CircuitBreakerActiveError) as exc:
-            # Risk enforcement errors - do NOT mark strategy as error
-            # These are expected behaviors when risk limits are enforced
-            account_id = summary.account_id or "default"
-            account_name = self.client_manager.get_account_config(account_id)
-            account_display = account_name.name if account_name else account_id
-            logger.warning(
-                f"⚠️ Order blocked by risk: {summary.id} ({summary.name}) | "
-                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
-                f"Reason: {exc.message}"
-            )
-            # Note: Notifications are already sent by StrategyOrderManager
-            # Do NOT send error notification - this is expected behavior
-        except Exception as exc:
-            # Only mark as error for actual errors (not risk enforcement)
-            summary.status = StrategyState.error
-            self.state_manager.save_to_redis(summary.id, summary)
-            
-            # Log strategy failure with details
-            account_id = summary.account_id or "default"
-            account_name = self.client_manager.get_account_config(account_id)
-            account_display = account_name.name if account_name else account_id
-            logger.error(
-                f"❌ Strategy FAILED: {summary.id} ({summary.name}) | "
-                f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
-                f"Error: {type(exc).__name__}: {exc}"
-            )
-            logger.exception(f"Strategy {summary.id} failed: {exc}")
-            
-            # Send notification about strategy error
-            if self.notifications:
-                asyncio.create_task(
-                    self.notifications.notify_strategy_error(
-                        summary,
-                        exc,
-                        error_type=type(exc).__name__,
-                        user_id=self.order_manager.user_id,
+
+                # Send notification that strategy stopped
+                if self.notifications:
+                    asyncio.create_task(
+                        self.notifications.notify_strategy_stopped(
+                            summary,
+                            reason="Strategy cancelled",
+                            final_pnl=final_pnl,
+                            user_id=self.order_manager.user_id,
+                        )
                     )
+
+                await strategy.teardown()
+                raise
+            except (RiskLimitExceededError, CircuitBreakerActiveError) as exc:
+                # Risk enforcement errors - do NOT mark strategy as error
+                account_id = summary.account_id or "default"
+                account_name = self.client_manager.get_account_config(account_id)
+                account_display = account_name.name if account_name else account_id
+                logger.warning(
+                    f"⚠️ Order blocked by risk: {summary.id} ({summary.name}) | "
+                    f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
+                    f"Reason: {exc.message}"
                 )
-        finally:
-            # CRITICAL: Always remove task from _tasks when loop exits
-            # This prevents dead tasks from counting toward concurrent limit
-            # Note: Task removal is handled by StrategyRunner, not here
-            logger.debug(f"Strategy loop ended for {summary.id}")
+            except Exception as exc:
+                # Treat transient network/circuit-breaker as non-fatal: wait and retry (no internet / API down)
+                underlying = exc
+                try:
+                    from tenacity import RetryError
+                    if isinstance(exc, RetryError) and getattr(exc, "last_attempt", None):
+                        try:
+                            underlying = exc.last_attempt.exception()
+                        except Exception:
+                            pass
+                except ImportError:
+                    pass
+                is_transient = isinstance(underlying, (BinanceNetworkError, CircuitBreakerOpenError)) or (
+                    isinstance(underlying, BinanceAPIError)
+                    and getattr(underlying, "message", None)
+                    and "circuit breaker" in str(underlying.message).lower()
+                )
+                if is_transient:
+                    logger.warning(
+                        f"[{summary.id}] Temporary network/circuit breaker issue (no internet or API down): {underlying}. "
+                        "Waiting 60s before retrying; strategy will resume when connection is back."
+                    )
+                    await asyncio.sleep(60)
+                    continue
+                # Only mark as error for actual errors (not risk enforcement, not transient network)
+                summary.status = StrategyState.error
+                self.state_manager.save_to_redis(summary.id, summary)
+
+                # Log strategy failure with details
+                account_id = summary.account_id or "default"
+                account_name = self.client_manager.get_account_config(account_id)
+                account_display = account_name.name if account_name else account_id
+                logger.error(
+                    f"❌ Strategy FAILED: {summary.id} ({summary.name}) | "
+                    f"Symbol: {summary.symbol} | Account: {account_id} ({account_display}) | "
+                    f"Error: {type(exc).__name__}: {exc}"
+                )
+                logger.exception(f"Strategy {summary.id} failed: {exc}")
+
+                # Send notification about strategy error
+                if self.notifications:
+                    asyncio.create_task(
+                        self.notifications.notify_strategy_error(
+                            summary,
+                            exc,
+                            error_type=type(exc).__name__,
+                            user_id=self.order_manager.user_id,
+                        )
+                    )
+                break
+            finally:
+                # CRITICAL: Always remove task from _tasks when loop exits
+                logger.debug(f"Strategy loop ended for {summary.id}")
     
     async def _execute_order(
         self,

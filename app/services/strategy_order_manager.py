@@ -730,8 +730,10 @@ class StrategyOrderManager:
                 )
         
         try:
-            # Pass strategy_id for idempotency tracking
-            order_response = account_executor.execute(
+            # Run sync execute() in thread to avoid event-loop issues with tenacity retry
+            # (prevents RetryError with Future and duplicate orders when retries run in async context)
+            order_response = await asyncio.to_thread(
+                account_executor.execute,
                 signal=signal,
                 sizing=sizing,
                 reduce_only_override=reduce_only_override,
@@ -744,54 +746,83 @@ class StrategyOrderManager:
                 await portfolio_risk_manager.confirm_exposure(
                     account_id, summary.id, order_response
                 )
-        except (OrderExecutionError, BinanceAPIError) as exc:
-            # CRITICAL FIX #2: Release reservation if order failed
-            if portfolio_risk_manager:
-                await portfolio_risk_manager.release_reservation(
-                    account_id, summary.id
+        except Exception as retry_exc:
+            order_response = None
+            # Unwrap tenacity RetryError: last_attempt IS the outcome Future (not an object with .outcome)
+            # Success: Future has result OrderResponse. Failure: Future has exception (e.g. -2022).
+            try:
+                from tenacity import RetryError
+                la = getattr(retry_exc, "last_attempt", None)
+                if isinstance(retry_exc, RetryError) and la is not None:
+                    # tenacity passes retry_state.outcome (a Future) as last_attempt
+                    # .failed = (exception() is not None); when False, .result() is OrderResponse
+                    is_failed = getattr(la, "failed", None)
+                    if is_failed is None:
+                        try:
+                            is_failed = la.exception() is not None
+                        except Exception:
+                            is_failed = True
+                    if not is_failed:
+                        try:
+                            res = la.result()
+                            if res is not None and hasattr(res, "order_id"):
+                                order_response = res
+                        except Exception:
+                            pass
+                    if order_response is None:
+                        try:
+                            underlying = la.exception()
+                            if underlying is not None:
+                                retry_exc = underlying
+                        except Exception:
+                            pass
+            except ImportError:
+                pass
+            except Exception:
+                pass
+
+            if order_response is not None:
+                if portfolio_risk_manager and order_response:
+                    await portfolio_risk_manager.confirm_exposure(
+                        account_id, summary.id, order_response
+                    )
+            else:
+                if portfolio_risk_manager:
+                    await portfolio_risk_manager.release_reservation(
+                        account_id, summary.id
+                    )
+                exc = retry_exc
+                if isinstance(exc, (OrderExecutionError, BinanceAPIError)):
+                    error_msg = str(exc).lower()
+                    error_code = getattr(exc, "error_code", None)
+                    is_reduce_only_rejected = (
+                        reduce_only_override
+                        and (
+                            error_code == -2022
+                            or "reduceonly" in error_msg
+                            or "reduce only" in error_msg
+                        )
+                    )
+                    if is_reduce_only_rejected:
+                        logger.warning(
+                            f"[{summary.id}] Reduce-only order rejected for {signal.symbol}: "
+                            f"Position already closed (likely closed by another strategy/order). "
+                            f"Strategy will continue."
+                        )
+                        return None
+                    logger.error(
+                        f"[{summary.id}] Order execution failed: "
+                        f"{getattr(exc, 'message', exc)}"
+                    )
+                    raise
+                logger.exception(
+                    f"[{summary.id}] Unexpected error during order execution: {exc}"
                 )
-            
-            # CRITICAL FIX: Handle "ReduceOnly Order is rejected" error gracefully
-            # This happens when position was already closed by another strategy/order
-            error_msg = str(exc).lower()
-            error_code = getattr(exc, 'error_code', None)
-            is_reduce_only_rejected = (
-                reduce_only_override and
-                (error_code == -2022 or 
-                 "reduceonly" in error_msg or 
-                 "reduce-only" in error_msg or
-                 "reduce only" in error_msg)
-            )
-            
-            if is_reduce_only_rejected:
-                # Position was already closed - this is expected in race conditions
-                # Log as warning and return None (position already closed, goal achieved)
-                logger.warning(
-                    f"[{summary.id}] Reduce-only order rejected for {signal.symbol}: "
-                    f"Position already closed (likely closed by another strategy/order). "
-                    f"This is expected in race conditions. Strategy will continue."
-                )
-                # Return None to indicate no order was executed (position already closed)
-                return None
-            
-            # Log and re-raise other API errors
-            logger.error(
-                f"[{summary.id}] Order execution failed: {exc.message if hasattr(exc, 'message') else exc}"
-            )
-            raise
-        except Exception as exc:
-            # CRITICAL FIX #2: Release reservation if order failed
-            if portfolio_risk_manager:
-                await portfolio_risk_manager.release_reservation(
-                    account_id, summary.id
-                )
-            # Wrap unexpected errors
-            logger.exception(f"[{summary.id}] Unexpected error during order execution: {exc}")
-            raise OrderExecutionError(
-                f"Unexpected error executing order: {exc}",
-                symbol=signal.symbol,
-                details={"strategy_id": summary.id, "signal_action": signal.action}
-            ) from exc
+                raise OrderExecutionError(
+                    f"Unexpected error executing order: {exc}",
+                    symbol=signal.symbol,
+                    details={"strategy_id": summary.id, "signal_action": signal.action},
+                ) from exc
         
         # Update summary with order execution results and track trade
         if order_response:

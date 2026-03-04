@@ -67,10 +67,6 @@ async def test_entry_uses_next_candle_open(monkeypatch):
         kline(t0+180000,   400, 410, 390, 405),  # 3
     ]
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     calls = {"n": 0}
     async def fake_eval(self):
         calls["n"] += 1
@@ -92,7 +88,8 @@ async def test_entry_uses_next_candle_open(monkeypatch):
         params={"ema_slow": 1, "ema_fast": 1, "kline_interval": "1m"}  # min_required_candles = 2
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    # Use pre_fetched_klines so we don't hit mainnet fetch (tests use small kline sets)
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
     
     assert len(res.trades) > 0, "Should have at least one trade"
     trade = res.trades[0]
@@ -124,10 +121,6 @@ async def test_scalping_blocks_tp_on_entry_candle(monkeypatch):
         kline(t0+120000, 205, 210, 200, 208),  # 2 - later candle
     ]
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     calls = {"n": 0}
     async def fake_eval(self):
         calls["n"] += 1
@@ -154,7 +147,7 @@ async def test_scalping_blocks_tp_on_entry_candle(monkeypatch):
         }
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
 
     assert len(res.trades) > 0, "Should have at least one trade"
     trade = res.trades[0]
@@ -182,10 +175,6 @@ async def test_scalping_intrabar_tp_uses_high_and_exits_at_level(monkeypatch):
         kline(t0+180000, 200, 206, 198, 199),  # 3 - TP hit by high=206, close=199 (below TP)
     ]
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     calls = {"n": 0}
     async def fake_eval(self):
         calls["n"] += 1
@@ -212,7 +201,7 @@ async def test_scalping_intrabar_tp_uses_high_and_exits_at_level(monkeypatch):
         }
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
     
     assert len(res.trades) > 0, "Should have at least one trade"
     trade = res.trades[0]
@@ -247,10 +236,6 @@ async def test_scalping_tp_sl_same_candle_sl_wins(monkeypatch):
         kline(t0+180000, 200, 250, 150, 199),  # 3 - both TP (high=250) and SL (low=150) hit
     ]
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     calls = {"n": 0}
     async def fake_eval(self):
         calls["n"] += 1
@@ -276,7 +261,7 @@ async def test_scalping_tp_sl_same_candle_sl_wins(monkeypatch):
         }
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
     
     assert len(res.trades) > 0, "Should have at least one trade"
     trade = res.trades[0]
@@ -301,10 +286,6 @@ async def test_range_snapshots_do_not_use_current_candle_close(monkeypatch):
         klines.append(kline(t0+n*60000, price, price+1, price-1, close))
         price += 1
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     # Strategy doesn't need to trade; keep HOLD always
     async def fake_eval(self):
         return StrategySignal(action="HOLD", symbol="BTCUSDT", confidence=0.0, price=None)
@@ -328,7 +309,7 @@ async def test_range_snapshots_do_not_use_current_candle_close(monkeypatch):
         }
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
 
     # Find snapshot at time of the "spike" candle (55)
     # Because we now use closed candles up to i-1, the snapshot at candle 55 must NOT reflect close=999999 yet.
@@ -363,10 +344,6 @@ async def test_no_reentry_same_candle_after_exit(monkeypatch):
         kline(t0+180000, 210, 211, 209, 210),  # 3 - later candle
     ]
 
-    async def fake_fetch(*args, **kwargs):
-        return klines
-    monkeypatch.setattr(bt, "_fetch_historical_klines", fake_fetch)
-
     calls = {"n": 0}
     async def fake_eval(self):
         calls["n"] += 1
@@ -396,7 +373,7 @@ async def test_no_reentry_same_candle_after_exit(monkeypatch):
         }
     )
 
-    res = await bt.run_backtest(req, DummyClient())
+    res = await bt.run_backtest(req, DummyClient(), pre_fetched_klines=klines)
     
     # Should not open 2nd trade on same candle as exit
     # Either only 1 trade, or 2nd trade entry_time > 1st trade exit_time

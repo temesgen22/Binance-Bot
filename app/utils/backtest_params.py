@@ -5,6 +5,13 @@ Reduces code duplication across backtesting code.
 from typing import Dict, Any, Optional
 
 
+def _num(value: Any, default: Any, cast: type = float):
+    """Return cast(value) or default when value is None (e.g. JSON null)."""
+    if value is None:
+        return default
+    return cast(value)
+
+
 def extract_range_mean_reversion_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract and normalize parameters for range mean reversion strategy.
@@ -16,17 +23,17 @@ def extract_range_mean_reversion_params(params: Dict[str, Any]) -> Dict[str, Any
         Dictionary with normalized parameter values
     """
     return {
-        "lookback_period": int(params.get("lookback_period", 150)),
-        "ema_slow_period": int(params.get("ema_slow_period", 50)),
-        "rsi_period": int(params.get("rsi_period", 14)),
-        "ema_fast_period": int(params.get("ema_fast_period", 20)),
-        "buy_zone_pct": float(params.get("buy_zone_pct", 0.2)),
-        "sell_zone_pct": float(params.get("sell_zone_pct", 0.2)),
-        "tp_buffer_pct": float(params.get("tp_buffer_pct", 0.001)),
-        "sl_buffer_pct": float(params.get("sl_buffer_pct", 0.002)),
-        "rsi_oversold": float(params.get("rsi_oversold", 40)),
-        "rsi_overbought": float(params.get("rsi_overbought", 60)),
-        "max_ema_spread_pct": float(params.get("max_ema_spread_pct", 0.005)),
+        "lookback_period": _num(params.get("lookback_period"), 150, int),
+        "ema_slow_period": _num(params.get("ema_slow_period"), 50, int),
+        "rsi_period": _num(params.get("rsi_period"), 14, int),
+        "ema_fast_period": _num(params.get("ema_fast_period"), 20, int),
+        "buy_zone_pct": _num(params.get("buy_zone_pct"), 0.2),
+        "sell_zone_pct": _num(params.get("sell_zone_pct"), 0.2),
+        "tp_buffer_pct": _num(params.get("tp_buffer_pct"), 0.001),
+        "sl_buffer_pct": _num(params.get("sl_buffer_pct"), 0.002),
+        "rsi_oversold": _num(params.get("rsi_oversold"), 40),
+        "rsi_overbought": _num(params.get("rsi_overbought"), 60),
+        "max_ema_spread_pct": _num(params.get("max_ema_spread_pct"), 0.005),
     }
 
 
@@ -41,12 +48,12 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary with normalized parameter values
     """
     return {
-        "ema_fast": int(params.get("ema_fast", 8)),
-        "ema_slow": int(params.get("ema_slow", 21)),
-        "take_profit_pct": float(params.get("take_profit_pct", 0.004)),
-        "stop_loss_pct": float(params.get("stop_loss_pct", 0.002)),
-        "trailing_stop_enabled": params.get("trailing_stop_enabled", False),
-        "trailing_stop_activation_pct": float(params.get("trailing_stop_activation_pct", 0.0)),
+        "ema_fast": _num(params.get("ema_fast"), 8, int),
+        "ema_slow": _num(params.get("ema_slow"), 21, int),
+        "take_profit_pct": _num(params.get("take_profit_pct"), 0.004),
+        "stop_loss_pct": _num(params.get("stop_loss_pct"), 0.002),
+        "trailing_stop_enabled": params.get("trailing_stop_enabled", False) if params.get("trailing_stop_enabled") is not None else False,
+        "trailing_stop_activation_pct": _num(params.get("trailing_stop_activation_pct"), 0.0),
     }
 
 

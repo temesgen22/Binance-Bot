@@ -321,9 +321,12 @@ class TestOrderIdempotency:
             price=40000.0
         )
         sizing = PositionSizingResult(quantity=0.001, notional=40.0)
+        strategy_id = "test-strategy"
         
-        # Generate key and track order
-        idempotency_key = order_executor._generate_idempotency_key(signal, sizing, reduce_only=False)
+        # Generate key with same strategy_id as execute() will use, then track order
+        idempotency_key = order_executor._generate_idempotency_key(
+            signal, sizing, reduce_only=False, strategy_id=strategy_id
+        )
         order_executor._recent_orders[idempotency_key] = (12345, time.time())
         
         # Mock get_order_status to return existing order
@@ -337,7 +340,7 @@ class TestOrderIdempotency:
             "price": "40000.0",
         }
         
-        result = order_executor.execute(signal=signal, sizing=sizing, strategy_id="test-strategy")
+        result = order_executor.execute(signal=signal, sizing=sizing, strategy_id=strategy_id)
         
         # Should return None (duplicate skipped) or return existing order
         # Verify place_order was NOT called

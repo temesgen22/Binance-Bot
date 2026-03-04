@@ -289,12 +289,12 @@ class TestPreFetchedKlines:
         klines = build_klines(count=1440, start_time=request.start_time)  # 1 day
         mock_client = setup_mock_binance_client(klines)
         
-        # Should call _fetch_historical_klines when pre_fetched_klines is None
-        with patch('app.api.routes.backtesting._fetch_historical_klines', new_callable=AsyncMock) as mock_fetch:
+        # run_backtest uses _fetch_historical_klines_mainnet when pre_fetched_klines is None
+        with patch('app.api.routes.backtesting._fetch_historical_klines_mainnet', new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = klines
             result = await run_backtest(request, mock_client, pre_fetched_klines=None)
             
-            # Should have called fetch
+            # Should have called mainnet fetch once
             mock_fetch.assert_called_once()
             assert isinstance(result, BacktestResult)
 
