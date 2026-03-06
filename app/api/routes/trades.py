@@ -576,36 +576,52 @@ def get_symbol_pnl(
     losing_trades = len([t for t in completed_trades if t.realized_pnl < 0])
     win_rate = (winning_trades / len(completed_trades) * 100) if completed_trades else 0
     
-    # Get open positions from Binance - use account-specific client if filtering by account_id
+    # Get open positions from Binance - use account-specific client (from DB when no .env keys)
     open_positions = []
     total_unrealized_pnl = 0.0
     
-    # Use account-specific client when filtering by account_id
     position_client = client
-    if account_id:
+    account_id_for_client = account_id
+    if account_id_for_client:
         try:
-            account_client = client_manager.get_client(account_id)
+            account_client = client_manager.get_client(account_id_for_client)
             if account_client:
                 position_client = account_client
-                logger.debug(f"Using account-specific client for {account_id} to get position for {symbol}")
-            else:
-                logger.warning(
-                    f"⚠️ Account '{account_id}' not found in client manager. "
-                    f"Falling back to default client. This may cause API key errors if default client has invalid keys."
-                )
+                logger.debug(f"Using account-specific client for {account_id_for_client} to get position for {symbol}")
         except Exception as exc:
             logger.warning(
-                f"⚠️ Could not get account-specific client for {account_id}, using default: {exc}. "
-                f"This may cause API key errors if default client has invalid keys."
+                f"Could not get account-specific client for {account_id_for_client}, using default: {exc}"
             )
+    elif symbol_strategies:
+        # No account_id filter: use the account of the first strategy for this symbol (DB-backed keys)
+        account_id_for_client = getattr(symbol_strategies[0], "account_id", None) or "default"
+        try:
+            account_client = client_manager.get_client(account_id_for_client)
+            if account_client:
+                position_client = account_client
+                logger.debug(f"Using client for account {account_id_for_client} (from strategy) to get position for {symbol}")
+        except Exception as exc:
+            logger.debug(f"Could not get client for account {account_id_for_client}: {exc}")
+    
+    # Skip Binance position fetch if client has no valid API key (e.g. no keys in .env, account not loaded yet)
+    def _client_has_api_key(c: "BinanceClient") -> bool:
+        if c is None:
+            return False
+        rest = getattr(c, "_rest", None)
+        if rest is None:
+            return False
+        key = getattr(rest, "api_key", None) or getattr(rest, "_api_key", None)
+        return bool(key and str(key).strip() and str(key).lower() not in ("demo", ""))
     
     try:
-        # Validate client before calling
-        if position_client is None:
-            logger.warning(f"Position client is None for {symbol} (account_id: {account_id or 'default'}). Cannot get open position.")
+        if position_client is None or not _client_has_api_key(position_client):
+            if position_client is None:
+                logger.warning(f"Position client is None for {symbol} (account_id: {account_id or 'default'}). Cannot get open position.")
+            else:
+                logger.debug(f"Skipping Binance position fetch for {symbol} (no valid API key on client). Completed trades from DB still returned.")
             position_data = None
         else:
-            logger.debug(f"Getting position for {symbol} using client (account_id: {account_id or 'default'})")
+            logger.debug(f"Getting position for {symbol} using client (account_id: {account_id_for_client or account_id or 'default'})")
             try:
                 position_data = position_client.get_open_position(symbol)
             except Exception as pos_exc:
