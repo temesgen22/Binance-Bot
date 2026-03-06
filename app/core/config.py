@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     base_symbols: Union[str, List[str]] = Field(
         default="BTCUSDT,ETHUSDT", alias="BASE_SYMBOLS"
     )
+
+    @field_validator("binance_testnet", mode="before")
+    @classmethod
+    def parse_binance_testnet(cls, v: Any) -> bool:
+        """Parse .env string 'false'/'0'/'no' as False so BINANCE_TESTNET=false works."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() not in ("false", "0", "no", "off", "")
+        return bool(v)
     default_leverage: int = Field(default=5, alias="DEFAULT_LEVERAGE")
     risk_per_trade: float = Field(default=0.01, alias="RISK_PER_TRADE")
     max_concurrent_strategies: int = Field(default=3, alias="MAX_CONCURRENT_STRATEGIES")

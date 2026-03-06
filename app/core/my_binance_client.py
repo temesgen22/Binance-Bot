@@ -1020,9 +1020,15 @@ class BinanceClient:
             except Exception as exc:
                 logger.debug(f"Could not get margin type from account info: {exc}")
         
-        # Realized PnL - this is typically available from user trades endpoint, not order response
-        # We'll leave it None for now as it requires querying a different endpoint
+        # Realized PnL - from order response when closing (Binance may include realizedProfit);
+        # otherwise left None and strategy_order_manager uses unrealized_pnl at close for circuit breaker.
         realized_pnl = None
+        try:
+            rp_str = final_response.get("realizedProfit") or final_response.get("realizedPnl")
+            if rp_str is not None and str(rp_str).strip() != "":
+                realized_pnl = float(rp_str)
+        except (TypeError, ValueError):
+            pass
         
         # Log warning if order still doesn't have execution data
         if status != "FILLED" and executed_qty == 0.0:
@@ -1657,6 +1663,37 @@ class BinanceClient:
         Returns:
             Position dict with positionAmt, entryPrice, etc., or None if no position
         """
+        def _pos_dict(pos: dict) -> dict:
+            position_amt = float(pos.get("positionAmt", 0))
+            out = {
+                "symbol": pos.get("symbol"),
+                "positionAmt": position_amt,
+                "entryPrice": float(pos.get("entryPrice", 0)),
+                "markPrice": float(pos.get("markPrice", 0)),
+                "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
+                "leverage": int(pos.get("leverage", 1)),
+            }
+            liq = pos.get("liquidationPrice")
+            if liq is not None and str(liq).strip():
+                try:
+                    out["liquidationPrice"] = float(liq)
+                except (TypeError, ValueError):
+                    pass
+            im = pos.get("initialMargin")
+            if im is not None and str(im).strip():
+                try:
+                    out["initialMargin"] = float(im)
+                except (TypeError, ValueError):
+                    pass
+            mt = pos.get("marginType")
+            if mt is not None and str(mt).strip():
+                mt_upper = str(mt).strip().upper()
+                if mt_upper in ("CROSSED", "ISOLATED"):
+                    out["marginType"] = mt_upper
+                elif mt_upper == "CROSS":  # Binance may return "cross"
+                    out["marginType"] = "CROSSED"
+            return out
+
         rest = self._ensure()
         try:
             positions = rest.futures_position_information(symbol=symbol)
@@ -1664,14 +1701,7 @@ class BinanceClient:
             for pos in positions:
                 position_amt = float(pos.get("positionAmt", 0))
                 if abs(position_amt) > 0:
-                    return {
-                        "symbol": pos.get("symbol"),
-                        "positionAmt": position_amt,
-                        "entryPrice": float(pos.get("entryPrice", 0)),
-                        "markPrice": float(pos.get("markPrice", 0)),
-                        "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
-                        "leverage": int(pos.get("leverage", 1)),
-                    }
+                    return _pos_dict(pos)
             return None
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
@@ -1713,14 +1743,7 @@ class BinanceClient:
                         position_amt = float(pos.get("positionAmt", 0))
                         if abs(position_amt) > 0:
                             logger.info(f"Successfully retrieved position for {symbol} after time sync wait")
-                            return {
-                                "symbol": pos.get("symbol"),
-                                "positionAmt": position_amt,
-                                "entryPrice": float(pos.get("entryPrice", 0)),
-                                "markPrice": float(pos.get("markPrice", 0)),
-                                "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
-                                "leverage": int(pos.get("leverage", 1)),
-                            }
+                            return _pos_dict(pos)
                     return None
                 except Exception as retry_exc:
                     error_code_retry = getattr(retry_exc, 'code', None)

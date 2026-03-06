@@ -8,6 +8,7 @@
     <script src="/static/common.js"></script>
     <script src="/static/settings.js"></script>
     <script src="/static/utils.js"></script>
+    <script src="/static/positions-websocket.js"></script>
     <style>
         /* Page-specific styles - common styles are in common.css */
         .container {
@@ -540,6 +541,8 @@
         let allSymbols = [];
         let availableAccounts = {};
         let allStrategies = [];
+        /** Last PnL data from REST; merged with WebSocket updates for Open Positions tab */
+        let lastPnlData = null;
 
         async function loadStrategies() {
             try {
@@ -618,15 +621,67 @@
                     throw new Error('Invalid data format received from server');
                 }
                 
-                displayOverview(pnlData);
-                displayPositions(pnlData);
-                updateOverallStats(pnlData);
+                lastPnlData = pnlData;
+                const merged = mergePnlWithWs(pnlData);
+                displayOverview(merged);
+                displayPositions(merged);
+                updateOverallStats(merged);
             } catch (error) {
                 console.error('Error loading data:', error);
                 document.getElementById('overviewContent').innerHTML = 
                     `<div class="error">Error loading data: ${error.message}</div>`;
             }
         }
+
+        /** Merge REST PnL data with live position updates from WebSocket so Open Positions tab updates in real time */
+        function mergePnlWithWs(pnlData) {
+            const base = (pnlData && Array.isArray(pnlData)) ? pnlData.map(s => ({
+                ...s,
+                open_positions: (s.open_positions && s.open_positions.length) ? s.open_positions.map(p => ({ ...p })) : []
+            })) : [];
+            if (typeof window.PositionUpdates === 'undefined' || !window.PositionUpdates.getAll) return base;
+            const ws = window.PositionUpdates.getAll();
+            for (const [sid, data] of Object.entries(ws)) {
+                if (!data || data.position_size == null) continue;
+                const pos = {
+                    strategy_id: sid,
+                    strategy_name: (allStrategies.find(s => s.id === sid) || {}).name || null,
+                    symbol: data.symbol || '',
+                    position_size: data.position_size,
+                    entry_price: data.entry_price,
+                    current_price: data.current_price,
+                    position_side: data.position_side,
+                    unrealized_pnl: data.unrealized_pnl,
+                    leverage: data.leverage,
+                    liquidation_price: data.liquidation_price,
+                    initial_margin: data.initial_margin,
+                    margin_type: data.margin_type
+                };
+                if (data.position_size > 0 && pos.symbol) {
+                    let sym = base.find(m => m.symbol === pos.symbol);
+                    if (!sym) {
+                        sym = { symbol: pos.symbol, open_positions: [], total_realized_pnl: 0, total_unrealized_pnl: 0, total_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 };
+                        base.push(sym);
+                    }
+                    const idx = (sym.open_positions || []).findIndex(p => p.strategy_id === sid);
+                    if (idx >= 0) sym.open_positions[idx] = pos;
+                    else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
+                } else {
+                    base.forEach(s => {
+                        if (s.open_positions) s.open_positions = s.open_positions.filter(p => p.strategy_id !== sid);
+                    });
+                }
+            }
+            return base;
+        }
+
+        // Live Open Positions: when WebSocket pushes position_update, merge with REST data and refresh tab
+        window.addEventListener('position-update', function() {
+            const merged = mergePnlWithWs(lastPnlData);
+            displayOverview(merged);
+            displayPositions(merged);
+            updateOverallStats(merged);
+        });
 
         function updateOverallStats(pnlData) {
             if (!pnlData || !Array.isArray(pnlData)) {
@@ -756,7 +811,17 @@
                 html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${formatPrice(entryPrice)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Current Price:</span><span>$${formatPrice(currentPrice)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Unrealized PnL:</span><span class="${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
+                if (pos.liquidation_price != null && pos.liquidation_price > 0) {
+                    html += `<div class="position-detail-item"><span>Liquidation Price:</span><span>$${formatPrice(pos.liquidation_price)}</span></div>`;
+                }
+                if (pos.initial_margin != null && pos.initial_margin >= 0) {
+                    html += `<div class="position-detail-item"><span>Margin:</span><span>${formatCurrency(pos.initial_margin)}</span></div>`;
+                }
+                if (pos.margin_type) {
+                    html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;
+                }
                 if (pos.strategy_name) {
                     html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
                 } else {

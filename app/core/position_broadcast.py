@@ -83,8 +83,12 @@ class PositionBroadcastService:
         unrealized_pnl: Optional[float] = None,
         position_side: Optional[str] = None,
         current_price: Optional[float] = None,
+        leverage: Optional[int] = None,
+        liquidation_price: Optional[float] = None,
+        initial_margin: Optional[float] = None,
+        margin_type: Optional[str] = None,
     ) -> None:
-        """Broadcast a position update to all client WebSockets for this user."""
+        """Broadcast a position update to all client WebSockets for this user (Binance-like fields)."""
         payload: Dict[str, Any] = {
             "type": "position_update",
             "strategy_id": strategy_id,
@@ -100,4 +104,12 @@ class PositionBroadcastService:
             payload["position_side"] = position_side
         if current_price is not None:
             payload["current_price"] = current_price
+        if leverage is not None:
+            payload["leverage"] = leverage
+        if liquidation_price is not None:
+            payload["liquidation_price"] = liquidation_price
+        if initial_margin is not None:
+            payload["initial_margin"] = initial_margin
+        if margin_type is not None:
+            payload["margin_type"] = margin_type
         await self._manager.broadcast_to_user(user_id, payload)

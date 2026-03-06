@@ -9,7 +9,10 @@ data class Position(
     val unrealizedPnL: Double,
     val leverage: Int,
     val strategyId: String? = null,
-    val strategyName: String? = null
+    val strategyName: String? = null,
+    val liquidationPrice: Double? = null,
+    val initialMargin: Double? = null,
+    val marginType: String? = null // "CROSSED" or "ISOLATED"
 ) {
     val isLong: Boolean
         get() = positionSide.uppercase() == "LONG"

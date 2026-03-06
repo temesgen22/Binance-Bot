@@ -37,6 +37,18 @@ from app.core.config import get_settings
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 
 
+def _normalize_margin_type(mt: Optional[str]) -> Optional[str]:
+    """Normalize Binance marginType to CROSSED/ISOLATED for PositionSummary."""
+    if mt is None or not str(mt).strip():
+        return None
+    u = str(mt).strip().upper()
+    if u == "CROSS":
+        return "CROSSED"
+    if u in ("CROSSED", "ISOLATED"):
+        return u
+    return None
+
+
 async def _get_completed_trades_from_database_for_trades_page(
     db_service: DatabaseService,
     user_id: UUID,
@@ -670,6 +682,9 @@ def get_symbol_pnl(
                     leverage=position_data["leverage"],
                     strategy_id=strategy_match.id if strategy_match else None,
                     strategy_name=strategy_match.name if strategy_match else None,
+                    liquidation_price=position_data.get("liquidationPrice"),
+                    initial_margin=position_data.get("initialMargin"),
+                    margin_type=_normalize_margin_type(position_data.get("marginType")),
                 ))
                 total_unrealized_pnl = position_data["unRealizedProfit"]
             

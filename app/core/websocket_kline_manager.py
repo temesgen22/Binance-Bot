@@ -100,8 +100,8 @@ class WebSocketKlineManager:
             # Start connection
             await connection.connect()
             
-            # Wait for connection (with timeout)
-            connected = await connection.wait_until_connected(timeout=10.0)
+            # Wait for connection (with timeout; 20s allows slow handshakes)
+            connected = await connection.wait_until_connected(timeout=20.0)
             if not connected:
                 logger.warning(
                     f"WebSocket connection timeout for {symbol} {interval}. "

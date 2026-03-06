@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -120,12 +121,11 @@ def create_app() -> FastAPI:
     # Get default client for backward compatibility
     default_client = client_manager.get_default_client()
     if not default_client:
-        # Validate API keys before creating default client
-        if settings.binance_api_key in ("demo", "Demo", "DEMO", "") or settings.binance_api_secret in ("demo", "Demo", "DEMO", ""):
-            logger.warning(
-                "⚠️ Default API keys are set to 'demo' placeholder values. "
-                "This will cause 'API-key format invalid' errors when making authenticated requests. "
-                "Please configure a valid account in the database or set BINANCE_API_KEY and BINANCE_API_SECRET in .env file."
+        # Fallback: create default client from .env if no client from database yet
+        _demo_keys = settings.binance_api_key in ("demo", "Demo", "DEMO", "") or settings.binance_api_secret in ("demo", "Demo", "DEMO", "")
+        if _demo_keys:
+            logger.info(
+                "No default API keys in .env; accounts will be loaded from database when needed."
             )
         # Fallback: create default client if no accounts configured
         # Wrap in try-except to handle temporary Binance API unavailability
@@ -215,9 +215,16 @@ def create_app() -> FastAPI:
     # Mark price streams for real-time PnL (optional)
     mark_price_stream_manager = None
     if settings.use_mark_price_stream:
+        # Use env directly so BINANCE_TESTNET=false is respected (Settings can cache/coerce incorrectly)
+        _mp_testnet_raw = os.environ.get("BINANCE_TESTNET", "true").strip().lower()
+        mark_price_testnet = _mp_testnet_raw not in ("false", "0", "no", "off")
         mark_price_stream_manager = MarkPriceStreamManager(
             broadcast_service=position_broadcast_service,
-            testnet=settings.binance_testnet,
+            testnet=mark_price_testnet,
+        )
+        logger.info(
+            f"Mark price stream: {'testnet' if mark_price_testnet else 'mainnet'} "
+            f"(wss://{'testnet.binancefuture.com' if mark_price_testnet else 'fstream.binance.com'}/...)"
         )
 
     runner = StrategyRunner(

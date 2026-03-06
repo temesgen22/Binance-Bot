@@ -67,10 +67,17 @@
                                     entry_price: data.entry_price,
                                     unrealized_pnl: data.unrealized_pnl,
                                     position_side: data.position_side,
-                                    current_price: data.current_price
+                                    current_price: data.current_price,
+                                    leverage: data.leverage,
+                                    liquidation_price: data.liquidation_price,
+                                    initial_margin: data.initial_margin,
+                                    margin_type: data.margin_type
                                 };
-                                if (data.position_size <= 0) delete this._updates[sid];
-                                window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[sid] || { strategy_id: sid, position_size: 0 } }));
+                                // Keep closed (position_size <= 0) in store so merge can remove from Open Positions tab
+                                if (data.position_size <= 0) {
+                                    this._updates[sid] = { ...this._updates[sid], position_size: 0 };
+                                }
+                                window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[sid] }));
                             }
                         }
                     } catch (e) {

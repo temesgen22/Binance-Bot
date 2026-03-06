@@ -390,13 +390,14 @@ class CircuitBreaker:
         try:
             # Actually stop the strategy if it's running
             # Cancel the running task (similar to StrategyRunner.stop())
-            if hasattr(self.strategy_runner, '_tasks') and strategy_id in self.strategy_runner._tasks:
-                task = self.strategy_runner._tasks.get(strategy_id)
+            tasks = getattr(self.strategy_runner, "_tasks", None)
+            if isinstance(tasks, dict) and strategy_id in tasks:
+                task = tasks.get(strategy_id)
                 if task and not task.done():
                     # Cancel the running task - this will cause the strategy loop to exit
                     task.cancel()
                     # Remove from tasks dict
-                    self.strategy_runner._tasks.pop(strategy_id, None)
+                    tasks.pop(strategy_id, None)
                     logger.info(f"Cancelled running task for strategy {strategy_id} due to circuit breaker")
             
             # Update strategy status to stopped_by_risk (which is effectively "stopped" but with reason)
@@ -410,8 +411,9 @@ class CircuitBreaker:
                 )
             
             # Also update in-memory status if strategy is in memory
-            if hasattr(self.strategy_runner, '_strategies') and strategy_id in self.strategy_runner._strategies:
-                self.strategy_runner._strategies[strategy_id].status = StrategyState.stopped_by_risk
+            strategies = getattr(self.strategy_runner, "_strategies", None)
+            if isinstance(strategies, dict) and strategy_id in strategies:
+                strategies[strategy_id].status = StrategyState.stopped_by_risk
             
             logger.info(f"Paused (stopped) strategy {strategy_id} due to circuit breaker: {reason}")
         except Exception as e:
@@ -429,11 +431,12 @@ class CircuitBreaker:
         
         try:
             # Get all strategies for this account
-            strategies = self.strategy_runner._strategies.values()
-            account_strategies = [s for s in strategies if s.account_id == account_id]
-            
+            strategies = getattr(self.strategy_runner, "_strategies", None)
+            if not isinstance(strategies, dict):
+                return
+            account_strategies = [s for s in strategies.values() if getattr(s, "account_id", None) == account_id]
             for strategy in account_strategies:
-                self._pause_strategy(strategy.id, reason)
+                self._pause_strategy(getattr(strategy, "id", ""), reason)
         except Exception as e:
             logger.error(f"Failed to pause strategies for account {account_id}: {e}")
     

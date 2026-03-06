@@ -1,6 +1,7 @@
 """
 Mark price stream manager: subscribe/unsubscribe by symbol, registry of open positions,
 and handler that computes PnL and pushes to client WebSockets on each mark price tick.
+When WebSocket fails (502/timeout), a REST fallback polls mark price every 15s so PnL still updates.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import httpx
 from loguru import logger
 
 from app.core.mark_price_connection import MarkPriceConnection
@@ -41,6 +43,9 @@ class MarkPriceStreamManager:
         self._subscription_counts: Dict[str, int] = {}
         self._registry: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of {strategy_id, user_id, entry_price, position_size, position_side, account_id}
         self._lock = asyncio.Lock()
+        self._rest_fallback_tasks: Dict[str, asyncio.Task] = {}
+        self._rest_fallback_interval = 15
+        self._rest_fallback_logged: set = set()  # keys we've logged "using REST fallback" for
 
     def register_position(
         self,
@@ -85,6 +90,36 @@ class MarkPriceStreamManager:
         if not self._registry[key]:
             del self._registry[key]
 
+    async def _rest_fallback_loop(self, key: str) -> None:
+        """Poll mark price via REST every N seconds and broadcast; used when WebSocket fails."""
+        base = "https://testnet.binancefuture.com" if self._testnet else "https://fapi.binance.com"
+        url = f"{base}/fapi/v1/premiumIndex"
+        while True:
+            try:
+                await asyncio.sleep(self._rest_fallback_interval)
+                if key not in self._registry or not self._registry[key]:
+                    continue
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    r = await client.get(url, params={"symbol": key})
+                    r.raise_for_status()
+                    data = r.json()
+                mark_price_str = data.get("markPrice")
+                if mark_price_str is None:
+                    continue
+                mark_price = float(mark_price_str)
+                if key not in self._rest_fallback_logged:
+                    self._rest_fallback_logged.add(key)
+                    logger.info(
+                        f"[MarkPrice] {key} using REST fallback (every {self._rest_fallback_interval}s); "
+                        "PnL will still update in the app."
+                    )
+                callback = self._on_mark_price_factory(key)
+                await callback(key, {"mark_price": mark_price, **data})
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[MarkPrice] REST fallback {key}: {e}")
+
     def _on_mark_price_factory(self, symbol_key: str):
         async def _on_mark_price(_symbol: str, data: Dict[str, Any]) -> None:
             mark_price = data.get("mark_price")
@@ -116,18 +151,28 @@ class MarkPriceStreamManager:
         return _on_mark_price
 
     async def subscribe(self, symbol: str) -> None:
-        """Subscribe to mark price for symbol (reference count; one connection per symbol)."""
+        """Subscribe to mark price for symbol. One connection per symbol; reuse if already connected."""
         key = symbol.upper()
         async with self._lock:
-            self._subscription_counts[key] = self._subscription_counts.get(key, 0) + 1
             if key in self._connections:
+                logger.debug(f"[MarkPrice] Reusing existing connection for {key} (no duplicate WebSocket)")
                 return
+            self._subscription_counts[key] = 1
             conn = MarkPriceConnection(
                 symbol=key,
                 testnet=self._testnet,
                 on_mark_price=self._on_mark_price_factory(key),
             )
             self._connections[key] = conn
+        # Stagger connection so it's not in same burst as User Data / other streams (reduces 502 on same machine)
+        await asyncio.sleep(2)
+        async with self._lock:
+            if key not in self._connections or self._connections[key] is not conn:
+                self._subscription_counts[key] = self._subscription_counts.get(key, 1) - 1
+                if self._subscription_counts[key] <= 0:
+                    del self._subscription_counts[key]
+                return
+        logger.info(f"[MarkPrice] Connecting to {conn.url} (testnet={self._testnet})")
         try:
             await conn.connect()
         except Exception as e:
@@ -139,7 +184,12 @@ class MarkPriceStreamManager:
                 if key in self._connections:
                     del self._connections[key]
             return
-        logger.debug(f"[MarkPrice] Subscribed: {key}")
+        logger.info(f"[MarkPrice] Subscribed to {key} (position opened; real-time PnL updates enabled)")
+        # Start REST fallback so PnL still updates when WebSocket fails (502/timeout)
+        async with self._lock:
+            if key not in self._rest_fallback_tasks:
+                task = asyncio.create_task(self._rest_fallback_loop(key))
+                self._rest_fallback_tasks[key] = task
 
     async def unsubscribe(self, symbol: str) -> None:
         """Unsubscribe from mark price for symbol (decrement count; disconnect when 0)."""
@@ -153,6 +203,13 @@ class MarkPriceStreamManager:
             conn = self._connections.pop(key, None)
             if key in self._subscription_counts:
                 del self._subscription_counts[key]
+            fallback_task = self._rest_fallback_tasks.pop(key, None)
+        if fallback_task:
+            fallback_task.cancel()
+            try:
+                await fallback_task
+            except asyncio.CancelledError:
+                pass
         if conn:
             await conn.disconnect()
         logger.debug(f"[MarkPrice] Unsubscribed: {key}")
@@ -164,11 +221,19 @@ class MarkPriceStreamManager:
             await self.unsubscribe(symbol)
 
     async def stop_all(self) -> None:
-        """Disconnect all mark price connections (shutdown)."""
+        """Disconnect all mark price connections and REST fallback tasks (shutdown)."""
         async with self._lock:
             conns = list(self._connections.values())
             self._connections.clear()
             self._subscription_counts.clear()
+            fallback_tasks = list(self._rest_fallback_tasks.values())
+            self._rest_fallback_tasks.clear()
+        for t in fallback_tasks:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         for c in conns:
             try:
                 await c.disconnect()

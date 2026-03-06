@@ -87,6 +87,10 @@ class WebSocketManager @Inject constructor(
                                 val unrealizedPnl = try { jsonObject.get("unrealized_pnl")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
                                 val positionSide = try { jsonObject.get("position_side")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
                                 val currentPrice = try { jsonObject.get("current_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val leverage = try { jsonObject.get("leverage")?.takeIf { !it.isJsonNull }?.getAsInt() } catch (_: Exception) { null }
+                                val liquidationPrice = try { jsonObject.get("liquidation_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val initialMargin = try { jsonObject.get("initial_margin")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val marginType = try { jsonObject.get("margin_type")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
                                 UpdateMessage.PositionUpdate(
                                     strategyId = strategyId,
                                     symbol = symbol,
@@ -95,7 +99,11 @@ class WebSocketManager @Inject constructor(
                                     entryPrice = entryPrice,
                                     unrealizedPnl = unrealizedPnl,
                                     positionSide = positionSide,
-                                    currentPrice = currentPrice
+                                    currentPrice = currentPrice,
+                                    leverage = leverage,
+                                    liquidationPrice = liquidationPrice,
+                                    initialMargin = initialMargin,
+                                    marginType = marginType
                                 )
                             }
                             "strategy_update" -> {
@@ -231,7 +239,11 @@ sealed class UpdateMessage {
         val entryPrice: Double?,
         val unrealizedPnl: Double?,
         val positionSide: String?,
-        val currentPrice: Double?
+        val currentPrice: Double?,
+        val leverage: Int? = null,
+        val liquidationPrice: Double? = null,
+        val initialMargin: Double? = null,
+        val marginType: String? = null
     ) : UpdateMessage()
     data class Error(val message: String) : UpdateMessage()
 }

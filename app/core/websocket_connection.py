@@ -53,6 +53,7 @@ class WebSocketConnection:
             self.mainnet_url = self.url
         
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._connected_at_least_once = False  # True once handshake succeeded (so wait_until_connected can pass even if socket later closes)
         self._running = False
         self._reconnect_attempts = 0
         self._testnet_failure_count = 0  # Track testnet failures
@@ -148,11 +149,13 @@ class WebSocketConnection:
             # For now, we'll connect without custom headers (not critical for Binance)
             async with websockets.connect(
                 self.url,
+                open_timeout=20,
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=10
             ) as ws:
                 self._ws = ws
+                self._connected_at_least_once = True  # Handshake succeeded; wait_until_connected can pass even if socket closes later
                 self._reconnect_attempts = 0  # Reset on successful connection
                 self._testnet_failure_count = 0  # Reset testnet failure count on success
                 url_type = "mainnet" if self._use_mainnet_fallback else ("testnet" if self.testnet else "mainnet")
@@ -208,14 +211,17 @@ class WebSocketConnection:
     async def wait_until_connected(self, timeout: float = 10.0) -> bool:
         """Wait until WebSocket is connected.
         
+        Returns True if connected or if handshake succeeded at least once
+        (so we don't timeout when the socket closes immediately after open; reconnection continues in background).
+        
         Args:
             timeout: Maximum time to wait in seconds
             
         Returns:
-            True if connected within timeout, False otherwise
+            True if connected within timeout (or had connected), False otherwise
         """
         start_time = asyncio.get_event_loop().time()
-        while not self.is_connected():
+        while not (self.is_connected() or self._connected_at_least_once):
             if asyncio.get_event_loop().time() - start_time > timeout:
                 return False
             await asyncio.sleep(0.1)

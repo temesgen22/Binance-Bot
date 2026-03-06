@@ -1086,6 +1086,16 @@ class StrategyExecutor:
         except Exception as e:
             logger.debug(f"[{summary.id}] Failed to persist position state to DB: {e}")
         
+        # Push position update to webapp immediately so UI shows new/closed position in real time
+        try:
+            await self.state_manager.broadcast_position_now(
+                summary, user_id_override=getattr(self.order_manager, "user_id", None)
+            )
+        except RuntimeError:
+            pass  # No running event loop (e.g. in tests)
+        except Exception as e:
+            logger.debug(f"[{summary.id}] Position broadcast failed: {e}")
+        
         # Log position detection for debugging
         logger.debug(
             f"[{summary.id}] Position detection for order {order_response.order_id}: "
@@ -1177,8 +1187,8 @@ class StrategyExecutor:
                             ).first()
                             
                             if exit_trade:
-                                # Create completed trades (non-blocking - fire and forget)
-                                # CRITICAL FIX: Don't pass database session - function creates its own (thread-safe)
+                                # Create completed trades first (so completed_trades table has the close).
+                                # Then run circuit breaker from that table only (single source of truth for realized PnL).
                                 async def create_completed_trades_task():
                                     """Wrapper to catch and log errors from background task."""
                                     try:
@@ -1203,7 +1213,7 @@ class StrategyExecutor:
                                             logger.warning(
                                                 f"[{summary.id}] ⚠️ Completed trade creation task finished but NO trades were created "
                                                 f"for exit_order_id={order_response.order_id}. Check logs above for details."
-                                        )
+                                            )
                                     except Exception as task_error:
                                         # Log error but don't fail the main flow
                                         logger.error(
@@ -1212,12 +1222,34 @@ class StrategyExecutor:
                                             exc_info=True
                                         )
                                 
-                                asyncio.create_task(create_completed_trades_task())
+                                await create_completed_trades_task()
                                 logger.debug(
-                                    f"[{summary.id}] Started background task to create completed trades: "
-                                    f"exit_trade_id={exit_trade.id}, exit_order_id={order_response.order_id}, "
-                                    f"position_side={position_direction}"
+                                    f"[{summary.id}] Completed trade creation finished for exit_order_id={order_response.order_id}"
                                 )
+                                # Circuit breaker: check last N trades from completed_trades table only (realized PnL source of truth)
+                                account_id = getattr(summary, "account_id", None) or "default"
+                                await self.order_manager.run_circuit_breaker_from_completed_trades(
+                                    account_id, summary.id, db_strategy.id
+                                )
+                                # Optional: analyze market regime and log/notify reason (e.g. "market ranging vs trend strategy")
+                                try:
+                                    klines_cb = None
+                                    if hasattr(strategy, "get_klines"):
+                                        klines_cb = await strategy.get_klines()
+                                    if klines_cb:
+                                        from app.risk.market_regime_analyzer import analyze_market_regime
+                                        st = getattr(summary, "strategy_type", None)
+                                        st_str = st.value if st else None
+                                        analysis = analyze_market_regime(
+                                            klines_cb,
+                                            strategy_type=st_str,
+                                            symbol=summary.symbol or "",
+                                        )
+                                        logger.info(
+                                            f"[{summary.id}] Circuit breaker market analysis: {analysis.reason}"
+                                        )
+                                except Exception as _e:
+                                    logger.debug(f"[{summary.id}] Market regime analysis skipped: {_e}")
                             else:
                                 logger.warning(
                                     f"[{summary.id}] Exit trade {order_response.order_id} not found in database. "
@@ -1263,16 +1295,15 @@ class StrategyExecutor:
                                     if exit_trade:
                                         async def create_completed_trades_fallback_task():
                                             try:
-                                                # Pass strategy UUID as string for better lookup
                                                 await asyncio.to_thread(
                                                     create_completed_trades_on_position_close,
                                                     self.order_manager.user_id,
-                                                    str(db_strategy.id),  # Pass UUID as string
+                                                    str(db_strategy.id),
                                                     exit_trade.id,
                                                     order_response.order_id,
                                                     order_response.executed_qty,
                                                     float(order_response.avg_price or order_response.price),
-                                                    inferred_position_side,  # Use inferred position side
+                                                    inferred_position_side,
                                                     exit_reason,
                                                 )
                                                 logger.info(
@@ -1285,10 +1316,10 @@ class StrategyExecutor:
                                                     exc_info=True
                                                 )
                                         
-                                        asyncio.create_task(create_completed_trades_fallback_task())
-                                        logger.info(
-                                            f"[{summary.id}] 🔵 Started FALLBACK completed trade creation: "
-                                            f"exit_order_id={order_response.order_id}, inferred_position_side={inferred_position_side}"
+                                        await create_completed_trades_fallback_task()
+                                        account_id = getattr(summary, "account_id", None) or "default"
+                                        await self.order_manager.run_circuit_breaker_from_completed_trades(
+                                            account_id, summary.id, db_strategy.id
                                         )
                                 finally:
                                     temp_db.close()

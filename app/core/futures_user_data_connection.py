@@ -33,6 +33,11 @@ class FuturesUserDataConnection:
         self._on_disconnect = on_disconnect
         base = "wss://testnet.binancefuture.com" if testnet else "wss://fstream.binance.com"
         self._url = f"{base}/ws/{listen_key}"
+        if testnet:
+            logger.info(
+                "[UserDataStream] Using Binance testnet (502/timeouts are common). "
+                "Position updates will use REST polling until stream connects. Use mainnet account for more stable stream."
+            )
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -85,8 +90,11 @@ class FuturesUserDataConnection:
         self._ws = None
 
     async def _connect_and_listen(self) -> None:
+        # Longer open_timeout: testnet often returns 502 or is slow; give it time to complete handshake
+        open_timeout = 30 if self.testnet else 15
         async with websockets.connect(
             self._url,
+            open_timeout=open_timeout,
             ping_interval=20,
             ping_timeout=10,
             close_timeout=10,

@@ -38,7 +38,7 @@ class TradeWithTimestamp(BaseModel):
 
 
 class PositionSummary(BaseModel):
-    """Summary of an open position."""
+    """Summary of an open position (Binance-like fields for display)."""
     
     symbol: str
     position_size: float
@@ -49,6 +49,10 @@ class PositionSummary(BaseModel):
     leverage: int
     strategy_id: Optional[str] = None
     strategy_name: Optional[str] = None
+    # Optional Binance-style fields (from REST; not in User Data Stream)
+    liquidation_price: Optional[float] = None
+    initial_margin: Optional[float] = None
+    margin_type: Optional[Literal["CROSSED", "ISOLATED"]] = None
 
 
 class TradeSummary(BaseModel):

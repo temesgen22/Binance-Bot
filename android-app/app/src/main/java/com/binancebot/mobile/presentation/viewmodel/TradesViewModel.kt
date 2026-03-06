@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateData
+import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
 import com.binancebot.mobile.domain.model.Trade
 import com.binancebot.mobile.domain.model.SymbolPnL
 import com.binancebot.mobile.domain.model.Position
@@ -23,7 +25,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class TradesViewModel @Inject constructor(
-    private val tradeRepository: TradeRepository
+    private val tradeRepository: TradeRepository,
+    private val positionUpdateStore: PositionUpdateStore
 ) : ViewModel() {
     
     private val _strategyId = MutableStateFlow<String?>(null)
@@ -33,75 +36,92 @@ class TradesViewModel @Inject constructor(
     private val _dateTo = MutableStateFlow<String?>(null)
     private val _accountId = MutableStateFlow<String?>(null)
     
-    // PnL Overview data
+    // PnL Overview data from REST
     private val _pnlOverview = MutableStateFlow<List<SymbolPnL>>(emptyList())
     val pnlOverview: StateFlow<List<SymbolPnL>> = _pnlOverview.asStateFlow()
     
-    // All open positions (flattened from all symbols)
-    val allOpenPositions: StateFlow<List<Position>> = _pnlOverview.asStateFlow()
-        .map { pnlList ->
-            pnlList.flatMap { it.openPositions }
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    /** Open positions merged from REST + WebSocket so the Positions tab updates in real time. */
+    val allOpenPositions: StateFlow<List<Position>> = combine(
+        _pnlOverview,
+        positionUpdateStore.updates
+    ) { pnlList, wsUpdates ->
+        mergePositionsWithWs(pnlList.flatMap { it.openPositions }, wsUpdates)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
     
-    // Overall statistics
-    val overallStats: StateFlow<OverallStats> = _pnlOverview.asStateFlow()
-        .map { pnlList ->
-            var totalPnL = 0.0
-            var totalRealizedPnL = 0.0
-            var totalUnrealizedPnL = 0.0
-            var totalTrades = 0
-            var totalCompleted = 0
-            var totalWinning = 0
-            var totalLosing = 0
-            var activePositions = 0
-            
-            pnlList.forEach { symbol ->
-                totalPnL += symbol.totalPnL
-                totalRealizedPnL += symbol.totalRealizedPnL
-                totalUnrealizedPnL += symbol.totalUnrealizedPnL
-                totalTrades += symbol.totalTrades
-                totalCompleted += symbol.completedTrades
-                totalWinning += symbol.winningTrades
-                totalLosing += symbol.losingTrades
-                activePositions += symbol.openPositions.size
-            }
-            
-            val winRate = if (totalCompleted > 0) {
-                (totalWinning.toDouble() / totalCompleted * 100)
-            } else 0.0
-            
-            OverallStats(
-                totalPnL = totalPnL,
-                realizedPnL = totalRealizedPnL,
-                unrealizedPnL = totalUnrealizedPnL,
-                totalTrades = totalTrades,
-                completedTrades = totalCompleted,
-                winRate = winRate,
-                winningTrades = totalWinning,
-                losingTrades = totalLosing,
-                activePositions = activePositions
-            )
+    // Overall statistics (use merged position count and unrealized so stats stay in sync)
+    val overallStats: StateFlow<OverallStats> = combine(
+        _pnlOverview,
+        positionUpdateStore.updates
+    ) { pnlList, wsUpdates ->
+        val mergedPositions = mergePositionsWithWs(pnlList.flatMap { it.openPositions }, wsUpdates)
+        var totalPnL = 0.0
+        var totalRealizedPnL = 0.0
+        var totalUnrealizedPnL = 0.0
+        var totalTrades = 0
+        var totalCompleted = 0
+        var totalWinning = 0
+        var totalLosing = 0
+        pnlList.forEach { symbol ->
+            totalPnL += symbol.totalPnL
+            totalRealizedPnL += symbol.totalRealizedPnL
+            totalTrades += symbol.totalTrades
+            totalCompleted += symbol.completedTrades
+            totalWinning += symbol.winningTrades
+            totalLosing += symbol.losingTrades
         }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = OverallStats(
-                totalPnL = 0.0,
-                realizedPnL = 0.0,
-                unrealizedPnL = 0.0,
-                totalTrades = 0,
-                completedTrades = 0,
-                winRate = 0.0,
-                winningTrades = 0,
-                losingTrades = 0,
-                activePositions = 0
-            )
+        // Override unrealized and active count from merged positions so they reflect WebSocket updates
+        totalUnrealizedPnL = mergedPositions.sumOf { it.unrealizedPnL }
+        val activePositions = mergedPositions.size
+        totalPnL = totalRealizedPnL + totalUnrealizedPnL
+        val winRate = if (totalCompleted > 0) {
+            (totalWinning.toDouble() / totalCompleted * 100)
+        } else 0.0
+        OverallStats(
+            totalPnL = totalPnL,
+            realizedPnL = totalRealizedPnL,
+            unrealizedPnL = totalUnrealizedPnL,
+            totalTrades = totalTrades,
+            completedTrades = totalCompleted,
+            winRate = winRate,
+            winningTrades = totalWinning,
+            losingTrades = totalLosing,
+            activePositions = activePositions
         )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = OverallStats(
+            totalPnL = 0.0,
+            realizedPnL = 0.0,
+            unrealizedPnL = 0.0,
+            totalTrades = 0,
+            completedTrades = 0,
+            winRate = 0.0,
+            winningTrades = 0,
+            losingTrades = 0,
+            activePositions = 0
+        )
+    )
+    
+    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId. */
+    private fun mergePositionsWithWs(
+        restPositions: List<Position>,
+        wsUpdates: Map<String, PositionUpdateData>
+    ): List<Position> {
+        // Keep REST position only if no WS update for it or WS says closed
+        val restOpen = restPositions.filter { p ->
+            val sid = p.strategyId
+            sid == null || sid !in wsUpdates || wsUpdates[sid]!!.positionSize <= 0
+        }
+        val wsOpen = wsUpdates.values
+            .filter { it.positionSize > 0 }
+            .map { it.toPosition() }
+        return restOpen + wsOpen
+    }
     
     // Available symbols and strategies
     private val _availableSymbols = MutableStateFlow<List<String>>(emptyList())
@@ -200,6 +220,21 @@ class TradesViewModel @Inject constructor(
         loadPnLOverview()
     }
 }
+
+private fun PositionUpdateData.toPosition(): Position = Position(
+    symbol = symbol,
+    positionSize = positionSize,
+    entryPrice = entryPrice ?: 0.0,
+    currentPrice = currentPrice ?: 0.0,
+    positionSide = positionSide ?: "LONG",
+    unrealizedPnL = unrealizedPnl ?: 0.0,
+    leverage = leverage ?: 1,
+    strategyId = strategyId,
+    strategyName = null,
+    liquidationPrice = liquidationPrice,
+    initialMargin = initialMargin,
+    marginType = marginType
+)
 
 data class OverallStats(
     val totalPnL: Double,

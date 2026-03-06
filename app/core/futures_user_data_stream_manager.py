@@ -70,6 +70,18 @@ class FuturesUserDataStreamManager:
                 if not symbol:
                     continue
                 position_data = _normalize_position_entry(entry)
+                # Log WebSocket position stream for check-up
+                pa = position_data.get("position_amt", 0) or 0
+                if abs(float(pa)) < 1e-9:
+                    logger.info(
+                        f"[UserDataStream] ACCOUNT_UPDATE position stream: account={account_id} symbol={symbol} position=FLAT (0)"
+                    )
+                else:
+                    logger.info(
+                        f"[UserDataStream] ACCOUNT_UPDATE position stream: account={account_id} symbol={symbol} "
+                        f"position_amt={pa} side={position_data.get('position_side')} entry_price={position_data.get('entry_price')} "
+                        f"unrealized_pnl={position_data.get('unrealized_pnl')}"
+                    )
                 try:
                     if asyncio.iscoroutinefunction(self._on_position_update):
                         await self._on_position_update(account_id, symbol, position_data)

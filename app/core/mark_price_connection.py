@@ -74,43 +74,79 @@ class MarkPriceConnection:
                     break
                 self._reconnect_attempts += 1
                 wait_time = min(2 ** self._reconnect_attempts, 60)
-                logger.warning(
-                    f"[MarkPrice] {self.symbol} error (attempt {self._reconnect_attempts}): {e}. "
-                    f"Reconnecting in {wait_time}s..."
-                )
+                if self._reconnect_attempts == 3:
+                    logger.info(
+                        f"[MarkPrice] {self.symbol} stream unavailable after 3 attempts. "
+                        f"PnL will still update via position sync (REST). Reconnecting in background..."
+                    )
+                if self._reconnect_attempts <= 3:
+                    logger.warning(
+                        f"[MarkPrice] {self.symbol} error (attempt {self._reconnect_attempts}): {e}. "
+                        f"Reconnecting in {wait_time}s..."
+                    )
+                else:
+                    logger.debug(
+                        f"[MarkPrice] {self.symbol} error (attempt {self._reconnect_attempts}): {e}. "
+                        f"Reconnecting in {wait_time}s..."
+                    )
                 await asyncio.sleep(wait_time)
         self._ws = None
 
     async def _connect_and_listen(self) -> None:
-        async with websockets.connect(
-            self.url,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=10,
-        ) as ws:
-            self._ws = ws
-            self._reconnect_attempts = 0
-            logger.debug(f"[MarkPrice] Connected: {self.symbol}")
-            async for message in ws:
-                if not self._running:
-                    break
-                try:
-                    data = json.loads(message)
-                    if data.get("e") != "markPriceUpdate":
-                        continue
-                    s = data.get("s", "").upper()
-                    p_str = data.get("p")
-                    if p_str is None:
-                        continue
-                    try:
-                        mark_price = float(p_str)
-                    except (TypeError, ValueError):
-                        continue
-                    payload = {"mark_price": mark_price, **data}
-                    if self.on_mark_price:
-                        await self.on_mark_price(s, payload)
-                except json.JSONDecodeError:
+        # 502 is returned by Binance (or their CDN/load balancer) during handshake - often transient
+        max_handshake_retries = 3
+        last_exc = None
+        for attempt in range(max_handshake_retries):
+            try:
+                # Options aligned with working test script: open_timeout, no client ping (avoids proxy issues)
+                async with websockets.connect(
+                    self.url,
+                    open_timeout=15,
+                    close_timeout=10,
+                    ping_interval=None,
+                    ping_timeout=None,
+                ) as ws:
+                    self._ws = ws
+                    self._reconnect_attempts = 0
+                    logger.debug(f"[MarkPrice] Connected: {self.symbol}")
+                    async for message in ws:
+                        if not self._running:
+                            break
+                        try:
+                            data = json.loads(message)
+                            if data.get("e") != "markPriceUpdate":
+                                continue
+                            s = data.get("s", "").upper()
+                            p_str = data.get("p")
+                            if p_str is None:
+                                continue
+                            try:
+                                mark_price = float(p_str)
+                            except (TypeError, ValueError):
+                                continue
+                            payload = {"mark_price": mark_price, **data}
+                            if self.on_mark_price:
+                                await self.on_mark_price(s, payload)
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logger.debug(f"[MarkPrice] {self.symbol} message error: {e}")
+                    self._ws = None
+                    return
+            except websockets.exceptions.InvalidStatusCode as e:
+                last_exc = e
+                if e.status_code == 502 and attempt < max_handshake_retries - 1:
+                    wait = 2 * (attempt + 1)
+                    logger.debug(
+                        f"[MarkPrice] {self.symbol} handshake 502 (attempt {attempt + 1}/{max_handshake_retries}), "
+                        f"retry in {wait}s..."
+                    )
+                    await asyncio.sleep(wait)
                     continue
-                except Exception as e:
-                    logger.debug(f"[MarkPrice] {self.symbol} message error: {e}")
+                raise
+            except Exception:
+                raise
+        if last_exc:
+            raise last_exc
         self._ws = None
+        return

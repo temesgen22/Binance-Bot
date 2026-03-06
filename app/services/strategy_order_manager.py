@@ -3,7 +3,6 @@
 import asyncio
 from datetime import datetime, timezone
 from functools import partial
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional, Callable, List
 
 from loguru import logger
@@ -943,68 +942,8 @@ class StrategyOrderManager:
                         # Don't raise - order is already in Binance, can't undo
                         # Trade is still tracked in memory/Redis, can be recovered later
                 
-                # Circuit breaker: check consecutive losses / rapid loss after a closing trade (no impact on strategy/account risk)
-                if (
-                    order_response.realized_pnl is not None
-                    and self.circuit_breaker_factory
-                    and self.user_id
-                    and account_id
-                    and self.strategy_service
-                    and hasattr(self.strategy_service, "db_service")
-                    and self.trade_service
-                ):
-                    try:
-                        breaker = (
-                            self.circuit_breaker_factory(account_id)
-                            if callable(self.circuit_breaker_factory)
-                            else getattr(self.circuit_breaker_factory, "get_circuit_breaker", lambda _: None)(account_id)
-                        )
-                        if breaker:
-                            db_strategy_cb = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
-                            if db_strategy_cb:
-                                def _run_breaker_checks() -> None:
-                                    db = self.strategy_service.db_service
-                                    # Prefer pre-computed completed_trades table (no matching of raw trades)
-                                    recent_completed: List[any] = []
-                                    try:
-                                        recent_completed = db.get_recent_completed_trades(
-                                            self.user_id,
-                                            db_strategy_cb.id,
-                                            limit=100,
-                                        )
-                                    except Exception as e:
-                                        logger.debug(
-                                            f"[{summary.id}] Circuit breaker: completed_trades table unavailable ({e}), "
-                                            "falling back to raw trades + matching"
-                                        )
-                                    # Include current close if not already in DB (write may be async)
-                                    if recent_completed and getattr(recent_completed[0], "exit_order_id", None) == order_response.order_id:
-                                        pass  # already have this close
-                                    else:
-                                        synthetic = SimpleNamespace(
-                                            pnl_usd=float(order_response.realized_pnl or 0),
-                                            exit_time=order_response.timestamp or datetime.now(timezone.utc),
-                                            exit_order_id=order_response.order_id,
-                                        )
-                                        recent_completed = [synthetic] + list(recent_completed)
-                                    if recent_completed:
-                                        breaker.check_consecutive_losses(summary.id, recent_completed)
-                                    else:
-                                        # Fallback: use raw trades + matching (legacy path)
-                                        recent = self.trade_service.get_recent_trades(
-                                            self.user_id,
-                                            strategy_id=db_strategy_cb.id,
-                                            limit=100,
-                                        )
-                                        recent = [order_response] + [t for t in recent if getattr(t, "order_id", None) != order_response.order_id]
-                                        breaker.check_consecutive_losses(summary.id, recent)
-                                    if breaker.config and getattr(breaker.config, "rapid_loss_timeframe_minutes", None):
-                                        breaker.check_rapid_loss(account_id, breaker.config.rapid_loss_timeframe_minutes)
-                                    elif breaker.config:
-                                        breaker.check_rapid_loss(account_id, 60)
-                                await asyncio.to_thread(_run_breaker_checks)
-                    except Exception as cb_err:
-                        logger.warning(f"[{summary.id}] Circuit breaker check after trade failed: {cb_err}")
+                # Circuit breaker is run from strategy_executor after create_completed_trades_on_position_close
+                # completes, using only the completed_trades table (single source of truth for realized PnL).
                 
                 # Update entry price and position size based on order side
                 if order_response.side == "BUY":
@@ -1036,6 +975,53 @@ class StrategyOrderManager:
         
         return order_response
     
+    async def run_circuit_breaker_from_completed_trades(
+        self,
+        account_id: str,
+        strategy_id: str,
+        strategy_uuid: "UUID",
+    ) -> None:
+        """Run circuit breaker (consecutive/rapid loss) using only the completed_trades table.
+        
+        Call this after the completed_trades table has been updated (e.g. after
+        create_completed_trades_on_position_close). Realized PnL is only in that table
+        (open+close matched); this is the single source of truth for last N trades.
+        """
+        if not self.circuit_breaker_factory or not self.user_id or not self.strategy_service or not hasattr(self.strategy_service, "db_service"):
+            return
+        try:
+            breaker = (
+                self.circuit_breaker_factory(account_id)
+                if callable(self.circuit_breaker_factory)
+                else getattr(self.circuit_breaker_factory, "get_circuit_breaker", lambda _: None)(account_id)
+            )
+            if not breaker:
+                return
+            db = self.strategy_service.db_service
+            recent_completed: List[any] = []
+            try:
+                recent_completed = db.get_recent_completed_trades(
+                    self.user_id,
+                    strategy_uuid,
+                    limit=100,
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[{strategy_id}] Circuit breaker: completed_trades table unavailable ({e})"
+                )
+                return
+            if not recent_completed:
+                return
+            def _run() -> None:
+                breaker.check_consecutive_losses(strategy_id, recent_completed)
+                if breaker.config and getattr(breaker.config, "rapid_loss_timeframe_minutes", None):
+                    breaker.check_rapid_loss(account_id, breaker.config.rapid_loss_timeframe_minutes)
+                elif breaker.config:
+                    breaker.check_rapid_loss(account_id, 60)
+            await asyncio.to_thread(_run)
+        except Exception as e:
+            logger.warning(f"[{strategy_id}] Circuit breaker check from completed_trades failed: {e}")
+
     def track_trade(
         self,
         strategy_id: str,

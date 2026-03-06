@@ -115,6 +115,10 @@ class StrategySummary(BaseModel):
     stopped_at: Optional[datetime] = None  # When strategy was last stopped
     meta: Dict[str, Any] = Field(default_factory=dict)
     auto_tuning_enabled: bool = Field(default=False, description="Whether auto-tuning is enabled for this strategy")
+    # Binance-style position fields (from REST; not in User Data Stream)
+    liquidation_price: Optional[float] = None
+    initial_margin: Optional[float] = None
+    margin_type: Optional[Literal["CROSSED", "ISOLATED"]] = None
 
 
 class StrategyStats(BaseModel):

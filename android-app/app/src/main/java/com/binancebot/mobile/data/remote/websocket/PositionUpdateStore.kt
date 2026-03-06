@@ -25,10 +25,14 @@ class PositionUpdateStore @Inject constructor() {
             entryPrice = update.entryPrice,
             unrealizedPnl = update.unrealizedPnl,
             positionSide = update.positionSide,
-            currentPrice = update.currentPrice
+            currentPrice = update.currentPrice,
+            leverage = update.leverage,
+            liquidationPrice = update.liquidationPrice,
+            initialMargin = update.initialMargin,
+            marginType = update.marginType
         )
         if (update.positionSize <= 0) {
-            _updates.value = _updates.value - update.strategyId
+            _updates.value = _updates.value + (update.strategyId to data.copy(positionSize = 0.0))
         } else {
             _updates.value = _updates.value + (update.strategyId to data)
         }
@@ -43,5 +47,9 @@ data class PositionUpdateData(
     val entryPrice: Double?,
     val unrealizedPnl: Double?,
     val positionSide: String?,
-    val currentPrice: Double?
+    val currentPrice: Double?,
+    val leverage: Int? = null,
+    val liquidationPrice: Double? = null,
+    val initialMargin: Double? = null,
+    val marginType: String? = null
 )

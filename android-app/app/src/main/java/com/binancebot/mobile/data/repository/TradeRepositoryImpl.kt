@@ -107,7 +107,10 @@ private fun com.binancebot.mobile.data.remote.dto.PositionSummaryDto.toDomain():
         unrealizedPnL = unrealizedPnL,
         leverage = leverage,
         strategyId = strategyId,
-        strategyName = strategyName
+        strategyName = strategyName,
+        liquidationPrice = liquidationPrice,
+        initialMargin = initialMargin,
+        marginType = marginType
     )
 }
 

@@ -380,6 +380,9 @@ class StrategyPersistence:
         """Apply position data from WebSocket (or other source) to summary and persist. Shared by User Data Stream callback."""
         position_amt = position_data.get("position_amt", 0) or 0
         if position_amt == 0:
+            logger.info(
+                f"[{summary.id}] WebSocket position update applied: {summary.symbol} -> FLAT (cleared open position state)"
+            )
             await self._clear_position_state_and_persist(summary)
             return
         position_size = abs(float(position_amt))
@@ -408,6 +411,10 @@ class StrategyPersistence:
         )
         if current_price is not None:
             updates["current_price"] = current_price
+        logger.info(
+            f"[{summary.id}] WebSocket position update applied: {summary.symbol} {position_side} "
+            f"size={position_size} entry_price={entry_price} unrealized_pnl={unrealized_pnl}"
+        )
         self.update_strategy_in_db(summary.id, save_to_redis=True, **updates)
         await self._broadcast_position(
             summary,
@@ -441,13 +448,25 @@ class StrategyPersistence:
         unrealized_pnl: Optional[float] = None,
         position_side: Optional[str] = None,
         current_price: Optional[float] = None,
+        user_id_override: Optional[UUID] = None,
+        leverage: Optional[int] = None,
+        liquidation_price: Optional[float] = None,
+        initial_margin: Optional[float] = None,
+        margin_type: Optional[str] = None,
     ) -> None:
-        """If position_broadcast_service and user_id are set, push update to client WebSockets."""
-        if not self.user_id or not self.position_broadcast_service:
+        """If position_broadcast_service and user_id are set, push update to client WebSockets (Binance-like fields)."""
+        uid = user_id_override or self.user_id
+        if not uid or not self.position_broadcast_service:
+            if not uid:
+                logger.debug(f"[{summary.id}] Skip position broadcast: no user_id (override or runner)")
             return
         try:
+            logger.info(
+                f"[{summary.id}] Broadcasting position to webapp: {summary.symbol} "
+                f"size={position_size} side={position_side or 'N/A'}"
+            )
             await self.position_broadcast_service.broadcast_position_update(
-                self.user_id,
+                uid,
                 summary.id,
                 symbol=summary.symbol,
                 account_id=summary.account_id,
@@ -456,9 +475,32 @@ class StrategyPersistence:
                 unrealized_pnl=unrealized_pnl,
                 position_side=position_side,
                 current_price=current_price,
+                leverage=leverage or summary.leverage,
+                liquidation_price=liquidation_price or getattr(summary, "liquidation_price", None),
+                initial_margin=initial_margin or getattr(summary, "initial_margin", None),
+                margin_type=margin_type or getattr(summary, "margin_type", None),
             )
         except Exception as exc:
             logger.debug(f"[{summary.id}] position broadcast failed: {exc}")
+
+    async def broadcast_position_now(
+        self, summary: StrategySummary, *, user_id_override: Optional[UUID] = None
+    ) -> None:
+        """Broadcast current position state to connected webapp clients (e.g. right after open/close)."""
+        size = (summary.position_size or 0) if summary.position_size is not None else 0
+        await self._broadcast_position(
+            summary,
+            position_size=size,
+            entry_price=summary.entry_price,
+            unrealized_pnl=getattr(summary, "unrealized_pnl", None),
+            position_side=summary.position_side,
+            current_price=summary.current_price,
+            user_id_override=user_id_override,
+            leverage=summary.leverage,
+            liquidation_price=getattr(summary, "liquidation_price", None),
+            initial_margin=getattr(summary, "initial_margin", None),
+            margin_type=getattr(summary, "margin_type", None),
+        )
 
     async def update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy.
@@ -520,12 +562,22 @@ class StrategyPersistence:
                     except Exception:
                         pass  # Keep existing current_price if update fails
                 
-                # Update summary (memory)
+                # Update summary (memory), including Binance-style fields for display
                 summary.position_size = new_position_size
                 summary.entry_price = new_entry_price
                 summary.unrealized_pnl = new_unrealized_pnl
                 summary.position_side = new_position_side
                 summary.current_price = new_current_price
+                if "leverage" in position:
+                    summary.leverage = int(position["leverage"])
+                summary.liquidation_price = position.get("liquidationPrice")
+                summary.initial_margin = position.get("initialMargin")
+                mt = position.get("marginType")
+                if mt is not None:
+                    mt_upper = str(mt).strip().upper()
+                    summary.margin_type = "CROSSED" if mt_upper == "CROSS" else (mt_upper if mt_upper in ("CROSSED", "ISOLATED") else None)
+                else:
+                    summary.margin_type = None
                 
                 # CRITICAL: Update database FIRST (single source of truth)
                 # Only update if state actually changed (avoid unnecessary DB writes)
@@ -552,6 +604,10 @@ class StrategyPersistence:
                         unrealized_pnl=new_unrealized_pnl,
                         position_side=new_position_side,
                         current_price=new_current_price,
+                        leverage=summary.leverage,
+                        liquidation_price=summary.liquidation_price,
+                        initial_margin=summary.initial_margin,
+                        margin_type=summary.margin_type,
                     )
                     if self.user_id and self.mark_price_stream_manager:
                         try:

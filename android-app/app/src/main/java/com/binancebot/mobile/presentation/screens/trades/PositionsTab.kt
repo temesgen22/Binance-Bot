@@ -192,6 +192,48 @@ fun PositionCard(position: Position) {
                         fontWeight = FontWeight.Bold
                     )
                 }
+                position.liquidationPrice?.takeIf { it > 0 }?.let { liq ->
+                    Column {
+                        Text(
+                            text = "Liquidation Price",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = FormatUtils.formatCurrency(liq),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                position.initialMargin?.takeIf { it >= 0 }?.let { margin ->
+                    Column {
+                        Text(
+                            text = "Margin",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = FormatUtils.formatCurrency(margin),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                position.marginType?.let { mt ->
+                    Column {
+                        Text(
+                            text = "Margin Type",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = mt,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }
