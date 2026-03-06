@@ -2,7 +2,7 @@
 Position broadcast: in-memory connection manager and broadcast service for real-time
 open position updates to connected clients (Android/web) over WebSocket.
 
-Clients connect to GET /ws/positions with JWT; when position state changes (or mark price
+Clients connect to GET /api/ws/positions with JWT; when position state changes (or mark price
 ticks), the backend calls broadcast_position_update and all connections for that user
 receive the JSON payload. No DB write on tick; DB is updated only on position open/close.
 """

@@ -17,7 +17,8 @@ from loguru import logger
 
 from app.core.auth import decode_token, get_user_id_from_token
 
-router = APIRouter(prefix="/ws", tags=["websocket"])
+# Served under /api/ws so reverse proxies that only forward /api/* will reach this route (fixes 404 on server)
+router = APIRouter(prefix="/api/ws", tags=["websocket"])
 
 
 # Close code for invalid/expired token so client can refresh (per plan)
@@ -85,7 +86,7 @@ async def _send_initial_position_snapshot(websocket: WebSocket, user_id) -> None
 async def websocket_positions(websocket: WebSocket) -> None:
     """Accept WebSocket connection; require JWT. Broadcast position updates to this user."""
     await websocket.accept()
-    # Token from query string (e.g. ws://host/ws/positions?token=...)
+    # Token from query string (e.g. wss://host/api/ws/positions?token=...)
     token: Optional[str] = None
     raw_qs = websocket.scope.get("query_string")
     if raw_qs:

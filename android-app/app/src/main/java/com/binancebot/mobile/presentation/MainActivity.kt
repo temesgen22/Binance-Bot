@@ -61,8 +61,7 @@ class MainActivity : ComponentActivity() {
         if (tokenManager.isLoggedIn()) {
             val wsUrl = Constants.BASE_URL
                 .replace("http://", "ws://")
-                .replace("https://", "wss://")
-                .replace("/api/", "/") + "ws/positions"
+                .replace("https://", "wss://") + "ws/positions"
             webSocketManager.connect(wsUrl)
             lifecycleScope.launch {
                 webSocketManager.updates

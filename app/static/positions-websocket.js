@@ -45,7 +45,7 @@
             const token = getToken();
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const host = window.location.host;
-            const url = `${protocol}//${host}/ws/positions?token=${encodeURIComponent(token)}`;
+            const url = `${protocol}//${host}/api/ws/positions?token=${encodeURIComponent(token)}`;
             if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) return;
             try {
                 this._ws = new WebSocket(url);

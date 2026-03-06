@@ -1,10 +1,10 @@
 """
-Test cases for real-time position update flow (WebSocket /ws/positions and broadcast).
+Test cases for real-time position update flow (WebSocket /api/ws/positions and broadcast).
 
 Validates:
 1. PositionConnectionManager: register, unregister, broadcast_to_user
 2. PositionBroadcastService: payload shape and broadcast invocation
-3. WebSocket endpoint /ws/positions: JWT validation (reject invalid, accept valid)
+3. WebSocket endpoint /api/ws/positions: JWT validation (reject invalid, accept valid)
 4. Mark price stream manager: PnL computation, register/unregister position, handler broadcast
 """
 
@@ -201,11 +201,11 @@ class TestMarkPriceStreamManagerRegistry:
         assert call_kw["position_side"] == "LONG"
 
 
-# --- WebSocket endpoint /ws/positions ---
+# --- WebSocket endpoint /api/ws/positions ---
 
 
 class TestWebSocketPositionsEndpoint:
-    """Tests for GET /ws/positions: JWT validation and connection lifecycle."""
+    """Tests for GET /api/ws/positions: JWT validation and connection lifecycle."""
 
     @pytest.fixture
     def app_with_position_manager(self):
@@ -222,7 +222,7 @@ class TestWebSocketPositionsEndpoint:
         client = TestClient(app_with_position_manager)
         # Endpoint accepts then validates token; invalid token triggers close with 4001
         try:
-            with client.websocket_connect("/ws/positions?token=invalid-token") as ws:
+            with client.websocket_connect("/api/ws/positions?token=invalid-token") as ws:
                 # If we reach here, try receive; server should have closed so we may get close or error
                 try:
                     ws.receive_text()
@@ -239,7 +239,7 @@ class TestWebSocketPositionsEndpoint:
         token = create_access_token({"sub": str(user_id), "username": "test", "email": "test@test.com"})
         client = TestClient(app_with_position_manager)
         # Connect with valid token; should be accepted
-        with client.websocket_connect(f"/ws/positions?token={token}") as websocket:
+        with client.websocket_connect(f"/api/ws/positions?token={token}") as websocket:
             # Connection accepted; manager should have one connection for user_id
             manager = app_with_position_manager.state.position_connection_manager
             assert user_id in manager._connections
@@ -256,7 +256,7 @@ class TestWebSocketPositionsEndpoint:
         user_id = uuid4()
         token = create_access_token({"sub": str(user_id), "username": "u", "email": "e@e.com"})
         client = TestClient(app_with_position_manager)
-        with client.websocket_connect("/ws/positions?token=" + token) as ws:
+        with client.websocket_connect("/api/ws/positions?token=" + token) as ws:
             pass
         assert True
 
