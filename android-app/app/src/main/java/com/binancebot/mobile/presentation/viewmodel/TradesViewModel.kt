@@ -107,19 +107,21 @@ class TradesViewModel @Inject constructor(
         )
     )
     
-    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId. */
+    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId (or synthetic "manual_$symbol"). One position per symbol; WS wins when both have same symbol. */
     private fun mergePositionsWithWs(
         restPositions: List<Position>,
         wsUpdates: Map<String, PositionUpdateData>
     ): List<Position> {
-        // Keep REST position only if no WS update for it or WS says closed
-        val restOpen = restPositions.filter { p ->
-            val sid = p.strategyId
-            sid == null || sid !in wsUpdates || wsUpdates[sid]!!.positionSize <= 0
-        }
         val wsOpen = wsUpdates.values
             .filter { it.positionSize > 0 }
             .map { it.toPosition() }
+        val wsSymbols = wsOpen.map { it.symbol }.toSet()
+        // Keep REST position only if no WS update for that symbol, and (if has strategyId) no WS update for that strategyId or WS says closed
+        val restOpen = restPositions.filter { p ->
+            if (p.symbol in wsSymbols) return@filter false
+            val sid = p.strategyId
+            sid == null || sid !in wsUpdates || (wsUpdates[sid]?.positionSize ?: 0.0) <= 0.0
+        }
         return restOpen + wsOpen
     }
     
@@ -229,8 +231,8 @@ private fun PositionUpdateData.toPosition(): Position = Position(
     positionSide = positionSide ?: "LONG",
     unrealizedPnL = unrealizedPnl ?: 0.0,
     leverage = leverage ?: 1,
-    strategyId = strategyId,
-    strategyName = null,
+    strategyId = if (strategyId.startsWith("manual_")) null else strategyId,
+    strategyName = strategyName,
     liquidationPrice = liquidationPrice,
     initialMargin = initialMargin,
     marginType = marginType

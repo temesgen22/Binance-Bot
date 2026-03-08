@@ -138,6 +138,7 @@ class StrategyService(BaseCacheService):
             position_size=float(db_strategy.position_size) if db_strategy.position_size else None,
             position_side=db_strategy.position_side,
             unrealized_pnl=float(db_strategy.unrealized_pnl) if db_strategy.unrealized_pnl else None,
+            position_instance_id=getattr(db_strategy, "position_instance_id", None),
             started_at=db_strategy.started_at,
             stopped_at=db_strategy.stopped_at,
             meta=db_strategy.meta or {},

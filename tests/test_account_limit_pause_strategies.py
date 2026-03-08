@@ -622,15 +622,17 @@ class TestAccountLimitPauseStrategies:
         assert mock_order_manager.cancel_tp_sl_orders.call_count == 3, \
             "Should cancel TP/SL orders for all 3 strategies"
         
-        # Verify positions were closed for each strategy
+        # Verify position was checked for each strategy
         assert mock_client.get_open_position.call_count == 3, \
             "Should check position for all 3 strategies"
-        assert mock_client.close_position.call_count == 3, \
-            "Should close position for all 3 strategies"
+        # With ownership-based close: stop() only closes when strategy owns (position_instance_id + entry trades).
+        # Test strategies have no position_instance_id, so we do not close.
+        assert mock_client.close_position.call_count == 0, \
+            "Should not close when ownership cannot be confirmed"
         
-        # Verify closing trades were saved
-        assert mock_trade_service.save_trade.call_count == 3, \
-            "Should save closing trade for all 3 strategies"
+        # No position close when ownership not confirmed, so no closing trades saved
+        assert mock_trade_service.save_trade.call_count == 0, \
+            "Should not save closing trade when we did not close (no ownership)"
     
     @pytest.mark.asyncio
     async def test_pause_handles_strategies_without_positions(

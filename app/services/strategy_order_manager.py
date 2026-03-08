@@ -624,19 +624,110 @@ class StrategyOrderManager:
         is_closing_short = current_side == "SHORT" and current_size > 0 and signal.action == "BUY"
         force_close_quantity = None
         reduce_only_override: bool | None = None
-        
+
+        # Only close on signal if the strategy owns the position (avoid closing manually opened / synced positions)
+        if is_closing_long or is_closing_short:
+            position_instance_id = getattr(summary, "position_instance_id", None)
+            if position_instance_id is None:
+                logger.info(
+                    f"[{summary.id}] Skipping close on signal: position not strategy-owned (no position_instance_id; "
+                    f"likely synced to manual position). Leaving {current_size} {summary.symbol} {current_side} as is."
+                )
+                from app.models.order import OrderResponse
+                return OrderResponse(
+                    order_id=0,
+                    symbol=signal.symbol,
+                    side=signal.action,
+                    status="CANCELLED",
+                    executed_qty=0.0,
+                    avg_price=0.0,
+                    commission=0.0,
+                    timestamp=datetime.now(timezone.utc),
+                    leverage=None,
+                )
+            db_strategy = None
+            if self.strategy_service and self.db_service and self.user_id:
+                try:
+                    from uuid import UUID
+                    # summary.id is strategy_id (string), not DB UUID; try by strategy_id first
+                    db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
+                    if not db_strategy:
+                        try:
+                            db_strategy = self.strategy_service.db_service.get_strategy_by_uuid(UUID(str(summary.id)))
+                        except (ValueError, TypeError):
+                            pass
+                except Exception as e:
+                    logger.debug(f"[{summary.id}] Could not resolve strategy for ownership check: {e}")
+            if not db_strategy:
+                logger.info(
+                    f"[{summary.id}] Skipping close on signal: cannot resolve strategy for ownership. "
+                    f"Leaving {current_size} {summary.symbol} as is."
+                )
+                from app.models.order import OrderResponse
+                return OrderResponse(
+                    order_id=0,
+                    symbol=signal.symbol,
+                    side=signal.action,
+                    status="CANCELLED",
+                    executed_qty=0.0,
+                    avg_price=0.0,
+                    commission=0.0,
+                    timestamp=datetime.now(timezone.utc),
+                    leverage=None,
+                )
+            try:
+                owned_qty, has_entries = self.db_service.get_strategy_owned_quantity(
+                    db_strategy.id,
+                    summary.symbol,
+                    position_instance_id,
+                    current_side,
+                )
+                if not has_entries or owned_qty <= 0:
+                    logger.info(
+                        f"[{summary.id}] Skipping close on signal: no strategy-owned quantity "
+                        f"(position may be manual or already closed). Leaving {current_size} {summary.symbol} as is."
+                    )
+                    from app.models.order import OrderResponse
+                    return OrderResponse(
+                        order_id=0,
+                        symbol=signal.symbol,
+                        side=signal.action,
+                        status="CANCELLED",
+                        executed_qty=0.0,
+                        avg_price=0.0,
+                        commission=0.0,
+                        timestamp=datetime.now(timezone.utc),
+                        leverage=None,
+                    )
+                # Close only the quantity we own, not the full Binance position
+                force_close_quantity = min(owned_qty, current_size)
+            except Exception as e:
+                logger.warning(f"[{summary.id}] Ownership check failed, skipping close to be safe: {e}")
+                from app.models.order import OrderResponse
+                return OrderResponse(
+                    order_id=0,
+                    symbol=signal.symbol,
+                    side=signal.action,
+                    status="CANCELLED",
+                    executed_qty=0.0,
+                    avg_price=0.0,
+                    commission=0.0,
+                    timestamp=datetime.now(timezone.utc),
+                    leverage=None,
+                )
+
         try:
             if is_closing_long or is_closing_short:
                 price = signal.price or await asyncio.to_thread(account_client.get_price, signal.symbol)
-                force_close_quantity = current_size
+                force_close_quantity = force_close_quantity or current_size
                 sizing = PositionSizingResult(
                     quantity=force_close_quantity,
                     notional=force_close_quantity * price,
                 )
                 reduce_only_override = True
                 logger.info(
-                    f"[{summary.id}] Closing entire position: {current_side} {current_size} {summary.symbol} "
-                    f"(reduce_only=True)"
+                    f"[{summary.id}] Closing strategy-owned position: {current_side} {force_close_quantity} {summary.symbol} "
+                    f"(Binance total={current_size}, reduce_only=True)"
                 )
             else:
                 # Log sizing parameters for debugging
@@ -705,8 +796,6 @@ class StrategyOrderManager:
                         f"[{summary.id}] Position for {signal.symbol} already closed (positionAmt={position_amt}). "
                         f"Skipping reduce_only order execution to avoid 'ReduceOnly Order is rejected' error."
                     )
-                    from app.models.order import OrderResponse
-                    from datetime import datetime, timezone
                     return OrderResponse(
                         order_id=0,  # No order was placed
                         symbol=signal.symbol,

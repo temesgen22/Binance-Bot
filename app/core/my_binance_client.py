@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
 import sys
 import os
 import time
@@ -574,6 +575,45 @@ class BinanceClient:
         symbol = symbol.strip()
         rest = self._ensure()
         return rest.futures_get_order(symbol=symbol, orderId=order_id)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_account_trades(
+        self,
+        symbol: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Fetch account trades for a symbol within an optional time range.
+        
+        Binance allows at most 7 days between startTime and endTime per request.
+        Used by external-close ingestion to find the order(s) that closed a position.
+        
+        Args:
+            symbol: Trading symbol (e.g. BTCUSDT)
+            start_time: Start of range (UTC). Optional.
+            end_time: End of range (UTC). Optional.
+            limit: Max trades to return (default 100, max 1000).
+            
+        Returns:
+            List of trade dicts (orderId, symbol, side, executedQty, price, time, commission, etc.)
+        """
+        from datetime import timezone as _tz
+        symbol = symbol.strip()
+        rest = self._ensure()
+        kwargs: Dict[str, Any] = {"symbol": symbol, "limit": min(limit, 1000)}
+        if start_time is not None:
+            ts = start_time if start_time.tzinfo else start_time.replace(tzinfo=_tz.utc)
+            kwargs["startTime"] = int(ts.timestamp() * 1000)
+        if end_time is not None:
+            ts = end_time if end_time.tzinfo else end_time.replace(tzinfo=_tz.utc)
+            kwargs["endTime"] = int(ts.timestamp() * 1000)
+        if kwargs.get("startTime") is not None and kwargs.get("endTime") is not None:
+            # Binance allows max 7 days range
+            max_range_ms = 7 * 24 * 60 * 60 * 1000
+            if kwargs["endTime"] - kwargs["startTime"] > max_range_ms:
+                kwargs["endTime"] = kwargs["startTime"] + max_range_ms
+        return rest.futures_account_trades(**kwargs)
 
     # Use retry_if_exception so we do NOT retry on success (retry_unless_exception_type
     # retries when no exception is raised, causing duplicate orders).
@@ -1665,13 +1705,21 @@ class BinanceClient:
         """
         def _pos_dict(pos: dict) -> dict:
             position_amt = float(pos.get("positionAmt", 0))
+            # Binance returns leverage as string (e.g. "10"); parse to int; use 0 when missing so callers can fall back to strategy leverage
+            lev_raw = pos.get("leverage")
+            leverage_val = 0
+            if lev_raw is not None and str(lev_raw).strip() != "":
+                try:
+                    leverage_val = int(float(lev_raw))
+                except (TypeError, ValueError):
+                    pass
             out = {
                 "symbol": pos.get("symbol"),
                 "positionAmt": position_amt,
                 "entryPrice": float(pos.get("entryPrice", 0)),
                 "markPrice": float(pos.get("markPrice", 0)),
                 "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
-                "leverage": int(pos.get("leverage", 1)),
+                "leverage": leverage_val if leverage_val > 0 else 0,  # 0 = use strategy leverage for display
             }
             liq = pos.get("liquidationPrice")
             if liq is not None and str(liq).strip():

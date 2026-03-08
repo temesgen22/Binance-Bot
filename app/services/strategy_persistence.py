@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.services.strategy_service import StrategyService
     from app.services.strategy_account_manager import StrategyAccountManager
     from app.services.strategy_order_manager import StrategyOrderManager
+    from app.services.trade_service import TradeService
     from app.core.position_broadcast import PositionBroadcastService
     from app.core.mark_price_stream_manager import MarkPriceStreamManager
 
@@ -34,6 +35,7 @@ class StrategyPersistence:
         order_manager: Optional["StrategyOrderManager"] = None,
         position_broadcast_service: Optional["PositionBroadcastService"] = None,
         mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
+        trade_service: Optional["TradeService"] = None,
     ):
         """Initialize persistence handler.
         
@@ -47,6 +49,7 @@ class StrategyPersistence:
             order_manager: Order manager for canceling TP/SL orders (optional)
             position_broadcast_service: Optional service to push position updates to client WebSockets
             mark_price_stream_manager: Optional manager for mark price streams (real-time PnL)
+            trade_service: Optional; required for external-close ingestion (fetch manual close from Binance, save Trade, create CompletedTrade)
         """
         self.redis = redis_storage
         self.strategy_service = strategy_service
@@ -57,6 +60,7 @@ class StrategyPersistence:
         self.order_manager = order_manager
         self.position_broadcast_service = position_broadcast_service
         self.mark_price_stream_manager = mark_price_stream_manager
+        self.trade_service = trade_service
     
     @staticmethod
     def _get_or_generate_position_instance_id(
@@ -351,11 +355,13 @@ class StrategyPersistence:
             position_size=0,
             unrealized_pnl=0,
             position_side=None,
+            position_instance_id=None,
         )
         summary.entry_price = None
         summary.position_size = 0
         summary.unrealized_pnl = 0
         summary.position_side = None
+        summary.position_instance_id = None
         has_tp_sl = bool(
             summary.meta.get("tp_sl_orders", {}).get("tp_order_id")
             or summary.meta.get("tp_sl_orders", {}).get("sl_order_id")
@@ -380,6 +386,64 @@ class StrategyPersistence:
         """Apply position data from WebSocket (or other source) to summary and persist. Shared by User Data Stream callback."""
         position_amt = position_data.get("position_amt", 0) or 0
         if position_amt == 0:
+            # External close ingestion: if we had a position, try to fetch closing order from Binance and create completed trade
+            had_position = (
+                (summary.position_size is not None and abs(float(summary.position_size or 0)) > 0)
+                and summary.position_side
+                and (summary.position_instance_id or getattr(summary, "position_instance_id", None))
+            )
+            if had_position and self.trade_service and self.account_manager and self.user_id:
+                try:
+                    account_client = self.account_manager.get_account_client(summary.account_id or "default")
+                    if account_client:
+                        paper_trading = False
+                        db_strategy = None
+                        if self.strategy_service and hasattr(self.strategy_service, "db_service"):
+                            try:
+                                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
+                                if not db_strategy:
+                                    try:
+                                        db_strategy = self.strategy_service.db_service.get_strategy_by_uuid(UUID(str(summary.id)))
+                                    except (ValueError, TypeError):
+                                        pass
+                                if db_strategy and getattr(db_strategy, "account_id", None):
+                                    acc = self.strategy_service.db_service.get_account_by_uuid(db_strategy.account_id)
+                                    paper_trading = bool(acc and getattr(acc, "paper_trading", False))
+                            except Exception as e:
+                                logger.debug(f"[{summary.id}] Could not resolve db_strategy or paper_trading: {e}")
+                        if db_strategy:
+                            entry_quantity = None
+                            try:
+                                entry_quantity = await asyncio.to_thread(
+                                    self.strategy_service.db_service.get_strategy_entry_quantity,
+                                    db_strategy.id,
+                                    summary.symbol or "",
+                                    summary.position_instance_id,
+                                    summary.position_side or "LONG",
+                                )
+                            except Exception as eq:
+                                logger.debug(f"[{summary.id}] Could not get entry quantity for external close: {eq}")
+                            from app.services.external_close_service import handle_external_position_close
+                            await handle_external_position_close(
+                                user_id=self.user_id,
+                                strategy_id_str=str(summary.id),
+                                strategy_uuid=db_strategy.id,
+                                symbol=summary.symbol or "",
+                                account_id=summary.account_id or "default",
+                                position_side=summary.position_side or "LONG",
+                                position_size=abs(float(summary.position_size or 0)),
+                                position_instance_id=summary.position_instance_id,
+                                entry_timestamp=None,
+                                account_client=account_client,
+                                trade_service=self.trade_service,
+                                paper_trading=paper_trading,
+                                order_manager=self.order_manager,
+                                entry_quantity=entry_quantity if (entry_quantity and entry_quantity > 0) else None,
+                            )
+                        else:
+                            logger.debug(f"[{summary.id}] External close skipped: db_strategy not found")
+                except Exception as exc:
+                    logger.warning(f"[{summary.id}] External close ingestion failed: {exc}")
             logger.info(
                 f"[{summary.id}] WebSocket position update applied: {summary.symbol} -> FLAT (cleared open position state)"
             )
@@ -423,6 +487,10 @@ class StrategyPersistence:
             unrealized_pnl=unrealized_pnl,
             position_side=position_side,
             current_price=current_price,
+            leverage=summary.leverage,
+            liquidation_price=getattr(summary, "liquidation_price", None),
+            initial_margin=getattr(summary, "initial_margin", None),
+            margin_type=getattr(summary, "margin_type", None),
         )
         if self.user_id and self.mark_price_stream_manager:
             try:
@@ -461,13 +529,18 @@ class StrategyPersistence:
                 logger.debug(f"[{summary.id}] Skip position broadcast: no user_id (override or runner)")
             return
         try:
+            # Only attribute position to strategy when strategy owns it (position_instance_id set).
+            # Manual or synced-without-entry positions must show "Not matched" in the UI.
+            owned = getattr(summary, "position_instance_id", None) is not None
+            sid = summary.id if owned else None
+            sname = summary.name if owned else None
             logger.info(
                 f"[{summary.id}] Broadcasting position to webapp: {summary.symbol} "
-                f"size={position_size} side={position_side or 'N/A'}"
+                f"size={position_size} side={position_side or 'N/A'} owned={owned}"
             )
             await self.position_broadcast_service.broadcast_position_update(
                 uid,
-                summary.id,
+                sid,
                 symbol=summary.symbol,
                 account_id=summary.account_id,
                 position_size=position_size,
@@ -479,6 +552,7 @@ class StrategyPersistence:
                 liquidation_price=liquidation_price or getattr(summary, "liquidation_price", None),
                 initial_margin=initial_margin or getattr(summary, "initial_margin", None),
                 margin_type=margin_type or getattr(summary, "margin_type", None),
+                strategy_name=sname,
             )
         except Exception as exc:
             logger.debug(f"[{summary.id}] position broadcast failed: {exc}")
@@ -568,8 +642,23 @@ class StrategyPersistence:
                 summary.unrealized_pnl = new_unrealized_pnl
                 summary.position_side = new_position_side
                 summary.current_price = new_current_price
-                if "leverage" in position:
-                    summary.leverage = int(position["leverage"])
+                # Use Binance leverage when > 1; else get_current_leverage(symbol) so display is correct (REST/WS consistency)
+                pos_leverage = position.get("leverage")
+                pl = 0
+                if pos_leverage is not None:
+                    try:
+                        pl = int(float(pos_leverage))
+                    except (TypeError, ValueError):
+                        pass
+                if pl > 1:
+                    summary.leverage = pl
+                else:
+                    try:
+                        current_lev = await asyncio.to_thread(account_client.get_current_leverage, summary.symbol)
+                        if current_lev and current_lev > 0:
+                            summary.leverage = current_lev
+                    except Exception:
+                        pass
                 summary.liquidation_price = position.get("liquidationPrice")
                 summary.initial_margin = position.get("initialMargin")
                 mt = position.get("marginType")
@@ -627,6 +716,62 @@ class StrategyPersistence:
                 # No open position: use shared clear path (REST and WebSocket)
                 position_was_closed = summary.position_size is not None and summary.position_size != 0
                 if position_was_closed:
+                    # External close ingestion: fetch closing order from Binance, save Trade, create CompletedTrade
+                    if (
+                        summary.position_instance_id
+                        and self.trade_service
+                        and self.user_id
+                        and account_client
+                    ):
+                        try:
+                            paper_trading = False
+                            db_strategy = None
+                            if self.strategy_service and hasattr(self.strategy_service, "db_service"):
+                                try:
+                                    db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, summary.id)
+                                    if not db_strategy:
+                                        try:
+                                            db_strategy = self.strategy_service.db_service.get_strategy_by_uuid(UUID(str(summary.id)))
+                                        except (ValueError, TypeError):
+                                            pass
+                                    if db_strategy and getattr(db_strategy, "account_id", None):
+                                        acc = self.strategy_service.db_service.get_account_by_uuid(db_strategy.account_id)
+                                        paper_trading = bool(acc and getattr(acc, "paper_trading", False))
+                                except Exception as e:
+                                    logger.debug(f"[{summary.id}] Could not resolve db_strategy or paper_trading: {e}")
+                            if db_strategy:
+                                entry_quantity = None
+                                try:
+                                    entry_quantity = await asyncio.to_thread(
+                                        self.strategy_service.db_service.get_strategy_entry_quantity,
+                                        db_strategy.id,
+                                        summary.symbol or "",
+                                        summary.position_instance_id,
+                                        summary.position_side or "LONG",
+                                    )
+                                except Exception as eq:
+                                    logger.debug(f"[{summary.id}] Could not get entry quantity for external close (REST): {eq}")
+                                from app.services.external_close_service import handle_external_position_close
+                                await handle_external_position_close(
+                                    user_id=self.user_id,
+                                    strategy_id_str=str(summary.id),
+                                    strategy_uuid=db_strategy.id,
+                                    symbol=summary.symbol or "",
+                                    account_id=summary.account_id or "default",
+                                    position_side=summary.position_side or "LONG",
+                                    position_size=abs(float(summary.position_size or 0)),
+                                    position_instance_id=summary.position_instance_id,
+                                    entry_timestamp=None,
+                                    account_client=account_client,
+                                    trade_service=self.trade_service,
+                                    paper_trading=paper_trading,
+                                    order_manager=self.order_manager,
+                                    entry_quantity=entry_quantity if (entry_quantity and entry_quantity > 0) else None,
+                                )
+                            else:
+                                logger.debug(f"[{summary.id}] External close (REST) skipped: db_strategy not found")
+                        except Exception as exc:
+                            logger.warning(f"[{summary.id}] External close ingestion (REST) failed: {exc}")
                     await self._clear_position_state_and_persist(summary)
         except Exception as exc:
             logger.debug(f"Failed to update position info for {summary.symbol}: {exc}")

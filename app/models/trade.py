@@ -38,7 +38,13 @@ class TradeWithTimestamp(BaseModel):
 
 
 class PositionSummary(BaseModel):
-    """Summary of an open position (Binance-like fields for display)."""
+    """Summary of an open position (Binance-like fields for display).
+    
+    Each position is tied to a user (implicit from auth), account, and strategy:
+    - user: from JWT / WebSocket connection (not on this model).
+    - account_id: Binance account (e.g. 'default', 'live').
+    - strategy_id / strategy_name: strategy that owns or is matched to this position.
+    """
     
     symbol: str
     position_size: float
@@ -49,6 +55,7 @@ class PositionSummary(BaseModel):
     leverage: int
     strategy_id: Optional[str] = None
     strategy_name: Optional[str] = None
+    account_id: Optional[str] = Field(default=None, description="Binance account ID (e.g. 'default', 'live') this position belongs to")
     # Optional Binance-style fields (from REST; not in User Data Stream)
     liquidation_price: Optional[float] = None
     initial_margin: Optional[float] = None

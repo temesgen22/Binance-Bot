@@ -630,9 +630,31 @@ class CircuitBreaker:
             
             self.db_service.db.add(db_event)
             self.db_service.db.commit()
+
+            # Also create a SystemEvent so it appears in Risk Enforcement History (UI reads from system_events)
+            try:
+                message = (
+                    f"Circuit breaker triggered ({breaker_state.breaker_type}): "
+                    f"{int(breaker_state.trigger_value)} (threshold: {int(breaker_state.threshold_value)})"
+                )
+                self.db_service.create_system_event(
+                    event_type="CIRCUIT_BREAKER_TRIGGERED",
+                    event_level="WARNING",
+                    message=message,
+                    strategy_id=strategy_uuid,
+                    account_id=account_uuid,
+                    event_metadata={
+                        "breaker_type": breaker_state.breaker_type,
+                        "trigger_value": breaker_state.trigger_value,
+                        "threshold_value": breaker_state.threshold_value,
+                        "scope": breaker_state.scope,
+                    },
+                )
+            except Exception as sys_e:
+                logger.warning(f"Failed to log circuit breaker to enforcement history: {sys_e}")
         except Exception as e:
             logger.error(f"Failed to persist circuit breaker event: {e}")
-    
+
     def _update_breaker_event(self, breaker_state: CircuitBreakerState) -> None:
         """Update circuit breaker event in database.
         

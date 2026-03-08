@@ -321,9 +321,10 @@ class TestDailyLimitStopsStrategies:
         assert strategy_runner.order_manager.cancel_tp_sl_orders.call_count >= 3, \
             "Should cancel TP/SL orders for all strategies (called by stop())"
         
-        # Verify positions were closed (stop() calls close_position)
-        assert strategy_runner._get_account_client().close_position.call_count >= 3, \
-            "Should close positions for all strategies (called by stop())"
+        # With ownership-based close: stop() only closes when strategy owns the position (entry trade + position_instance_id).
+        # Test strategies have no position_instance_id, so we do not close (leave Binance position as is).
+        assert strategy_runner._get_account_client().close_position.call_count == 0, \
+            "Should not close when ownership cannot be confirmed (no position_instance_id)"
     
     @pytest.mark.slow
     @pytest.mark.asyncio
@@ -563,9 +564,10 @@ class TestDailyLimitStopsStrategies:
         assert mock_client.get_open_position.call_count >= 3, \
             "Should check position for all 3 strategies"
         
-        # Verify positions were closed (stop() calls close_position)
-        assert mock_client.close_position.call_count >= 3, \
-            "Should close positions for all 3 strategies via stop()"
+        # With ownership-based close: stop() only closes when strategy owns the position.
+        # Test strategies have no position_instance_id, so we do not close.
+        assert mock_client.close_position.call_count == 0, \
+            "Should not close when ownership cannot be confirmed"
         
         # Verify TP/SL orders were cancelled
         assert strategy_runner.order_manager.cancel_tp_sl_orders.call_count >= 3, \

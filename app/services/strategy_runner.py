@@ -240,6 +240,7 @@ class StrategyRunner:
             account_manager=self.account_manager,
             position_broadcast_service=position_broadcast_service,
             mark_price_stream_manager=mark_price_stream_manager,
+            trade_service=self.trade_service,
         )
         self.position_broadcast_service = position_broadcast_service
         self.mark_price_stream_manager = mark_price_stream_manager
@@ -261,6 +262,8 @@ class StrategyRunner:
             # Only warn if we expected to create one but couldn't
             if strategy_service and user_id:
                 logger.warning("TradeService not initialized: strategy_service missing db_service. Trades will not be saved to database.")
+        # Ensure state_manager has latest trade_service (in case it was created lazily above)
+        self.state_manager.trade_service = self.trade_service
         
         # Circuit breaker factory: only when we have strategy_service, user_id, trade_service (no impact on strategy/account risk)
         circuit_breaker_factory = None
@@ -1323,69 +1326,124 @@ class StrategyRunner:
         except Exception as exc:
             logger.warning(f"Error cancelling TP/SL orders for strategy {strategy_id}: {exc}")
         
-        # Check for open positions and close them
+        # Close only strategy-owned position on Stop (never close manually opened size)
         try:
             account_id = summary.account_id or "default"
             account_client = self._get_account_client(account_id)
-            # BUG FIX: Wrap sync BinanceClient call in to_thread to avoid blocking event loop
             position = await asyncio.to_thread(account_client.get_open_position, summary.symbol)
-            if position:
-                position_side = "LONG" if float(position['positionAmt']) > 0 else "SHORT"
-                logger.info(
-                    f"🔴 MANUAL CLOSE: Closing {position_side} position for strategy {strategy_id}: "
-                    f"{position['positionAmt']} {summary.symbol} @ {position['entryPrice']} "
-                    f"(Unrealized PnL: {float(position.get('unRealizedProfit', 0)):.2f} USDT)"
-                )
-                # BUG FIX: Wrap sync BinanceClient call in to_thread to avoid blocking event loop
-                close_order = await asyncio.to_thread(account_client.close_position, summary.symbol)
-                if close_order:
+            if not position:
+                # No open position on Binance, nothing to close
+                pass
+            else:
+                position_side = "LONG" if float(position["positionAmt"]) > 0 else "SHORT"
+                binance_size = abs(float(position["positionAmt"]))
+                # Resolve db_strategy for position_instance_id and owned quantity
+                db_strategy = None
+                if self.strategy_service:
+                    try:
+                        # strategy_id in runner is strategy_id (string); try by strategy_id first, then by UUID
+                        db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+                        if not db_strategy:
+                            try:
+                                strategy_uuid = uuid.UUID(str(strategy_id))
+                                db_strategy = self.strategy_service.db_service.get_strategy_by_uuid(strategy_uuid)
+                            except (ValueError, TypeError):
+                                pass
+                    except Exception:
+                        pass
+
+                should_close = False
+                close_qty = 0.0
+                if not db_strategy:
                     logger.info(
-                        f"[{strategy_id}] 🔴 Position CLOSED (reason: MANUAL/STOP): "
-                        f"{close_order.side} {close_order.symbol} qty={close_order.executed_qty} @ {close_order.avg_price or close_order.price:.8f} "
-                        f"(was {position_side} @ {position['entryPrice']})"
+                        f"[{strategy_id}] Skipping position close on Stop: cannot resolve strategy "
+                        f"(position on {summary.symbol} may be manual). Stopping strategy only."
                     )
-                    # Track the closing trade (protected with lock)
-                    async with self._lock:
-                        if strategy_id not in self._trades:
-                            self._trades[strategy_id] = []
-                        self._trades[strategy_id].append(close_order)
-                    
-                    # Save to database if TradeService is available (multi-user mode)
-                    if self.trade_service and self.user_id:
-                        try:
-                            # Get strategy UUID from database (and position_instance_id for correct matching)
-                            if self.strategy_service:
-                                db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
-                                if db_strategy:
-                                    # CRITICAL: Set exit_reason on order so save_trade infers position_side correctly
-                                    # (BUY + exit_reason -> SHORT, SELL + exit_reason -> LONG). Without this the
-                                    # Trade row gets wrong position_side and completed-trade matching breaks.
-                                    order_to_save = close_order
-                                    if not getattr(close_order, "exit_reason", None) or close_order.exit_reason == "UNKNOWN":
-                                        order_to_save = close_order.model_copy(update={"exit_reason": "MANUAL"})
-                                    exit_trade = self.trade_service.save_trade(
-                                        user_id=self.user_id,
-                                        strategy_id=db_strategy.id,
-                                        order=order_to_save,
-                                        position_instance_id=db_strategy.position_instance_id,
-                                    )
-                                    logger.debug(f"Saved closing trade {close_order.order_id} to database (position_side={position_side}, exit_reason=MANUAL)")
-                                    # Create completed trade (entry+exit matched) in background (same as executor on signal close)
-                                    if exit_trade:
-                                        asyncio.create_task(
-                                            _run_completed_trade_on_manual_close(
-                                                self.user_id,
-                                                str(db_strategy.id),
-                                                exit_trade.id,
-                                                close_order.order_id,
-                                                float(close_order.executed_qty or 0),
-                                                float(close_order.avg_price or close_order.price or 0),
-                                                position_side,
-                                                "MANUAL",
-                                            )
+                elif getattr(db_strategy, "position_instance_id", None) is None:
+                    logger.info(
+                        f"[{strategy_id}] Skipping position close on Stop: position not opened by strategy "
+                        f"(no position_instance_id; likely synced or manual). Leaving {binance_size} {summary.symbol} as is."
+                    )
+                else:
+                    try:
+                        owned_qty, has_entry_trades = self.strategy_service.db_service.get_strategy_owned_quantity(
+                            db_strategy.id,
+                            summary.symbol,
+                            db_strategy.position_instance_id,
+                            position_side,
+                        )
+                        if not has_entry_trades or owned_qty <= 0:
+                            logger.info(
+                                f"[{strategy_id}] Skipping position close on Stop: no strategy-owned quantity "
+                                f"(position opened outside bot or already closed). Leaving {binance_size} {summary.symbol} as is."
+                            )
+                        else:
+                            close_qty = min(owned_qty, binance_size)
+                            if close_qty <= 0:
+                                pass
+                            else:
+                                should_close = True
+                    except Exception as e:
+                        logger.warning(
+                            f"[{strategy_id}] Could not compute strategy-owned quantity, skipping close: {e}"
+                        )
+
+                if should_close and close_qty > 0:
+                    close_side = "SELL" if position_side == "LONG" else "BUY"
+                    logger.info(
+                        f"🔴 MANUAL CLOSE: Closing strategy-owned {position_side} for {strategy_id}: "
+                        f"{close_qty} {summary.symbol} (Binance total: {binance_size}) @ {position['entryPrice']} "
+                        f"(Unrealized PnL: {float(position.get('unRealizedProfit', 0)):.2f} USDT)"
+                    )
+                    close_order = await asyncio.to_thread(
+                        account_client.place_order,
+                        symbol=summary.symbol,
+                        side=close_side,
+                        quantity=close_qty,
+                        order_type="MARKET",
+                        reduce_only=True,
+                    )
+                    if close_order:
+                        logger.info(
+                            f"[{strategy_id}] 🔴 Position CLOSED (reason: MANUAL/STOP): "
+                            f"{close_order.side} {close_order.symbol} qty={close_order.executed_qty} @ {close_order.avg_price or close_order.price:.8f} "
+                            f"(was {position_side} @ {position['entryPrice']})"
+                        )
+                        async with self._lock:
+                            if strategy_id not in self._trades:
+                                self._trades[strategy_id] = []
+                            self._trades[strategy_id].append(close_order)
+
+                        if self.trade_service and self.user_id and db_strategy:
+                            try:
+                                order_to_save = close_order
+                                if not getattr(close_order, "exit_reason", None) or close_order.exit_reason == "UNKNOWN":
+                                    order_to_save = close_order.model_copy(update={"exit_reason": "MANUAL"})
+                                exit_trade = self.trade_service.save_trade(
+                                    user_id=self.user_id,
+                                    strategy_id=db_strategy.id,
+                                    order=order_to_save,
+                                    position_instance_id=db_strategy.position_instance_id,
+                                )
+                                logger.debug(
+                                    f"Saved closing trade {close_order.order_id} to database "
+                                    f"(position_side={position_side}, exit_reason=MANUAL)"
+                                )
+                                if exit_trade:
+                                    asyncio.create_task(
+                                        _run_completed_trade_on_manual_close(
+                                            self.user_id,
+                                            str(db_strategy.id),
+                                            exit_trade.id,
+                                            close_order.order_id,
+                                            float(close_order.executed_qty or 0),
+                                            float(close_order.avg_price or close_order.price or 0),
+                                            position_side,
+                                            "MANUAL",
                                         )
-                        except Exception as e:
-                            logger.warning(f"Failed to save closing trade to database: {e}")
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Failed to save closing trade to database: {e}")
         except Exception as exc:
             logger.warning(f"Error closing position for strategy {strategy_id}: {exc}")
             # Continue with stopping even if position close fails

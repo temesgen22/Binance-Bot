@@ -78,9 +78,12 @@ class WebSocketManager @Inject constructor(
                             "connected" -> UpdateMessage.Connected
                             "disconnected" -> UpdateMessage.Disconnected
                             "position_update" -> {
-                                val strategyId = jsonObject.get("strategy_id")?.asString ?: jsonObject.get("strategyId")?.asString ?: ""
-                                if (strategyId.isBlank()) return@launch
                                 val symbol = jsonObject.get("symbol")?.asString ?: ""
+                                val strategyIdRaw = jsonObject.get("strategy_id")?.takeIf { !it.isJsonNull }?.asString
+                                    ?: jsonObject.get("strategyId")?.takeIf { !it.isJsonNull }?.asString
+                                // Backend sends strategy_id=null for manual/unowned positions; use synthetic key so we don't drop the update
+                                val strategyId = if (strategyIdRaw.isNullOrBlank()) "manual_$symbol" else strategyIdRaw
+                                val strategyName = try { jsonObject.get("strategy_name")?.takeIf { !it.isJsonNull }?.asString } catch (_: Exception) { null }
                                 val accountId = jsonObject.get("account_id")?.asString ?: "default"
                                 val positionSize = try { jsonObject.get("position_size")?.takeIf { !it.isJsonNull }?.getAsDouble() ?: 0.0 } catch (_: Exception) { 0.0 }
                                 val entryPrice = try { jsonObject.get("entry_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
@@ -93,6 +96,7 @@ class WebSocketManager @Inject constructor(
                                 val marginType = try { jsonObject.get("margin_type")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
                                 UpdateMessage.PositionUpdate(
                                     strategyId = strategyId,
+                                    strategyName = strategyName,
                                     symbol = symbol,
                                     accountId = accountId,
                                     positionSize = positionSize,
@@ -230,9 +234,10 @@ sealed class UpdateMessage {
         val message: String,
         val data: Map<String, Any>? = null
     ) : UpdateMessage()
-    /** Real-time position/PnL update from backend (mark price stream or position event). */
+    /** Real-time position/PnL update from backend (mark price stream or position event). strategyId may be synthetic "manual_$symbol" when backend sends null. */
     data class PositionUpdate(
         val strategyId: String,
+        val strategyName: String? = null,
         val symbol: String,
         val accountId: String,
         val positionSize: Double,

@@ -57,28 +57,27 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.type === 'position_update') {
-                            const sid = data.strategy_id || data.strategyId;
-                            if (sid) {
-                                this._updates[sid] = {
-                                    strategy_id: sid,
-                                    symbol: data.symbol,
-                                    account_id: data.account_id || 'default',
-                                    position_size: data.position_size,
-                                    entry_price: data.entry_price,
-                                    unrealized_pnl: data.unrealized_pnl,
-                                    position_side: data.position_side,
-                                    current_price: data.current_price,
-                                    leverage: data.leverage,
-                                    liquidation_price: data.liquidation_price,
-                                    initial_margin: data.initial_margin,
-                                    margin_type: data.margin_type
-                                };
-                                // Keep closed (position_size <= 0) in store so merge can remove from Open Positions tab
-                                if (data.position_size <= 0) {
-                                    this._updates[sid] = { ...this._updates[sid], position_size: 0 };
-                                }
-                                window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[sid] }));
+                            const sid = data.strategy_id ?? data.strategyId;
+                            const key = (sid != null && sid !== '') ? sid : ('manual_' + (data.symbol || 'unknown'));
+                            this._updates[key] = {
+                                strategy_id: sid ?? null,
+                                strategy_name: data.strategy_name ?? null,
+                                symbol: data.symbol,
+                                account_id: data.account_id || 'default',
+                                position_size: data.position_size,
+                                entry_price: data.entry_price,
+                                unrealized_pnl: data.unrealized_pnl,
+                                position_side: data.position_side,
+                                current_price: data.current_price,
+                                leverage: data.leverage,
+                                liquidation_price: data.liquidation_price,
+                                initial_margin: data.initial_margin,
+                                margin_type: data.margin_type
+                            };
+                            if (data.position_size <= 0) {
+                                this._updates[key] = { ...this._updates[key], position_size: 0 };
                             }
+                            window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[key] }));
                         }
                     } catch (e) {
                         console.debug('[positions-ws] Parse error', e);

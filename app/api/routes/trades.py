@@ -648,35 +648,51 @@ def get_symbol_pnl(
             position_side = "LONG" if position_data["positionAmt"] > 0 else "SHORT"
             binance_position_size = abs(position_data["positionAmt"])
             
-            # Find matching strategy - verify position size and side match
-            # Use best match (closest size) instead of first match
+            # Find matching strategy only when we can confirm ownership (position_instance_id).
+            # This prevents showing a strategy name for manually opened positions or positions
+            # the bot synced to but did not open (no entry trade → no position_instance_id).
             strategy_match = None
             best_match_score = float('inf')
-            
+
             for strategy in symbol_strategies:
-                if strategy.position_size and abs(strategy.position_size) > 0:
-                    # Check if position side matches
-                    strategy_side = "LONG" if strategy.position_size > 0 else "SHORT"
-                    if strategy_side == position_side:
-                        # Calculate size difference (absolute and relative)
-                        strategy_size = abs(strategy.position_size)
-                        size_diff_abs = abs(strategy_size - binance_position_size)
-                        size_diff_rel = size_diff_abs / max(strategy_size, binance_position_size, 0.01)
-                        
-                        # Match if within tolerance (5% relative or 0.01 absolute)
-                        if size_diff_abs < 0.01 or size_diff_rel < 0.05:
-                            # Use the match with smallest difference (best match)
-                            if size_diff_rel < best_match_score:
-                                best_match_score = size_diff_rel
-                                strategy_match = strategy
-            
-            # BUG FIX: Don't use fallback to first strategy - leave as None if no match
-            # This prevents incorrectly attributing positions to wrong strategies
+                # Only attribute to a strategy that actually opened this position (has position_instance_id)
+                if getattr(strategy, "position_instance_id", None) is None:
+                    continue
+                if not strategy.position_size or abs(strategy.position_size) <= 0:
+                    continue
+                strategy_side = "LONG" if strategy.position_size > 0 else "SHORT"
+                if strategy_side != position_side:
+                    continue
+                strategy_size = abs(strategy.position_size)
+                size_diff_abs = abs(strategy_size - binance_position_size)
+                size_diff_rel = size_diff_abs / max(strategy_size, binance_position_size, 0.01)
+                if size_diff_abs >= 0.01 and size_diff_rel >= 0.05:
+                    continue
+                if size_diff_rel < best_match_score:
+                    best_match_score = size_diff_rel
+                    strategy_match = strategy
+
+            # Require strategy to have unclosed entry quantity (avoid attributing when position_instance_id was recovered from old trade but position is manual)
+            if strategy_match and db_service and current_user:
+                try:
+                    db_strat = db_service.get_strategy(current_user.id, strategy_match.id)
+                    if db_strat and getattr(strategy_match, "position_instance_id", None):
+                        owned_qty, has_entries = db_service.get_strategy_owned_quantity(
+                            db_strat.id,
+                            symbol,
+                            strategy_match.position_instance_id,
+                            position_side,
+                        )
+                        if not has_entries or owned_qty <= 0:
+                            strategy_match = None
+                except Exception as e:
+                    logger.debug(f"Ownership check for {symbol} failed: {e}")
+                    strategy_match = None
+
             if not strategy_match:
                 logger.debug(
-                    f"Position for {symbol} doesn't match any strategy. "
-                    f"Binance: {binance_position_size} {position_side}, "
-                    f"Available strategies: {[(s.name, abs(s.position_size) if s.position_size else 0, 'LONG' if s.position_size and s.position_size > 0 else 'SHORT' if s.position_size and s.position_size < 0 else 'NONE') for s in symbol_strategies]}"
+                    f"Position for {symbol} not attributed to any strategy (manual or no position_instance_id). "
+                    f"Binance: {binance_position_size} {position_side}."
                 )
             
             # Validate position data - skip invalid positions
@@ -687,7 +703,22 @@ def get_symbol_pnl(
                 logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}. Skipping position.")
                 # Skip this position - don't add it, but continue with rest of function
             else:
-                # Position data is valid, add it
+                # Position data is valid. Use strategy leverage when Binance returns 0 or 1; else use Binance. Fallback: get_current_leverage(symbol) for manual positions.
+                binance_leverage = position_data.get("leverage") or 0
+                try:
+                    binance_leverage = int(binance_leverage)
+                except (TypeError, ValueError):
+                    binance_leverage = 0
+                if binance_leverage > 1:
+                    display_leverage = binance_leverage
+                elif strategy_match:
+                    display_leverage = strategy_match.leverage
+                else:
+                    try:
+                        current_lev = position_client.get_current_leverage(symbol)
+                        display_leverage = current_lev if (current_lev and current_lev > 0) else 1
+                    except Exception:
+                        display_leverage = 1
                 open_positions.append(PositionSummary(
                     symbol=symbol,
                     position_size=binance_position_size,
@@ -695,9 +726,10 @@ def get_symbol_pnl(
                     current_price=position_data["markPrice"],
                     position_side=position_side,
                     unrealized_pnl=position_data["unRealizedProfit"],
-                    leverage=position_data["leverage"],
+                    leverage=display_leverage,
                     strategy_id=strategy_match.id if strategy_match else None,
                     strategy_name=strategy_match.name if strategy_match else None,
+                    account_id=(getattr(strategy_match, "account_id", None) if strategy_match else None) or account_id_for_client,
                     liquidation_price=position_data.get("liquidationPrice"),
                     initial_margin=position_data.get("initialMargin"),
                     margin_type=_normalize_margin_type(position_data.get("marginType")),
@@ -750,10 +782,12 @@ def get_pnl_overview(
     """Get PnL overview for all symbols with trades.
     
     Also checks Binance for positions that might not have corresponding trades
-    (e.g., manually opened positions).
+    (e.g., manually opened positions). When no account_id filter is set, fetches
+    positions from all known accounts so symbols like BTCUSDT (no strategy) appear.
     """
-    # Get all unique symbols from strategies with trades
+    # Get all unique symbols from strategies with trades, and which account each uses
     symbols = set()
+    symbol_to_account: dict[str, str] = {}
     strategies = runner.list_strategies()
     for strategy in strategies:
         # Apply account_id filter
@@ -762,66 +796,66 @@ def get_pnl_overview(
         trades = runner.get_trades(strategy.id)
         if trades:
             symbols.add(strategy.symbol)
-    
-    # Also check Binance for positions that might not have trades
-    # Use account-specific client when filtering by account_id
-    position_client = client
+            if strategy.symbol not in symbol_to_account:
+                symbol_to_account[strategy.symbol] = strategy.account_id or "default"
+
+    # Which accounts to query for positions (so we show manual positions e.g. BTCUSDT with no strategy)
     if account_id:
+        account_ids_to_fetch = [account_id]
+    else:
+        account_ids_to_fetch = list(
+            {s.account_id or "default" for s in strategies}
+            | set(client_manager.list_accounts().keys())
+        )
+        if not account_ids_to_fetch:
+            account_ids_to_fetch = ["default"]
+
+    # Query Binance for all positions from each relevant account to find symbols we might have missed
+    from app.core.paper_binance_client import PaperBinanceClient
+
+    for acc_id in account_ids_to_fetch:
         try:
-            account_client = client_manager.get_client(account_id)
-            if account_client:
-                position_client = account_client
+            position_client = client_manager.get_client(acc_id) or (client if acc_id == "default" else None)
+            if position_client is None:
+                continue
+            if isinstance(position_client, PaperBinanceClient):
+                all_binance_positions = position_client.futures_position_information()
+            else:
+                rest = position_client._ensure()
+                all_binance_positions = rest.futures_position_information()
+            for pos in all_binance_positions or []:
+                position_amt = float(pos.get("positionAmt", 0))
+                if abs(position_amt) > 0:
+                    sym = (pos.get("symbol") or "").strip().upper()
+                    if sym:
+                        symbols.add(sym)
+                        if sym not in symbol_to_account:
+                            symbol_to_account[sym] = acc_id
+                        logger.debug(f"Found position for {sym} on account {acc_id} (not in strategies with trades)")
         except Exception as exc:
-            logger.warning(f"Could not get account-specific client for {account_id}, using default: {exc}")
-    
-    # Query Binance for all positions to find symbols we might have missed
-    # This helps catch manually opened positions or positions from other systems
-    try:
-        # Get all positions from Binance
-        # ✅ FIX: Handle both BinanceClient and PaperBinanceClient
-        from app.core.paper_binance_client import PaperBinanceClient
-        
-        if isinstance(position_client, PaperBinanceClient):
-            # Paper trading: use futures_position_information() method
-            all_binance_positions = position_client.futures_position_information()
-        else:
-            # Real Binance: use _ensure().futures_position_information()
-            rest = position_client._ensure()
-            all_binance_positions = rest.futures_position_information()
-        
-        for pos in all_binance_positions:
-            position_amt = float(pos.get("positionAmt", 0))
-            if abs(position_amt) > 0:
-                symbol = pos.get("symbol", "").upper()
-                if symbol:
-                    symbols.add(symbol)
-                    logger.debug(f"Found position for {symbol} (not in strategies with trades)")
-    except Exception as exc:
-        logger.debug(f"Could not fetch all positions (this is optional): {exc}")
-        # Continue with symbols from strategies only - this is not critical
-    
-    # Get PnL for each symbol
+            logger.debug(f"Could not fetch positions for account {acc_id} (optional): {exc}")
+
+    # Get PnL for each symbol (use per-symbol account so BTCUSDT etc. use the account we found)
     pnl_list = []
     for symbol in sorted(symbols):
         try:
-            # ✅ FIX: Pass current_user and db_service when calling get_symbol_pnl directly
-            # These are required for database operations (completed_trades) and user filtering
+            acc_for_symbol = symbol_to_account.get(symbol) if not account_id else account_id
             pnl = get_symbol_pnl(
-                symbol, 
-                account_id=account_id, 
+                symbol,
+                account_id=acc_for_symbol or account_id,
                 start_date=start_date,
                 end_date=end_date,
-                current_user=current_user,  # ✅ Added: Required for database queries
-                runner=runner, 
+                current_user=current_user,
+                runner=runner,
                 client=client,
                 client_manager=client_manager,
-                db_service=db_service,  # ✅ Added: Required for completed_trades table access
+                db_service=db_service,
             )
             pnl_list.append(pnl)
         except Exception as exc:
             logger.warning(f"Failed to get PnL for {symbol}: {exc}")
             continue
-    
+
     return pnl_list
 
 

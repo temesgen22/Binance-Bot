@@ -55,7 +55,7 @@ fun PositionsTab(
             ) {
                 items(
                     items = positions,
-                    key = { "${it.symbol}_${it.strategyId}" }
+                    key = { "${it.symbol}_${it.strategyId ?: "manual"}" }
                 ) { position ->
                     PositionCard(position = position)
                 }
@@ -95,13 +95,11 @@ fun PositionCard(position: Position) {
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
-                    position.strategyName?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = position.strategyName ?: "Not matched",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(

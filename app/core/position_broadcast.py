@@ -74,7 +74,7 @@ class PositionBroadcastService:
     async def broadcast_position_update(
         self,
         user_id: UUID,
-        strategy_id: str,
+        strategy_id: Optional[str],
         *,
         symbol: str,
         account_id: Optional[str] = None,
@@ -87,8 +87,11 @@ class PositionBroadcastService:
         liquidation_price: Optional[float] = None,
         initial_margin: Optional[float] = None,
         margin_type: Optional[str] = None,
+        strategy_name: Optional[str] = None,
     ) -> None:
-        """Broadcast a position update to all client WebSockets for this user (Binance-like fields)."""
+        """Broadcast a position update to all client WebSockets for this user (Binance-like fields).
+        When strategy_id is None (position not owned by any strategy, e.g. manual), clients show 'Not matched'.
+        """
         payload: Dict[str, Any] = {
             "type": "position_update",
             "strategy_id": strategy_id,
@@ -96,6 +99,8 @@ class PositionBroadcastService:
             "account_id": account_id or "default",
             "position_size": position_size,
         }
+        if strategy_name is not None:
+            payload["strategy_name"] = strategy_name
         if entry_price is not None:
             payload["entry_price"] = entry_price
         if unrealized_pnl is not None:

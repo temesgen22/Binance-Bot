@@ -644,8 +644,8 @@
             for (const [sid, data] of Object.entries(ws)) {
                 if (!data || data.position_size == null) continue;
                 const pos = {
-                    strategy_id: sid,
-                    strategy_name: (allStrategies.find(s => s.id === sid) || {}).name || null,
+                    strategy_id: data.strategy_id !== undefined ? data.strategy_id : sid,
+                    strategy_name: data.strategy_name !== undefined ? data.strategy_name : (allStrategies.find(s => s.id === sid) || {}).name || null,
                     symbol: data.symbol || '',
                     position_size: data.position_size,
                     entry_price: data.entry_price,
@@ -663,12 +663,26 @@
                         sym = { symbol: pos.symbol, open_positions: [], total_realized_pnl: 0, total_unrealized_pnl: 0, total_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 };
                         base.push(sym);
                     }
-                    const idx = (sym.open_positions || []).findIndex(p => p.strategy_id === sid);
-                    if (idx >= 0) sym.open_positions[idx] = pos;
-                    else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
+                    // Binance has one position per symbol: avoid duplicates
+                    const isUnowned = (data.strategy_id == null || (sid.startsWith && sid.startsWith('manual_')));
+                    if (isUnowned) {
+                        const idx = (sym.open_positions || []).findIndex(p => p.symbol === pos.symbol);
+                        if (idx >= 0) sym.open_positions[idx] = pos;
+                        else sym.open_positions = [...(sym.open_positions || []).filter(p => p.symbol !== pos.symbol), pos];
+                    } else {
+                        const idx = (sym.open_positions || []).findIndex(p => p.strategy_id === sid);
+                        if (idx >= 0) sym.open_positions[idx] = pos;
+                        else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
+                    }
                 } else {
                     base.forEach(s => {
-                        if (s.open_positions) s.open_positions = s.open_positions.filter(p => p.strategy_id !== sid);
+                        if (s.open_positions) {
+                            s.open_positions = s.open_positions.filter(p => {
+                                if (sid.startsWith && sid.startsWith('manual_')) return p.symbol !== data.symbol;
+                                if (data.strategy_id == null) return p.symbol !== data.symbol;
+                                return p.strategy_id !== sid;
+                            });
+                        }
                     });
                 }
             }
@@ -788,18 +802,21 @@
                 }
                 
                 const sideClass = pos.position_side === 'LONG' ? 'long' : 'short';
-                // Safe null checks for position data
-                const pnl = pos.unrealized_pnl || 0;
+                // All fields from API/WebSocket: position_size, entry_price, current_price, position_side, unrealized_pnl, leverage, liquidation_price, initial_margin, margin_type
+                const pnl = pos.unrealized_pnl != null ? pos.unrealized_pnl : 0;
                 const positionSize = pos.position_size || 0;
                 const entryPrice = pos.entry_price || 0;
-                const currentPrice = pos.current_price || 0;
-                const leverage = pos.leverage || 1;
+                const currentPrice = pos.current_price;
+                const leverage = pos.leverage != null && pos.leverage > 0 ? pos.leverage : 1;
                 
-                // BUG FIX: Skip positions with invalid data
-                if (entryPrice <= 0 || currentPrice <= 0 || positionSize <= 0) {
-                    console.warn('Invalid position data (zero or negative values):', pos);
-                    return; // Skip invalid positions
+                if (entryPrice <= 0 || positionSize <= 0) {
+                    console.warn('Invalid position data (missing entry or size):', pos);
+                    return;
                 }
+                
+                const currentPriceDisplay = (currentPrice != null && currentPrice > 0) ? `$${formatPrice(currentPrice)}` : '—';
+                const priceForNotional = (currentPrice != null && currentPrice > 0) ? currentPrice : entryPrice;
+                const sizeUsdt = positionSize * priceForNotional;
                 
                 html += `<div class="position-card ${sideClass}">`;
                 html += `<div class="position-header">`;
@@ -809,8 +826,9 @@
                 html += `<div class="position-details">`;
                 html += `<div class="position-detail-item"><span>Side:</span><span><span class="badge ${pos.position_side === 'LONG' ? 'success' : 'danger'}">${pos.position_side || 'N/A'}</span></span></div>`;
                 html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Size (USDT):</span><span>${formatCurrency(sizeUsdt)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${formatPrice(entryPrice)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Current Price:</span><span>$${formatPrice(currentPrice)}</span></div>`;
+                html += `<div class="position-detail-item"><span>Current Price:</span><span>${currentPriceDisplay}</span></div>`;
                 html += `<div class="position-detail-item"><span>Unrealized PnL:</span><span class="${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.liquidation_price != null && pos.liquidation_price > 0) {

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -987,7 +987,89 @@ class DatabaseService:
             query = query.filter(Trade.strategy_id == strategy_id)
         
         return query.order_by(Trade.timestamp.desc()).limit(limit).all()
-    
+
+    def get_strategy_owned_quantity(
+        self,
+        strategy_uuid: UUID,
+        symbol: str,
+        position_instance_id: Optional[UUID],
+        position_side: str,
+    ) -> Tuple[float, bool]:
+        """Compute strategy-owned quantity from trade ledger (Option A in STRATEGY_VS_MANUAL_POSITION_PLAN).
+
+        Sum entry trade executed_qty minus exit trade executed_qty for this strategy/symbol/position_instance_id.
+        Used to close only strategy-owned size on Stop (never close manually opened size).
+
+        Returns:
+            (owned_quantity, has_entry_trades). If position_instance_id is None or invalid position_side, returns (0.0, False).
+        """
+        if self._is_async:
+            raise RuntimeError("Use async_get_strategy_owned_quantity() with AsyncSession")
+        if position_instance_id is None or position_side not in ("LONG", "SHORT"):
+            return (0.0, False)
+        entry_side = "BUY" if position_side == "LONG" else "SELL"
+        exit_side = "SELL" if position_side == "LONG" else "BUY"
+        entry_sum = self.db.query(func.coalesce(func.sum(Trade.executed_qty), 0)).filter(
+            Trade.strategy_id == strategy_uuid,
+            Trade.symbol == symbol,
+            Trade.position_instance_id == position_instance_id,
+            Trade.side == entry_side,
+            Trade.position_side == position_side,
+            Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+        ).scalar()
+        exit_sum = self.db.query(func.coalesce(func.sum(Trade.executed_qty), 0)).filter(
+            Trade.strategy_id == strategy_uuid,
+            Trade.symbol == symbol,
+            Trade.position_instance_id == position_instance_id,
+            Trade.side == exit_side,
+            Trade.position_side == position_side,
+            Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+        ).scalar()
+        entry_count = self.db.query(Trade).filter(
+            Trade.strategy_id == strategy_uuid,
+            Trade.symbol == symbol,
+            Trade.position_instance_id == position_instance_id,
+            Trade.side == entry_side,
+            Trade.position_side == position_side,
+            Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+        ).count()
+        try:
+            entry_val = float(entry_sum) if entry_sum is not None else 0.0
+            exit_val = float(exit_sum) if exit_sum is not None else 0.0
+        except (TypeError, ValueError):
+            entry_val = exit_val = 0.0
+        owned = max(0.0, entry_val - exit_val)
+        return (owned, entry_count > 0)
+
+    def get_strategy_entry_quantity(
+        self,
+        strategy_uuid: UUID,
+        symbol: str,
+        position_instance_id: Optional[UUID],
+        position_side: str,
+    ) -> float:
+        """Sum of entry trade executed_qty for this strategy/symbol/position_instance_id.
+        Used by external-close ingestion to match closing orders when user closed full position
+        (Binance may report a different size at FLAT time due to partial updates).
+        """
+        if self._is_async:
+            raise RuntimeError("Use async version with AsyncSession")
+        if position_instance_id is None or position_side not in ("LONG", "SHORT"):
+            return 0.0
+        entry_side = "BUY" if position_side == "LONG" else "SELL"
+        entry_sum = self.db.query(func.coalesce(func.sum(Trade.executed_qty), 0)).filter(
+            Trade.strategy_id == strategy_uuid,
+            Trade.symbol == symbol,
+            Trade.position_instance_id == position_instance_id,
+            Trade.side == entry_side,
+            Trade.position_side == position_side,
+            Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+        ).scalar()
+        try:
+            return float(entry_sum) if entry_sum is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     def get_recent_completed_trades(
         self,
         user_id: UUID,

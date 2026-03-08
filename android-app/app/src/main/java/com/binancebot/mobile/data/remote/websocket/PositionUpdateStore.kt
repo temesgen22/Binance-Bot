@@ -16,9 +16,10 @@ class PositionUpdateStore @Inject constructor() {
     val updates: StateFlow<Map<String, PositionUpdateData>> = _updates.asStateFlow()
 
     fun apply(update: UpdateMessage.PositionUpdate) {
-        if (update.strategyId.isBlank()) return
+        val key = if (update.strategyId.isBlank()) "manual_${update.symbol}" else update.strategyId
         val data = PositionUpdateData(
             strategyId = update.strategyId,
+            strategyName = update.strategyName,
             symbol = update.symbol,
             accountId = update.accountId,
             positionSize = update.positionSize,
@@ -32,15 +33,16 @@ class PositionUpdateStore @Inject constructor() {
             marginType = update.marginType
         )
         if (update.positionSize <= 0) {
-            _updates.value = _updates.value + (update.strategyId to data.copy(positionSize = 0.0))
+            _updates.value = _updates.value + (key to data.copy(positionSize = 0.0))
         } else {
-            _updates.value = _updates.value + (update.strategyId to data)
+            _updates.value = _updates.value + (key to data)
         }
     }
 }
 
 data class PositionUpdateData(
     val strategyId: String,
+    val strategyName: String? = null,
     val symbol: String,
     val accountId: String,
     val positionSize: Double,

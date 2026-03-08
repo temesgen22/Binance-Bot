@@ -198,6 +198,18 @@ def create_completed_trades_on_position_close(
                 f"Exit trade: side={exit_trade.side}, position_side={exit_trade.position_side}"
             )
         
+        # Idempotency: if completed trade(s) already exist for this exit (e.g. WS and REST both ran), return existing ids
+        existing_exit_orders = db.query(CompletedTradeOrder).filter(
+            CompletedTradeOrder.trade_id == exit_trade_id,
+            CompletedTradeOrder.order_role == "EXIT",
+        ).all()
+        if existing_exit_orders:
+            existing_ids = list({o.completed_trade_id for o in existing_exit_orders})
+            logger.info(
+                f"[{strategy_id}] Completed trade(s) already exist for exit_trade_id={exit_trade_id}, returning {len(existing_ids)} id(s)"
+            )
+            return existing_ids
+        
         # Determine entry side based on position_side
         # LONG position: entry was BUY, exit is SELL
         # SHORT position: entry was SELL, exit is BUY
@@ -325,12 +337,18 @@ def create_completed_trades_on_position_close(
         
         if not entry_trades:
             # Log detailed query info for debugging
+            reason_hint = ""
+            if exit_trade.position_instance_id is None:
+                reason_hint = (
+                    " Exit has no position_instance_id: the position was likely opened outside the bot "
+                    "(e.g. manually on Binance or before this strategy ran), or the strategy synced to an "
+                    "existing position without placing an entry order—so no entry trade exists to match."
+                )
             logger.warning(
                 f"[{strategy_id}] ❌ No entry trades found for strategy to match with exit trade {exit_order_id}. "
                 f"Query criteria: symbol={exit_trade.symbol}, entry_side={entry_side}, "
                 f"position_side={position_side}, position_instance_id={exit_trade.position_instance_id}, "
-                f"strategy_uuid={strategy_uuid}. "
-                f"This may indicate missing entry trades or incorrect matching criteria."
+                f"strategy_uuid={strategy_uuid}.{reason_hint}"
             )
             # Try to find any trades for this strategy/symbol to help debug
             all_trades_for_symbol = db.query(Trade).filter(
