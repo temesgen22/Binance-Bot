@@ -118,6 +118,7 @@ class StrategyOrderManager:
             OrderExecutionError: If order execution fails
             BinanceAPIError: If Binance API call fails
         """
+        from datetime import datetime as _dt, timezone as _tz
         # Use account-specific risk/executor if provided, otherwise fall back to defaults
         account_id = summary.account_id or "default"
         account_client = self.account_manager.get_account_client(account_id)
@@ -640,9 +641,10 @@ class StrategyOrderManager:
                     side=signal.action,
                     status="CANCELLED",
                     executed_qty=0.0,
+                    price=signal.price or 0.0,
                     avg_price=0.0,
                     commission=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=_dt.now(_tz.utc),
                     leverage=None,
                 )
             db_strategy = None
@@ -670,9 +672,10 @@ class StrategyOrderManager:
                     side=signal.action,
                     status="CANCELLED",
                     executed_qty=0.0,
+                    price=signal.price or 0.0,
                     avg_price=0.0,
                     commission=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=_dt.now(_tz.utc),
                     leverage=None,
                 )
             try:
@@ -694,9 +697,10 @@ class StrategyOrderManager:
                         side=signal.action,
                         status="CANCELLED",
                         executed_qty=0.0,
+                        price=signal.price or 0.0,
                         avg_price=0.0,
                         commission=0.0,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_dt.now(_tz.utc),
                         leverage=None,
                     )
                 # Close only the quantity we own, not the full Binance position
@@ -710,9 +714,10 @@ class StrategyOrderManager:
                     side=signal.action,
                     status="CANCELLED",
                     executed_qty=0.0,
+                    price=signal.price or 0.0,
                     avg_price=0.0,
                     commission=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=_dt.now(_tz.utc),
                     leverage=None,
                 )
 
@@ -802,11 +807,12 @@ class StrategyOrderManager:
                         side=signal.action,
                         status="CANCELLED",
                         executed_qty=0.0,
+                        price=signal.price or 0.0,
                         avg_price=0.0,
                         commission=0.0,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_dt.now(_tz.utc),
                         leverage=None,
-                        notional=0.0,
+                        notional_value=0.0,
                         initial_margin=None,
                         margin_type="CROSSED"
                     )

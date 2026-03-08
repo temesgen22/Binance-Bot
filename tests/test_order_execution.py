@@ -13,6 +13,7 @@ pytestmark = pytest.mark.ci  # Order execution tests are critical (except TestOr
 
 from unittest.mock import MagicMock, AsyncMock, patch, call
 from datetime import datetime
+from uuid import uuid4
 
 from app.services.order_executor import OrderExecutor
 from app.services.strategy_runner import StrategyRunner
@@ -279,11 +280,12 @@ class TestStrategyRunnerOrderExecution:
         mock_order_response
     ):
         """Test that SELL signals execute orders."""
-        # Set up existing position
+        # Set up existing position (strategy-owned so close is executed)
         strategy_summary.position_size = 0.001
         strategy_summary.position_side = "LONG"
         strategy_summary.entry_price = 39000.0
-        
+        strategy_summary.position_instance_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
         mock_order_response.side = "SELL"
         
         # Mock position sizing
@@ -303,9 +305,19 @@ class TestStrategyRunnerOrderExecution:
                 confidence=0.75,
                 price=40000.0
             )
-            
+
+            # So ownership check passes (runner has no strategy_service/db_service by default)
+            mock_db = MagicMock()
+            strategy_uuid = uuid4()
+            mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+            mock_db.get_strategy_owned_quantity.return_value = (0.001, True)
+            runner.order_manager.strategy_service = MagicMock()
+            runner.order_manager.strategy_service.db_service = mock_db
+            runner.order_manager.db_service = mock_db
+            runner.order_manager.user_id = strategy_uuid
+
             await runner.order_manager.execute_order(signal, strategy_summary)
-            
+
             # Verify order was placed
             mock_binance_client.place_order.assert_called_once()
             # Position should be reduced
@@ -325,6 +337,7 @@ class TestStrategyRunnerOrderExecution:
         strategy_summary.position_size = 0.5
         strategy_summary.position_side = "LONG"
         strategy_summary.entry_price = 30000.0
+        strategy_summary.position_instance_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         mock_order_response.side = "SELL"
         mock_order_response.executed_qty = 0.5
 
@@ -341,6 +354,16 @@ class TestStrategyRunnerOrderExecution:
             confidence=0.85,
             price=31000.0,
         )
+
+        # So ownership check passes (runner has no strategy_service/db_service by default)
+        mock_db = MagicMock()
+        strategy_uuid = uuid4()
+        mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+        mock_db.get_strategy_owned_quantity.return_value = (0.5, True)
+        runner.order_manager.strategy_service = MagicMock()
+        runner.order_manager.strategy_service.db_service = mock_db
+        runner.order_manager.db_service = mock_db
+        runner.order_manager.user_id = strategy_uuid
 
         with patch.object(
             risk_manager,
@@ -487,7 +510,8 @@ class TestStrategyRunnerOrderExecution:
         """Ensure leverage is checked and applied even when closing a position (not just opening)."""
         strategy_summary.position_size = 0.5
         strategy_summary.position_side = "LONG"
-        
+        strategy_summary.position_instance_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
         # Mock current leverage as different (20x instead of 5x)
         mock_binance_client.get_current_leverage.return_value = 20
         
@@ -514,6 +538,16 @@ class TestStrategyRunnerOrderExecution:
             confidence=0.85,
             price=40000.0,
         )
+
+        # So ownership check passes (runner has no strategy_service/db_service by default)
+        mock_db = MagicMock()
+        strategy_uuid = uuid4()
+        mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+        mock_db.get_strategy_owned_quantity.return_value = (0.5, True)
+        runner.order_manager.strategy_service = MagicMock()
+        runner.order_manager.strategy_service.db_service = mock_db
+        runner.order_manager.db_service = mock_db
+        runner.order_manager.user_id = strategy_uuid
 
         await runner.order_manager.execute_order(signal, strategy_summary)
 
@@ -843,10 +877,21 @@ class TestTradeTrackingAndPersistence:
             import asyncio
             asyncio.run(runner.order_manager.execute_order(signal1, strategy_summary))
             
-            # Update position for SELL
+            # Update position for SELL (strategy-owned so close is executed)
             strategy_summary.position_size = 0.01
             strategy_summary.position_side = "LONG"
-            
+            strategy_summary.position_instance_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+            # So ownership check passes for SELL (runner has no strategy_service/db_service by default)
+            mock_db = MagicMock()
+            strategy_uuid = uuid4()
+            mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+            mock_db.get_strategy_owned_quantity.return_value = (0.01, True)
+            runner.order_manager.strategy_service = MagicMock()
+            runner.order_manager.strategy_service.db_service = mock_db
+            runner.order_manager.db_service = mock_db
+            runner.order_manager.user_id = strategy_uuid
+
             # Execute SELL order
             signal2 = StrategySignal(
                 action="SELL",
@@ -855,7 +900,7 @@ class TestTradeTrackingAndPersistence:
                 price=41000.0,
             )
             asyncio.run(runner.order_manager.execute_order(signal2, strategy_summary))
-        
+
         # Verify both trades are tracked
         trades = runner._trades[strategy_summary.id]
         assert len(trades) == 2

@@ -676,7 +676,8 @@ class TestPositionSizingAndClosing:
         # Summary says 0.1, but Binance says 0.25
         strategy_summary.position_size = 0.1
         strategy_summary.position_side = "LONG"
-        
+        strategy_summary.position_instance_id = str(uuid4())  # Strategy owns this position so close is executed
+
         # Binance position is larger
         mock_binance_client.get_open_position.return_value = {
             "positionAmt": "0.25",  # Larger than summary
@@ -704,11 +705,21 @@ class TestPositionSizingAndClosing:
         
         # Mock risk manager
         mock_risk = MagicMock()
-        
+
+        # So ownership check passes and close is executed (runner has no strategy_service/db_service by default)
+        mock_db = MagicMock()
+        strategy_uuid = uuid4()
+        mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+        mock_db.get_strategy_owned_quantity.return_value = (0.25, True)
+        strategy_runner.order_manager.strategy_service = MagicMock()
+        strategy_runner.order_manager.strategy_service.db_service = mock_db
+        strategy_runner.order_manager.db_service = mock_db
+        strategy_runner.order_manager.user_id = strategy_uuid
+
         await strategy_runner.order_manager.execute_order(
             signal, strategy_summary, executor=mock_executor, risk=mock_risk
         )
-        
+
         # Verify executor was called with correct quantity
         call_args = mock_executor.execute.call_args
         assert call_args is not None, "Executor should be called"
@@ -727,7 +738,8 @@ class TestPositionSizingAndClosing:
         """
         strategy_summary.position_size = 0.1
         strategy_summary.position_side = "SHORT"
-        
+        strategy_summary.position_instance_id = str(uuid4())  # Strategy owns this position so close is executed
+
         mock_binance_client.get_open_position.return_value = {
             "positionAmt": "-0.25",  # Negative for short
             "entryPrice": "40000.0",
@@ -743,20 +755,31 @@ class TestPositionSizingAndClosing:
         
         mock_executor = MagicMock()
         mock_executor.execute.return_value = OrderResponse(
-            order_id="123",
+            order_id=123,
             symbol="BTCUSDT",
             side="BUY",
             status="FILLED",
             executed_qty=0.25,
             price=40000.0,
-            created_at=datetime.now(timezone.utc),
+            timestamp=datetime.now(timezone.utc),
         )
-        
+
+        # So ownership check passes (runner has no strategy_service/db_service by default)
+        mock_db = MagicMock()
+        strategy_uuid = uuid4()
+        mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+        mock_db.get_strategy_owned_quantity.return_value = (0.25, True)
+        strategy_runner.order_manager.strategy_service = MagicMock()
+        strategy_runner.order_manager.strategy_service.db_service = mock_db
+        strategy_runner.order_manager.db_service = mock_db
+        strategy_runner.order_manager.user_id = strategy_uuid
+
         await strategy_runner.order_manager.execute_order(
             signal, strategy_summary, executor=mock_executor
         )
-        
+
         call_args = mock_executor.execute.call_args
+        assert call_args is not None, "Executor should be called"
         sizing = call_args.kwargs.get('sizing')
         assert sizing.quantity == 0.25, "Should use Binance size"
         assert call_args.kwargs.get('reduce_only_override') is True
@@ -1015,12 +1038,23 @@ class TestTPSLLifecycle:
         # Position is now closed (set before execution)
         strategy_summary.position_size = 0.001
         strategy_summary.position_side = "LONG"
+        strategy_summary.position_instance_id = str(uuid4())  # Strategy owns so close runs and TP/SL cancel is tested
         mock_binance_client.get_open_position.return_value = None
-        
+
+        # So ownership check passes (runner has no strategy_service/db_service by default)
+        mock_db = MagicMock()
+        strategy_uuid = uuid4()
+        mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+        mock_db.get_strategy_owned_quantity.return_value = (0.001, True)
+        strategy_runner.order_manager.strategy_service = MagicMock()
+        strategy_runner.order_manager.strategy_service.db_service = mock_db
+        strategy_runner.order_manager.db_service = mock_db
+        strategy_runner.order_manager.user_id = strategy_uuid
+
         order_response = await strategy_runner.order_manager.execute_order(
             signal, strategy_summary, executor=mock_executor, risk=mock_risk
         )
-        
+
         # After execution, position should be closed
         # Manually call cancel_tp_sl_orders to test cancellation
         if order_response:
