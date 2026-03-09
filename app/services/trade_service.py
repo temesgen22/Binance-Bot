@@ -16,7 +16,7 @@ from loguru import logger
 from app.core.redis_storage import RedisStorage
 from app.services.database_service import DatabaseService
 from app.models.order import OrderResponse
-from app.models.db_models import Trade as DBTrade, Strategy
+from app.models.db_models import Trade as DBTrade, Strategy, CompletedTrade, CompletedTradeOrder
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
 from sqlalchemy.exc import IntegrityError
 
@@ -353,6 +353,34 @@ class TradeService:
                         f"This may indicate a bug in the caller."
                     )
             
+            # ✅ CRITICAL: When strategy path runs second (external path already created Trade with EXTERNAL_CLOSE),
+            # prefer the incoming strategy exit_reason (TP, SL, etc.) so the Trade and CompletedTrade get the correct label.
+            if (
+                order.exit_reason
+                and order.exit_reason not in ("UNKNOWN", "EXTERNAL_CLOSE", None)
+            ):
+                existing_trade.exit_reason = order.exit_reason
+                # Update any CompletedTrade(s) that reference this exit trade so they show the correct reason
+                try:
+                    exit_links = self.db_service.db.query(CompletedTradeOrder).filter(
+                        CompletedTradeOrder.trade_id == existing_trade.id,
+                        CompletedTradeOrder.order_role == "EXIT",
+                    ).all()
+                    if exit_links:
+                        ct_ids = [l.completed_trade_id for l in exit_links]
+                        self.db_service.db.query(CompletedTrade).filter(
+                            CompletedTrade.id.in_(ct_ids),
+                        ).update(
+                            {CompletedTrade.exit_reason: order.exit_reason},
+                            synchronize_session="fetch",
+                        )
+                        logger.info(
+                            f"Updated exit_reason to {order.exit_reason!r} for Trade {existing_trade.id} (order_id={existing_trade.order_id}) "
+                            f"and {len(ct_ids)} CompletedTrade(s) (external path had run first)."
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to propagate exit_reason to CompletedTrade: {e}")
+
             # ✅ SET default order_type if missing
             if not existing_trade.order_type:
                 existing_trade.order_type = order.order_type or "MARKET"
@@ -505,6 +533,19 @@ class TradeService:
                 )
         
         return db_trade
+    
+    def get_trade_by_order_id(
+        self,
+        strategy_id: UUID,
+        order_id: int,
+    ) -> Optional[DBTrade]:
+        """Return the Trade for this strategy and Binance order_id, or None.
+        Used by external close path to skip orders already saved by strategy (e.g. TP/SL).
+        """
+        return self.db_service.db.query(DBTrade).filter(
+            DBTrade.strategy_id == strategy_id,
+            DBTrade.order_id == order_id,
+        ).first()
     
     def get_recent_trades(
         self,

@@ -121,11 +121,21 @@ class MarkPriceStreamManager:
                 logger.debug(f"[MarkPrice] REST fallback {key}: {e}")
 
     def _on_mark_price_factory(self, symbol_key: str):
+        _tick_count: List[int] = [0]  # use list so closure can mutate
+
         async def _on_mark_price(_symbol: str, data: Dict[str, Any]) -> None:
             mark_price = data.get("mark_price")
             if mark_price is None:
                 return
             entries = self._registry.get(symbol_key, [])
+            if not entries:
+                logger.warning(
+                    f"[MarkPrice] Received tick for {symbol_key} but no positions in registry (current_price={mark_price}). "
+                    "Position may not be registered yet or was unregistered. Enable mark price after position opens."
+                )
+                return
+            _tick_count[0] += 1
+            log_every_ticks = 30  # log every ~30s when stream is 1s
             for entry in entries:
                 try:
                     position_side = entry.get("position_side") or "LONG"
@@ -147,7 +157,14 @@ class MarkPriceStreamManager:
                         current_price=mark_price,
                     )
                 except Exception as e:
-                    logger.debug(f"[MarkPrice] broadcast for {entry['strategy_id']}: {e}")
+                    logger.warning(
+                        f"[MarkPrice] broadcast for {entry.get('strategy_id', '?')} failed: {e}",
+                        exc_info=True,
+                    )
+            if _tick_count[0] % log_every_ticks == 1:
+                logger.info(
+                    f"[MarkPrice] {symbol_key} real-time tick #{_tick_count[0]}: mark_price={mark_price} (broadcast to clients)"
+                )
         return _on_mark_price
 
     async def subscribe(self, symbol: str) -> None:

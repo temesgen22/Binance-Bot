@@ -703,13 +703,13 @@ def get_symbol_pnl(
                 logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}. Skipping position.")
                 # Skip this position - don't add it, but continue with rest of function
             else:
-                # Position data is valid. Use strategy leverage when Binance returns 0 or 1; else use Binance. Fallback: get_current_leverage(symbol) for manual positions.
+                # Position data is valid. Prefer Binance leverage when >= 1; else fallback to strategy or get_current_leverage(symbol).
                 binance_leverage = position_data.get("leverage") or 0
                 try:
                     binance_leverage = int(binance_leverage)
                 except (TypeError, ValueError):
                     binance_leverage = 0
-                if binance_leverage > 1:
+                if binance_leverage >= 1:
                     display_leverage = binance_leverage
                 elif strategy_match:
                     display_leverage = strategy_match.leverage

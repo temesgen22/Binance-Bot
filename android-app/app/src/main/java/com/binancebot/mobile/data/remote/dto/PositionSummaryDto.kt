@@ -21,6 +21,8 @@ data class PositionSummaryDto(
     val strategyId: String? = null,
     @SerializedName("strategy_name")
     val strategyName: String? = null,
+    @SerializedName("account_id")
+    val accountId: String? = null,
     @SerializedName("liquidation_price")
     val liquidationPrice: Double? = null,
     @SerializedName("initial_margin")

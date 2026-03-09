@@ -107,7 +107,8 @@ class TradesViewModel @Inject constructor(
         )
     )
     
-    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId (or synthetic "manual_$symbol"). One position per symbol; WS wins when both have same symbol. */
+    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId (or synthetic "manual_$symbol").
+     * When WS sends position_update with positionSize <= 0 (closed), we exclude that position so the list clears. */
     private fun mergePositionsWithWs(
         restPositions: List<Position>,
         wsUpdates: Map<String, PositionUpdateData>
@@ -116,11 +117,15 @@ class TradesViewModel @Inject constructor(
             .filter { it.positionSize > 0 }
             .map { it.toPosition() }
         val wsSymbols = wsOpen.map { it.symbol }.toSet()
-        // Keep REST position only if no WS update for that symbol, and (if has strategyId) no WS update for that strategyId or WS says closed
+        // Key for matching REST position to WS: strategyId or "manual_$symbol" for unowned positions
+        fun keyFor(p: Position): String = p.strategyId ?: "manual_${p.symbol}"
+        // Exclude REST position if: (1) WS has an open position for this symbol (we use WS data), or
+        // (2) WS has a closed update for this key (positionSize <= 0) so we clear it and don't show stale REST
         val restOpen = restPositions.filter { p ->
+            val key = keyFor(p)
+            if (key in wsUpdates && (wsUpdates[key]?.positionSize ?: 0.0) <= 0.0) return@filter false
             if (p.symbol in wsSymbols) return@filter false
-            val sid = p.strategyId
-            sid == null || sid !in wsUpdates || (wsUpdates[sid]?.positionSize ?: 0.0) <= 0.0
+            true
         }
         return restOpen + wsOpen
     }
@@ -233,6 +238,7 @@ private fun PositionUpdateData.toPosition(): Position = Position(
     leverage = leverage ?: 1,
     strategyId = if (strategyId.startsWith("manual_")) null else strategyId,
     strategyName = strategyName,
+    accountId = accountId.takeIf { it.isNotBlank() },
     liquidationPrice = liquidationPrice,
     initialMargin = initialMargin,
     marginType = marginType

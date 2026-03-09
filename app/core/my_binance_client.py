@@ -1354,7 +1354,31 @@ class BinanceClient:
         rest = self._ensure()
         logger.info(f"Cancelling open orders for {symbol}")
         return rest.futures_cancel_all_open_orders(symbol=symbol)
-    
+
+    def _normalize_order_response(self, response: Any, default_type: str) -> Dict[str, Any]:
+        """Ensure response is a dict with 'order_type' (Binance returns 'type')."""
+        if not isinstance(response, dict):
+            response = getattr(response, "__dict__", None) or (dict(response) if hasattr(response, "keys") else {})
+        if not isinstance(response, dict):
+            return {"orderId": None, "order_type": default_type, "type": default_type}
+        if "order_type" not in response:
+            response = {**response, "order_type": response.get("type", default_type)}
+        return response
+
+    def _tp_sl_fallback_from_open_orders(
+        self, rest: Any, symbol: str, stop_price: float, order_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """If library raised KeyError('order_type'), order may be placed; recover from open orders."""
+        try:
+            open_orders = rest.futures_get_open_orders(symbol=symbol)
+            stop_str = str(stop_price)
+            for o in open_orders or []:
+                if o.get("type") == order_type and str(o.get("stopPrice")) == stop_str:
+                    return self._normalize_order_response(o, order_type)
+        except Exception as e:
+            logger.debug(f"TP/SL fallback from open orders failed: {e}")
+        return None
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def place_stop_loss_order(
         self,
@@ -1406,11 +1430,20 @@ class BinanceClient:
         
         try:
             response = rest.futures_create_order(**params)
+            # Normalize to dict and ensure "order_type" exists (Binance returns "type"; lib/code may expect "order_type")
+            response = self._normalize_order_response(response, "STOP_MARKET")
             logger.info(f"STOP_MARKET order placed: orderId={response.get('orderId')}")
-            # Normalize: Binance returns "type"; some code expects "order_type"
-            if isinstance(response, dict) and "order_type" not in response:
-                response = {**response, "order_type": response.get("type", "STOP_MARKET")}
             return response
+        except KeyError as ke:
+            if ke.args and ke.args[0] == "order_type":
+                # Library may expect "order_type" but API returns "type"; recover from open orders
+                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price, "STOP_MARKET")
+                if fallback:
+                    return fallback
+            raise BinanceAPIError(
+                f"STOP_MARKET order response missing key: {ke}",
+                details={"symbol": symbol, "order_type": "STOP_MARKET"}
+            ) from ke
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
             status_code = getattr(exc, 'status_code', None)
@@ -1482,11 +1515,19 @@ class BinanceClient:
         
         try:
             response = rest.futures_create_order(**params)
+            # Normalize to dict and ensure "order_type" exists (Binance returns "type"; lib/code may expect "order_type")
+            response = self._normalize_order_response(response, "TAKE_PROFIT_MARKET")
             logger.info(f"TAKE_PROFIT_MARKET order placed: orderId={response.get('orderId')}")
-            # Normalize: Binance returns "type"; some code expects "order_type"
-            if isinstance(response, dict) and "order_type" not in response:
-                response = {**response, "order_type": response.get("type", "TAKE_PROFIT_MARKET")}
             return response
+        except KeyError as ke:
+            if ke.args and ke.args[0] == "order_type":
+                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price, "TAKE_PROFIT_MARKET")
+                if fallback:
+                    return fallback
+            raise BinanceAPIError(
+                f"TAKE_PROFIT_MARKET order response missing key: {ke}",
+                details={"symbol": symbol, "order_type": "TAKE_PROFIT_MARKET"}
+            ) from ke
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
             status_code = getattr(exc, 'status_code', None)

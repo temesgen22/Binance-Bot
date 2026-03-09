@@ -642,7 +642,7 @@ class StrategyPersistence:
                 summary.unrealized_pnl = new_unrealized_pnl
                 summary.position_side = new_position_side
                 summary.current_price = new_current_price
-                # Use Binance leverage when > 1; else get_current_leverage(symbol) so display is correct (REST/WS consistency)
+                # Use Binance leverage when >= 1; else get_current_leverage(symbol) so display is correct (REST/WS consistency)
                 pos_leverage = position.get("leverage")
                 pl = 0
                 if pos_leverage is not None:
@@ -650,7 +650,7 @@ class StrategyPersistence:
                         pl = int(float(pos_leverage))
                     except (TypeError, ValueError):
                         pass
-                if pl > 1:
+                if pl >= 1:
                     summary.leverage = pl
                 else:
                     try:

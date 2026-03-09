@@ -17,7 +17,7 @@ sealed class Screen(
     object Home : Screen("home", "Home", Icons.Default.Home)
     object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
     object Strategies : Screen("strategies", "Strategies", Icons.Default.List)
-    object Trades : Screen("trades", "Trades", Icons.Default.ShoppingCart)
+    object Trades : Screen("trades", "Open Positions", Icons.Default.ShoppingCart)
     object Accounts : Screen("accounts", "Accounts", Icons.Default.AccountCircle)
     object Logs : Screen("logs", "Logs", Icons.Default.Article)
     object Reports : Screen("reports", "Reports", Icons.Default.Assessment)

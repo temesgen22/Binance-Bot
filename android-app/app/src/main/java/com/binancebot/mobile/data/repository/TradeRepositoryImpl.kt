@@ -108,6 +108,7 @@ private fun com.binancebot.mobile.data.remote.dto.PositionSummaryDto.toDomain():
         leverage = leverage,
         strategyId = strategyId,
         strategyName = strategyName,
+        accountId = accountId,
         liquidationPrice = liquidationPrice,
         initialMargin = initialMargin,
         marginType = marginType

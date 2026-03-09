@@ -835,7 +835,7 @@
                     html += `<div class="position-detail-item"><span>Liquidation Price:</span><span>$${formatPrice(pos.liquidation_price)}</span></div>`;
                 }
                 if (pos.initial_margin != null && pos.initial_margin >= 0) {
-                    html += `<div class="position-detail-item"><span>Margin:</span><span>${formatCurrency(pos.initial_margin)}</span></div>`;
+                    html += `<div class="position-detail-item"><span>Margin (USDT):</span><span>${formatCurrency(pos.initial_margin)}</span></div>`;
                 }
                 if (pos.margin_type) {
                     html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;

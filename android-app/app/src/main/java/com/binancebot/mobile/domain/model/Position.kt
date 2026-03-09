@@ -10,6 +10,7 @@ data class Position(
     val leverage: Int,
     val strategyId: String? = null,
     val strategyName: String? = null,
+    val accountId: String? = null,
     val liquidationPrice: Double? = null,
     val initialMargin: Double? = null,
     val marginType: String? = null // "CROSSED" or "ISOLATED"
