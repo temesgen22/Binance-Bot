@@ -51,7 +51,7 @@
                 this._ws = new WebSocket(url);
                 this._ws.onopen = () => {
                     this._reconnectAttempts = 0;
-                    console.debug('[positions-ws] Connected');
+                    console.info('[positions-ws] Connected to /api/ws/positions');
                 };
                 this._ws.onmessage = (event) => {
                     try {
@@ -80,7 +80,7 @@
                             window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[key] }));
                         }
                     } catch (e) {
-                        console.debug('[positions-ws] Parse error', e);
+                        console.warn('[positions-ws] Parse error', e);
                     }
                 };
                 this._ws.onclose = (event) => {

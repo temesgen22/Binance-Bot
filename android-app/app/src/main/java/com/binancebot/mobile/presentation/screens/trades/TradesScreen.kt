@@ -76,6 +76,9 @@ fun TradesScreen(
                 positions = allOpenPositions,
                 isLoading = pnlLoading,
                 onRefresh = { viewModel.loadPnLOverview() },
+                onStrategyClick = { strategyId ->
+                    navController.navigate("strategy_details/$strategyId")
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }

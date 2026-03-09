@@ -502,6 +502,8 @@ class StrategyPersistence:
                     position_size,
                     position_side,
                     summary.account_id,
+                    leverage=getattr(summary, "leverage", None),
+                    initial_margin=getattr(summary, "initial_margin", None),
                 )
                 await self.mark_price_stream_manager.subscribe(summary.symbol)
             except Exception as exc:
@@ -660,7 +662,22 @@ class StrategyPersistence:
                     except Exception:
                         pass
                 summary.liquidation_price = position.get("liquidationPrice")
-                summary.initial_margin = position.get("initialMargin")
+                im = position.get("initialMargin")
+                if im is not None:
+                    try:
+                        summary.initial_margin = float(im)
+                    except (TypeError, ValueError):
+                        summary.initial_margin = None
+                else:
+                    summary.initial_margin = None
+                if (summary.initial_margin is None or summary.initial_margin <= 0) and summary.leverage and summary.leverage >= 1:
+                    try:
+                        mark = float(position.get("markPrice", 0))
+                        if mark > 0:
+                            notional = new_position_size * mark
+                            summary.initial_margin = notional / summary.leverage
+                    except (TypeError, ValueError):
+                        pass
                 mt = position.get("marginType")
                 if mt is not None:
                     mt_upper = str(mt).strip().upper()
@@ -708,6 +725,8 @@ class StrategyPersistence:
                                 new_position_size,
                                 new_position_side,
                                 summary.account_id,
+                                leverage=summary.leverage,
+                                initial_margin=getattr(summary, "initial_margin", None),
                             )
                             await self.mark_price_stream_manager.subscribe(summary.symbol)
                         except Exception as exc:

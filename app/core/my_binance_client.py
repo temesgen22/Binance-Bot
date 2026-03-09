@@ -230,10 +230,20 @@ class BinanceClient:
         rest = self._ensure()
         try:
             positions = rest.futures_position_information(symbol=symbol)
-            if positions and len(positions) > 0:
-                # Position information includes leverage
-                leverage = int(float(positions[0].get("leverage", "0")))
-                return leverage if leverage > 0 else None
+            if not positions:
+                return None
+            # Use the position with non-zero amount (in hedge mode positions[0] may be the empty side with leverage 0)
+            for pos in positions:
+                amt = float(pos.get("positionAmt", 0))
+                if abs(amt) > 0:
+                    lev = pos.get("leverage")
+                    if lev is not None and str(lev).strip() != "":
+                        try:
+                            leverage = int(float(lev))
+                            return leverage if leverage >= 1 else None
+                        except (TypeError, ValueError):
+                            pass
+                    break
             return None
         except ClientError as exc:
             error_code = getattr(exc, 'code', None)
@@ -252,9 +262,18 @@ class BinanceClient:
                 
                 try:
                     positions = rest.futures_position_information(symbol=symbol)
-                    if positions and len(positions) > 0:
-                        leverage = int(float(positions[0].get("leverage", "0")))
-                        return leverage if leverage > 0 else None
+                    if positions:
+                        for pos in positions:
+                            amt = float(pos.get("positionAmt", 0))
+                            if abs(amt) > 0:
+                                lev = pos.get("leverage")
+                                if lev is not None and str(lev).strip() != "":
+                                    try:
+                                        leverage = int(float(lev))
+                                        return leverage if leverage >= 1 else None
+                                    except (TypeError, ValueError):
+                                        pass
+                                break
                     return None
                 except Exception as retry_exc:
                     logger.warning(
@@ -1746,7 +1765,7 @@ class BinanceClient:
         """
         def _pos_dict(pos: dict) -> dict:
             position_amt = float(pos.get("positionAmt", 0))
-            # Binance returns leverage as string (e.g. "10"); parse to int; use 0 when missing so callers can fall back to strategy leverage
+            # Binance /fapi/v2/positionRisk returns "leverage" as string (e.g. "10")
             lev_raw = pos.get("leverage")
             leverage_val = 0
             if lev_raw is not None and str(lev_raw).strip() != "":
@@ -1754,13 +1773,26 @@ class BinanceClient:
                     leverage_val = int(float(lev_raw))
                 except (TypeError, ValueError):
                     pass
+            # If still 0, Binance may omit for some responses; ensure we don't drop valid 1x
+            if leverage_val < 1 and lev_raw is not None:
+                try:
+                    v = float(lev_raw)
+                    if v >= 1:
+                        leverage_val = int(v)
+                except (TypeError, ValueError):
+                    pass
+            if leverage_val == 0 and abs(position_amt) > 0:
+                logger.debug(
+                    f"Binance position for {pos.get('symbol')} has leverage 0 or missing; raw keys: {list(pos.keys())}, "
+                    f"leverage raw={lev_raw!r}. Caller will use get_current_leverage or strategy."
+                )
             out = {
                 "symbol": pos.get("symbol"),
                 "positionAmt": position_amt,
                 "entryPrice": float(pos.get("entryPrice", 0)),
                 "markPrice": float(pos.get("markPrice", 0)),
                 "unRealizedProfit": float(pos.get("unRealizedProfit", 0)),
-                "leverage": leverage_val if leverage_val > 0 else 0,  # 0 = use strategy leverage for display
+                "leverage": leverage_val if leverage_val >= 1 else 0,  # 0 = use strategy/get_current_leverage for display
             }
             liq = pos.get("liquidationPrice")
             if liq is not None and str(liq).strip():
@@ -1768,12 +1800,43 @@ class BinanceClient:
                     out["liquidationPrice"] = float(liq)
                 except (TypeError, ValueError):
                     pass
-            im = pos.get("initialMargin")
-            if im is not None and str(im).strip():
+            # Margin (USDT): Binance V2 positionRisk does NOT return "initialMargin"; use isolatedMargin or compute from notional/leverage
+            im = pos.get("initialMargin") or pos.get("initial_margin")
+            margin_val = None
+            if im is not None and str(im).strip() != "":
                 try:
-                    out["initialMargin"] = float(im)
+                    margin_val = float(im)
                 except (TypeError, ValueError):
                     pass
+            if margin_val is None or margin_val <= 0:
+                # V2 has "isolatedMargin" (margin in USDT for isolated) and "notional" (|positionAmt * markPrice|)
+                iso = pos.get("isolatedMargin")
+                if iso is not None and str(iso).strip() != "":
+                    try:
+                        margin_val = float(iso)
+                    except (TypeError, ValueError):
+                        pass
+            # Cross margin: margin (USDT) ≈ notional / leverage; when leverage is 0 use 1 so we still show margin
+            notional_abs = None
+            notional_raw = pos.get("notional")
+            if notional_raw is not None and str(notional_raw).strip() != "":
+                try:
+                    notional_abs = abs(float(notional_raw))
+                except (TypeError, ValueError):
+                    pass
+            if (notional_abs is None or notional_abs <= 0) and position_amt != 0:
+                try:
+                    mark = float(pos.get("markPrice", 0))
+                    if mark > 0:
+                        notional_abs = abs(position_amt * mark)
+                except (TypeError, ValueError):
+                    pass
+            if (margin_val is None or margin_val <= 0) and notional_abs and notional_abs > 0:
+                leverage_effective = leverage_val if leverage_val >= 1 else 1
+                margin_val = notional_abs / leverage_effective
+            if margin_val is None or margin_val < 0:
+                margin_val = 0.0
+            out["initialMargin"] = margin_val
             mt = pos.get("marginType")
             if mt is not None and str(mt).strip():
                 mt_upper = str(mt).strip().upper()

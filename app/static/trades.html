@@ -8,7 +8,6 @@
     <script src="/static/common.js"></script>
     <script src="/static/settings.js"></script>
     <script src="/static/utils.js"></script>
-    <script src="/static/positions-websocket.js"></script>
     <style>
         /* Page-specific styles - common styles are in common.css */
         .container {
@@ -528,6 +527,7 @@
     </div>
 
     <script src="/static/auth.js"></script>
+    <script src="/static/positions-websocket.js"></script>
     <script>
         // Check authentication IMMEDIATELY - before any other code runs
         (function() {
@@ -663,15 +663,16 @@
                         sym = { symbol: pos.symbol, open_positions: [], total_realized_pnl: 0, total_unrealized_pnl: 0, total_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 };
                         base.push(sym);
                     }
-                    // Binance has one position per symbol: avoid duplicates
+                    // Binance has one position per symbol: avoid duplicates; merge with existing so REST fields (leverage, initial_margin) are kept when WS only sends price/pnl
                     const isUnowned = (data.strategy_id == null || (sid.startsWith && sid.startsWith('manual_')));
+                    const mergeWithExisting = (existing) => ({ ...existing, ...pos });
                     if (isUnowned) {
                         const idx = (sym.open_positions || []).findIndex(p => p.symbol === pos.symbol);
-                        if (idx >= 0) sym.open_positions[idx] = pos;
+                        if (idx >= 0) sym.open_positions[idx] = mergeWithExisting(sym.open_positions[idx]);
                         else sym.open_positions = [...(sym.open_positions || []).filter(p => p.symbol !== pos.symbol), pos];
                     } else {
                         const idx = (sym.open_positions || []).findIndex(p => p.strategy_id === sid);
-                        if (idx >= 0) sym.open_positions[idx] = pos;
+                        if (idx >= 0) sym.open_positions[idx] = mergeWithExisting(sym.open_positions[idx]);
                         else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
                     }
                 } else {
@@ -691,7 +692,8 @@
 
         // Live Open Positions: when WebSocket pushes position_update, merge with REST data and refresh tab
         window.addEventListener('position-update', function() {
-            const merged = mergePnlWithWs(lastPnlData);
+            // Use lastPnlData or [] so we still show WS-only updates if REST hasn't loaded yet
+            const merged = mergePnlWithWs(lastPnlData || []);
             displayOverview(merged);
             displayPositions(merged);
             updateOverallStats(merged);
@@ -807,7 +809,8 @@
                 const positionSize = pos.position_size || 0;
                 const entryPrice = pos.entry_price || 0;
                 const currentPrice = pos.current_price;
-                const leverage = pos.leverage != null && pos.leverage > 0 ? pos.leverage : 1;
+                // Use Binance leverage when present (>= 1); otherwise show 1x (lowercase x like Binance)
+                const leverage = (pos.leverage != null && Number(pos.leverage) >= 1) ? Number(pos.leverage) : 1;
                 
                 if (entryPrice <= 0 || positionSize <= 0) {
                     console.warn('Invalid position data (missing entry or size):', pos);
@@ -834,9 +837,9 @@
                 if (pos.liquidation_price != null && pos.liquidation_price > 0) {
                     html += `<div class="position-detail-item"><span>Liquidation Price:</span><span>$${formatPrice(pos.liquidation_price)}</span></div>`;
                 }
-                if (pos.initial_margin != null && pos.initial_margin >= 0) {
-                    html += `<div class="position-detail-item"><span>Margin (USDT):</span><span>${formatCurrency(pos.initial_margin)}</span></div>`;
-                }
+                // Always show Margin (USDT) - same as Binance; use value or — when missing
+                const marginUsdt = (pos.initial_margin != null && pos.initial_margin >= 0) ? formatCurrency(pos.initial_margin) : '—';
+                html += `<div class="position-detail-item"><span>Margin (USDT):</span><span>${marginUsdt}</span></div>`;
                 if (pos.margin_type) {
                     html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;
                 }
@@ -1148,6 +1151,10 @@
             loadSymbols();
             loadStrategies();
             loadData();
+            // Ensure positions WebSocket connects so real-time price/PnL updates work (auth is ready after load)
+            if (window.PositionUpdates && typeof window.PositionUpdates.connect === 'function') {
+                window.PositionUpdates.connect();
+            }
         });
     </script>
 </body>

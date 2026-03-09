@@ -1,6 +1,7 @@
 package com.binancebot.mobile.presentation.screens.trades
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -18,14 +20,22 @@ import com.binancebot.mobile.presentation.components.SwipeRefreshBox
 import com.binancebot.mobile.presentation.theme.Spacing
 import com.binancebot.mobile.presentation.util.FormatUtils
 
+// Binance-style colors: Long = green, Short = red (matches webapp)
+private val LongGreen = Color(0xFF28A745)
+private val ShortRed = Color(0xFFDC3545)
+private val LongBg = Color(0xFFE8F5E9)
+private val ShortBg = Color(0xFFFFEBEE)
+
 /**
- * Open positions list – Binance Futures style: compact rows with symbol, side, PnL, and key metrics.
+ * Open positions list – Binance Futures style: Long = green, Short = red; prices with decimals like Binance; all parameters shown.
+ * Strategy row shows strategy name or "Not matched" (like webapp); click navigates to strategy detail when position has a strategy.
  */
 @Composable
 fun PositionsTab(
     positions: List<Position>,
     isLoading: Boolean,
     onRefresh: () -> Unit,
+    onStrategyClick: ((strategyId: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     SwipeRefreshBox(
@@ -64,7 +74,10 @@ fun PositionsTab(
                     items = positions,
                     key = { "${it.symbol}_${it.strategyId ?: "manual"}_${it.accountId.orEmpty()}" }
                 ) { position ->
-                    BinanceStylePositionRow(position = position)
+                    BinanceStylePositionRow(
+                        position = position,
+                        onStrategyClick = onStrategyClick
+                    )
                 }
             }
         }
@@ -72,22 +85,25 @@ fun PositionsTab(
 }
 
 /**
- * Single position row in Binance Futures style: symbol + side + unrealized PnL on top; Entry, Mark, Margin, Leverage, Liq in a compact block.
+ * Single position row: Binance colors (Long=green, Short=red), prices with decimals (formatPrice), all parameters displayed.
+ * Strategy shown as in webapp (name or "Not matched"); click navigates to strategy detail when position has a strategy.
  */
 @Composable
-fun BinanceStylePositionRow(position: Position) {
+fun BinanceStylePositionRow(
+    position: Position,
+    onStrategyClick: ((strategyId: String) -> Unit)? = null
+) {
     val isLong = position.isLong
-    val surfaceColor = if (isLong)
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-    else
-        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
-    val sideColor = if (isLong) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-    val pnlColor = if (position.unrealizedPnL >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    val sideColor = if (isLong) LongGreen else ShortRed
+    val cardBg = if (isLong) LongBg else ShortBg
+    val pnlColor = if (position.unrealizedPnL >= 0) LongGreen else ShortRed
+    val strategyLabel = position.strategyName?.takeIf { it.isNotBlank() } ?: "Not matched"
+    val hasStrategy = !position.strategyId.isNullOrBlank()
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = surfaceColor),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
@@ -96,7 +112,7 @@ fun BinanceStylePositionRow(position: Position) {
                 .padding(Spacing.Medium),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Row 1: Symbol | Side | Unrealized PnL
+            // Header: Symbol | Side badge | Unrealized PnL
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -108,16 +124,9 @@ fun BinanceStylePositionRow(position: Position) {
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    position.strategyName?.takeIf { it.isNotBlank() }?.let { name ->
-                        Text(
-                            text = name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                     position.accountId?.takeIf { it.isNotBlank() }?.let { id ->
                         Text(
-                            text = id,
+                            text = "Account: $id",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -144,42 +153,59 @@ fun BinanceStylePositionRow(position: Position) {
                 )
             }
 
-            // Row 2: Key metrics in a compact grid (Binance-style)
+            // All parameters in a single block (Binance-style), always visible
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                // Row 1: Size, Entry Price, Mark Price (prices with decimals like Binance)
+                PositionParamRow("Size", String.format("%.4f", position.positionSize))
+                PositionParamRow("Entry Price", FormatUtils.formatPrice(position.entryPrice))
+                PositionParamRow("Mark Price", FormatUtils.formatPrice(position.currentPrice))
+                PositionParamRow("Leverage", "${position.leverage}x")
+                // Liquidation Price – show value or "—"
+                PositionParamRow(
+                    "Liquidation Price",
+                    position.liquidationPrice?.takeIf { it > 0 }?.let { FormatUtils.formatPrice(it) } ?: "—"
+                )
+                // Margin (USDT) – always show row
+                PositionParamRow(
+                    "Margin (USDT)",
+                    position.initialMargin?.takeIf { it >= 0 }?.let { FormatUtils.formatCurrency(it) } ?: "—"
+                )
+                // Margin Type
+                PositionParamRow(
+                    "Margin Type",
+                    position.marginType?.takeIf { it.isNotBlank() } ?: "—"
+                )
+                // Strategy (like webapp): name or "Not matched"; clickable to open strategy detail when position has a strategy
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (hasStrategy && onStrategyClick != null)
+                                Modifier.clickable { position.strategyId?.let { onStrategyClick(it) } }
+                            else Modifier
+                        ),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MetricChip("Size", String.format("%.4f", position.positionSize))
-                    MetricChip("Entry", FormatUtils.formatCurrency(position.entryPrice))
-                    MetricChip("Mark", FormatUtils.formatCurrency(position.currentPrice))
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    MetricChip("Leverage", "${position.leverage}x")
-                    position.initialMargin?.takeIf { it >= 0 }?.let { margin ->
-                        MetricChip("Margin (USDT)", FormatUtils.formatCurrency(margin))
-                    }
-                    position.liquidationPrice?.takeIf { it > 0 }?.let { liq ->
-                        MetricChip("Liq. Price", FormatUtils.formatCurrency(liq))
-                    }
-                }
-                position.marginType?.takeIf { it.isNotBlank() }?.let { mt ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        MetricChip("Margin Type", mt)
-                    }
+                    Text(
+                        text = "Strategy",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = strategyLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = if (hasStrategy) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -187,12 +213,16 @@ fun BinanceStylePositionRow(position: Position) {
 }
 
 @Composable
-private fun MetricChip(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun PositionParamRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            fontSize = 10.sp,
+            fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(

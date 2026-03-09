@@ -113,8 +113,8 @@ class PositionBroadcastService:
             payload["leverage"] = leverage
         if liquidation_price is not None:
             payload["liquidation_price"] = liquidation_price
-        if initial_margin is not None:
-            payload["initial_margin"] = initial_margin
+        # Always include initial_margin so clients can show Margin (USDT) like Binance; use 0 if None
+        payload["initial_margin"] = initial_margin if initial_margin is not None else 0.0
         if margin_type is not None:
             payload["margin_type"] = margin_type
         await self._manager.broadcast_to_user(user_id, payload)

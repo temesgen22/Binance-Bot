@@ -703,7 +703,7 @@ def get_symbol_pnl(
                 logger.warning(f"Invalid mark price for {symbol}: {position_data['markPrice']}. Skipping position.")
                 # Skip this position - don't add it, but continue with rest of function
             else:
-                # Position data is valid. Prefer Binance leverage when >= 1; else fallback to strategy or get_current_leverage(symbol).
+                # Position data is valid. Prefer Binance leverage: from position dict first, then get_current_leverage (same API, non-zero position), then strategy.
                 binance_leverage = position_data.get("leverage") or 0
                 try:
                     binance_leverage = int(binance_leverage)
@@ -711,14 +711,35 @@ def get_symbol_pnl(
                     binance_leverage = 0
                 if binance_leverage >= 1:
                     display_leverage = binance_leverage
-                elif strategy_match:
-                    display_leverage = strategy_match.leverage
                 else:
+                    # Position dict had 0/missing (e.g. wrong row in hedge mode); get from Binance using non-zero position
                     try:
                         current_lev = position_client.get_current_leverage(symbol)
-                        display_leverage = current_lev if (current_lev and current_lev > 0) else 1
+                        if current_lev and current_lev >= 1:
+                            display_leverage = current_lev
+                        elif strategy_match:
+                            display_leverage = strategy_match.leverage
+                        else:
+                            display_leverage = 1
                     except Exception:
-                        display_leverage = 1
+                        display_leverage = strategy_match.leverage if strategy_match else 1
+                # initial_margin: from Binance or compute notional/leverage when API omits it (e.g. positionRisk v2)
+                raw_initial_margin = position_data.get("initialMargin")
+                initial_margin_val = None
+                if raw_initial_margin is not None:
+                    try:
+                        initial_margin_val = float(raw_initial_margin)
+                    except (TypeError, ValueError):
+                        pass
+                if (initial_margin_val is None or initial_margin_val <= 0) and display_leverage >= 1:
+                    try:
+                        notional = abs(float(position_data["positionAmt"])) * float(position_data["markPrice"])
+                        if notional > 0:
+                            initial_margin_val = notional / display_leverage
+                    except (TypeError, ValueError, KeyError):
+                        pass
+                if initial_margin_val is None or initial_margin_val < 0:
+                    initial_margin_val = 0.0
                 open_positions.append(PositionSummary(
                     symbol=symbol,
                     position_size=binance_position_size,
@@ -731,7 +752,7 @@ def get_symbol_pnl(
                     strategy_name=strategy_match.name if strategy_match else None,
                     account_id=(getattr(strategy_match, "account_id", None) if strategy_match else None) or account_id_for_client,
                     liquidation_price=position_data.get("liquidationPrice"),
-                    initial_margin=position_data.get("initialMargin"),
+                    initial_margin=initial_margin_val,
                     margin_type=_normalize_margin_type(position_data.get("marginType")),
                 ))
                 total_unrealized_pnl = position_data["unRealizedProfit"]

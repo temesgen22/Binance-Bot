@@ -43,12 +43,12 @@ def _build_position_payload(summary) -> dict:
         payload["position_side"] = summary.position_side
     if getattr(summary, "current_price", None) is not None:
         payload["current_price"] = summary.current_price
-    if getattr(summary, "leverage", None) is not None:
-        payload["leverage"] = summary.leverage
+    # Leverage: always include (Binance style); use 1 if missing
+    payload["leverage"] = getattr(summary, "leverage", None) if getattr(summary, "leverage", None) is not None else 1
     if getattr(summary, "liquidation_price", None) is not None:
         payload["liquidation_price"] = summary.liquidation_price
-    if getattr(summary, "initial_margin", None) is not None:
-        payload["initial_margin"] = summary.initial_margin
+    # Always include initial_margin so clients show Margin (USDT) like Binance; use 0 if missing
+    payload["initial_margin"] = getattr(summary, "initial_margin", None) if getattr(summary, "initial_margin", None) is not None else 0.0
     if getattr(summary, "margin_type", None) is not None:
         payload["margin_type"] = summary.margin_type
     return payload
