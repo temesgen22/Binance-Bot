@@ -11,6 +11,8 @@ from app.services.strategy_runner import StrategyRunner
 from app.services.strategy_executor import StrategyExecutor
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.config import get_settings
+from app.models.order import OrderResponse
+from datetime import datetime, timezone
 
 
 class DummyRedis:
@@ -224,4 +226,144 @@ async def test_stop_closes_only_when_strategy_owned():
     assert call_kw.get("quantity") == 0.001
     assert call_kw.get("side") == "SELL"
     assert mock_client.close_position.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_manual_close_position_records_manual_exit_and_clears_state():
+    runner = make_runner()
+    strategy_id = "eth_strategy"
+    strategy_uuid = uuid4()
+    position_instance_id = uuid4()
+    runner.user_id = uuid4()
+
+    summary = StrategySummary(
+        id=strategy_id,
+        name="ETH Strategy",
+        symbol="ETHUSDT",
+        strategy_type=StrategyType.scalping,
+        status=StrategyState.running,
+        leverage=5,
+        risk_per_trade=0.02,
+        fixed_amount=50.0,
+        params=StrategyParams(),
+        account_id="default",
+        created_at=datetime.now(timezone.utc),
+        last_signal=None,
+        position_size=0.147,
+        position_side="LONG",
+        entry_price=2000.0,
+        position_instance_id=position_instance_id,
+    )
+    runner._strategies[strategy_id] = summary
+
+    mock_client = MagicMock()
+    mock_client.get_open_position = MagicMock(side_effect=[
+        {
+            "positionAmt": "0.147",
+            "entryPrice": "2000.0",
+            "markPrice": "2010.0",
+            "unRealizedProfit": "1.47",
+        },
+        None,  # after close, position is flat
+    ])
+    runner._get_account_client = MagicMock(return_value=mock_client)
+
+    db_strategy = MagicMock()
+    db_strategy.id = strategy_uuid
+    db_strategy.position_instance_id = position_instance_id
+    runner.strategy_service = MagicMock()
+    runner.strategy_service.get_strategy = MagicMock(return_value=summary)
+    runner.strategy_service.db_service.get_strategy = MagicMock(return_value=db_strategy)
+    runner.strategy_service.db_service.get_strategy_by_uuid = MagicMock(return_value=db_strategy)
+    runner.strategy_service.db_service.get_strategy_owned_quantity = MagicMock(return_value=(0.147, True))
+
+    exit_trade = MagicMock()
+    exit_trade.id = uuid4()
+    runner.trade_service = MagicMock()
+    runner.trade_service.save_trade = MagicMock(return_value=exit_trade)
+
+    runner.state_manager = MagicMock()
+    runner.state_manager._clear_position_state_and_persist = AsyncMock()
+    runner.state_manager.update_position_info = AsyncMock()
+
+    runner.order_manager = MagicMock()
+    runner.order_manager.run_circuit_breaker_from_completed_trades = AsyncMock()
+
+    close_order = OrderResponse(
+        symbol="ETHUSDT",
+        order_id=123456,
+        status="FILLED",
+        side="SELL",
+        price=2010.0,
+        avg_price=2010.0,
+        executed_qty=0.147,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    with patch("app.services.strategy_runner.OrderExecutor.execute", return_value=close_order), \
+         patch("app.services.strategy_runner._run_completed_trade_on_manual_close", new_callable=AsyncMock) as completed_mock:
+        result = await runner.manual_close_position(
+            strategy_id,
+            expected_symbol="ETHUSDT",
+            expected_position_side="LONG",
+        )
+
+    assert result["exit_reason"] == "MANUAL"
+    assert result["strategy_id"] == strategy_id
+    assert result["order_id"] == 123456
+    runner.trade_service.save_trade.assert_called_once()
+    saved_order = runner.trade_service.save_trade.call_args.kwargs["order"]
+    assert saved_order.exit_reason == "MANUAL"
+    assert saved_order.position_side == "LONG"
+    assert runner.trade_service.save_trade.call_args.kwargs["position_instance_id"] == position_instance_id
+    completed_mock.assert_awaited_once()
+    runner.state_manager._clear_position_state_and_persist.assert_awaited_once_with(summary)
+    runner.state_manager.update_position_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_close_position_rejects_non_strategy_owned_position():
+    runner = make_runner()
+    strategy_id = "btc_strategy"
+    runner.user_id = uuid4()
+
+    summary = StrategySummary(
+        id=strategy_id,
+        name="BTC Strategy",
+        symbol="BTCUSDT",
+        strategy_type=StrategyType.scalping,
+        status=StrategyState.running,
+        leverage=5,
+        risk_per_trade=0.02,
+        fixed_amount=50.0,
+        params=StrategyParams(),
+        account_id="default",
+        created_at=datetime.now(timezone.utc),
+        last_signal=None,
+        position_size=0.001,
+        position_side="LONG",
+        entry_price=40000.0,
+        position_instance_id=None,
+    )
+    runner._strategies[strategy_id] = summary
+
+    mock_client = MagicMock()
+    mock_client.get_open_position = MagicMock(return_value={
+        "positionAmt": "0.001",
+        "entryPrice": "40000.0",
+        "markPrice": "40100.0",
+        "unRealizedProfit": "0.1",
+    })
+    runner._get_account_client = MagicMock(return_value=mock_client)
+
+    db_strategy = MagicMock()
+    db_strategy.id = uuid4()
+    db_strategy.position_instance_id = None
+    runner.strategy_service = MagicMock()
+    runner.strategy_service.db_service.get_strategy = MagicMock(return_value=db_strategy)
+    runner.strategy_service.db_service.get_strategy_owned_quantity = MagicMock(return_value=(0.0, False))
+    runner.trade_service = MagicMock()
+
+    with pytest.raises(ValueError, match="not strategy-owned"):
+        await runner.manual_close_position(strategy_id)
 

@@ -256,6 +256,33 @@
             margin-bottom: 15px;
         }
 
+        .position-actions {
+            margin-top: 15px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .position-close-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .position-close-btn:hover {
+            background: #c82333;
+        }
+
+        .position-close-btn:disabled {
+            background: #999;
+            cursor: not-allowed;
+        }
+
         .position-symbol {
             font-size: 1.5em;
             font-weight: bold;
@@ -844,16 +871,62 @@
                     html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;
                 }
                 if (pos.strategy_name) {
-                    html += `<div class="position-detail-item"><span>Strategy:</span><span>${pos.strategy_name}</span></div>`;
+                    html += `<div class="position-detail-item"><span>Owner:</span><span>${pos.strategy_name}</span></div>`;
                 } else {
-                    // BUG FIX: Show indicator if position not matched to strategy
-                    html += `<div class="position-detail-item"><span>Strategy:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
+                    html += `<div class="position-detail-item"><span>Owner:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
                 }
                 html += `</div>`;
+                if (pos.strategy_id) {
+                    const manualCloseDisabled = manualCloseInProgress === pos.strategy_id ? 'disabled' : '';
+                    const manualCloseLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Manual Close';
+                    html += `<div class="position-actions">`;
+                    html += `<button class="position-close-btn" ${manualCloseDisabled} onclick="manualClosePosition('${String(pos.strategy_id).replace(/'/g, "\\'")}', '${String(pos.symbol || '').replace(/'/g, "\\'")}', '${String(pos.position_side || '').replace(/'/g, "\\'")}')">${manualCloseLabel}</button>`;
+                    html += `</div>`;
+                }
                 html += `</div>`;
             });
             html += '</div>';
             content.innerHTML = html;
+        }
+
+        let manualCloseInProgress = null;
+
+        async function manualClosePosition(strategyId, symbol, positionSide) {
+            if (!strategyId) return;
+            const confirmed = window.confirm(`Manually close ${symbol} ${positionSide} and record exit reason as MANUAL?`);
+            if (!confirmed) return;
+
+            manualCloseInProgress = strategyId;
+            displayPositions(mergePnlWithWs(lastPnlData || []));
+            try {
+                const response = await authFetch(`/api/trades/strategies/${encodeURIComponent(strategyId)}/manual-close`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        symbol: symbol,
+                        position_side: positionSide
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || `Manual close failed (${response.status})`);
+                }
+
+                await loadData();
+                await loadTrades();
+                window.alert(`Manual close submitted successfully for ${symbol}. Exit reason recorded as ${data.exit_reason || 'MANUAL'}.`);
+            } catch (error) {
+                console.error('Manual close failed:', error);
+                window.alert(`Manual close failed: ${error.message}`);
+            } finally {
+                manualCloseInProgress = null;
+                const merged = mergePnlWithWs(lastPnlData || []);
+                displayPositions(merged);
+            }
         }
 
         async function loadTrades() {

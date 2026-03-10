@@ -7,8 +7,9 @@ from typing import List, Optional
 from uuid import UUID
 
 from dateutil import parser as date_parser
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
+from pydantic import BaseModel
 
 from app.api.deps import (
     get_strategy_runner, get_binance_client, get_client_manager, 
@@ -35,6 +36,20 @@ from app.core.config import get_settings
 
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
+
+
+class ManualCloseRequest(BaseModel):
+    symbol: Optional[str] = None
+    position_side: Optional[str] = None
+
+
+class ManualCloseResponse(BaseModel):
+    strategy_id: str
+    symbol: str
+    position_side: str
+    closed_quantity: float
+    order_id: int
+    exit_reason: str
 
 
 def _normalize_margin_type(mt: Optional[str]) -> Optional[str]:
@@ -433,6 +448,51 @@ def list_symbols(
             symbols.add(strategy.symbol)
     
     return sorted(list(symbols))
+
+
+@router.post(
+    "/strategies/{strategy_id}/manual-close",
+    response_model=ManualCloseResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def manual_close_strategy_position(
+    strategy_id: str,
+    payload: ManualCloseRequest,
+    current_user: User = Depends(get_current_user),
+    runner: StrategyRunner = Depends(get_strategy_runner),
+    db_service: DatabaseService = Depends(get_database_service),
+) -> ManualCloseResponse:
+    """Manually close a strategy-owned open position and record exit_reason=MANUAL."""
+    db_strategy = db_service.get_strategy(current_user.id, strategy_id)
+    if not db_strategy:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy not found: {strategy_id}",
+        )
+
+    try:
+        result = await runner.manual_close_position(
+            strategy_id,
+            expected_symbol=payload.symbol,
+            expected_position_side=payload.position_side,
+        )
+        return ManualCloseResponse(**result)
+    except StrategyNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy not found: {strategy_id}",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.error(f"Manual close failed for strategy {strategy_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to manually close position: {exc}",
+        ) from exc
 
 
 @router.get("/symbol/{symbol}/pnl", response_model=SymbolPnL)

@@ -58,6 +58,7 @@ class MarkPriceStreamManager:
         account_id: Optional[str] = None,
         leverage: Optional[int] = None,
         initial_margin: Optional[float] = None,
+        strategy_name: Optional[str] = None,
     ) -> None:
         """Record an open position for this symbol (called when position opens)."""
         key = symbol.upper()
@@ -72,6 +73,7 @@ class MarkPriceStreamManager:
                     account_id=account_id or "default",
                     leverage=leverage,
                     initial_margin=initial_margin,
+                    strategy_name=strategy_name,
                 )
                 return
         self._registry[key].append(
@@ -84,6 +86,7 @@ class MarkPriceStreamManager:
                 "account_id": account_id or "default",
                 "leverage": leverage,
                 "initial_margin": initial_margin,
+                "strategy_name": strategy_name,
             }
         )
 
@@ -163,6 +166,7 @@ class MarkPriceStreamManager:
                         current_price=mark_price,
                         leverage=entry.get("leverage"),
                         initial_margin=entry.get("initial_margin"),
+                        strategy_name=entry.get("strategy_name"),
                     )
                 except Exception as e:
                     logger.warning(

@@ -573,6 +573,147 @@ class TestCircuitBreakerFactory:
         assert b1 is b2
 
 
+class TestCircuitBreakerUserConfigValidation:
+    """
+    Validate circuit breaker behavior with user's exact configuration:
+    - Enable Circuit Breakers: ON
+    - Max Consecutive Losses: 3
+    - Rapid Loss Threshold (%): 0.05 (5%)
+    - Rapid Loss Timeframe (minutes): 60
+    - Circuit Breaker Cooldown (minutes): 60
+    """
+
+    @pytest.fixture
+    def user_config_breaker(self, mock_db_service, mock_strategy_runner, mock_trade_service):
+        """CircuitBreaker with user's config: max 3 consecutive, 5% rapid loss, 60 min cooldown."""
+        config = Mock(spec=RiskManagementConfigResponse)
+        config.circuit_breaker_enabled = True
+        config.max_consecutive_losses = 3
+        config.rapid_loss_threshold_pct = 0.05
+        config.rapid_loss_timeframe_minutes = 60
+        config.circuit_breaker_cooldown_minutes = 60
+        return CircuitBreaker(
+            account_id="live",
+            config=config,
+            db_service=mock_db_service,
+            user_id=uuid4(),
+            strategy_runner=mock_strategy_runner,
+            trade_service=mock_trade_service,
+        )
+
+    def test_consecutive_losses_triggers_at_exactly_3(self, user_config_breaker):
+        """With max_consecutive_losses=3, exactly 3 consecutive losses must trigger the breaker."""
+        strategy_id = "eth_strategy"
+        # 3 completed trades, all losses (most recent first for counting)
+        trades = [
+            Mock(net_pnl=-0.13),
+            Mock(net_pnl=-0.50),
+            Mock(net_pnl=-0.20),
+        ]
+        state = user_config_breaker.check_consecutive_losses(strategy_id, trades)
+        assert state is not None
+        assert state.breaker_type == "consecutive_losses"
+        assert state.trigger_value == 3
+        assert state.threshold_value == 3
+        assert state.scope == "strategy"
+        assert state.strategy_id == strategy_id
+        # Cooldown must be 60 minutes from config
+        assert state.cooldown_until is not None
+        delta_mins = (state.cooldown_until - datetime.now(timezone.utc)).total_seconds() / 60
+        assert 59 <= delta_mins <= 61
+
+    def test_consecutive_losses_does_not_trigger_at_2(self, user_config_breaker):
+        """With max_consecutive_losses=3, 2 consecutive losses must NOT trigger."""
+        strategy_id = "eth_strategy"
+        trades = [Mock(net_pnl=-1.0), Mock(net_pnl=-2.0)]
+        state = user_config_breaker.check_consecutive_losses(strategy_id, trades)
+        assert state is None
+
+    def test_consecutive_losses_win_breaks_streak_three_losses(self, user_config_breaker):
+        """With max_consecutive_losses=3, most recent trade is a win so streak is 0 -> must NOT trigger."""
+        strategy_id = "eth_strategy"
+        # List is sorted most-recent first: put win first so we have [win, loss, loss, loss]
+        trades = [
+            Mock(net_pnl=0.50),   # most recent: win -> breaks streak
+            Mock(net_pnl=-0.10),
+            Mock(net_pnl=-0.20),
+            Mock(net_pnl=-0.30),
+        ]
+        state = user_config_breaker.check_consecutive_losses(strategy_id, trades)
+        assert state is None
+
+    def test_rapid_loss_triggers_at_5_percent(self, user_config_breaker):
+        """With rapid_loss_threshold_pct=0.05, loss >= 5% of balance in 60 min must trigger."""
+        account_id = "live"
+        # Balance 1000, loss 55 in 60 min = 5.5% >= 5%
+        user_config_breaker._get_account_balance = Mock(return_value=1000.0)
+        user_config_breaker._get_realized_pnl = Mock(return_value=-55.0)
+        state = user_config_breaker.check_rapid_loss(account_id, time_window_minutes=60)
+        assert state is not None
+        assert state.breaker_type == "rapid_loss"
+        assert state.scope == "account"
+        assert state.trigger_value == pytest.approx(0.055, rel=0.001)  # 5.5%
+        assert state.threshold_value == 0.05
+        assert state.status == "active"
+        # Cooldown from config (60 min), not hardcoded 2h
+        assert state.cooldown_until is not None
+        delta_mins = (state.cooldown_until - datetime.now(timezone.utc)).total_seconds() / 60
+        assert 59 <= delta_mins <= 61
+
+    def test_rapid_loss_does_not_trigger_below_5_percent(self, user_config_breaker):
+        """With rapid_loss_threshold_pct=0.05, loss < 5% (e.g. 4.5%) must NOT trigger."""
+        account_id = "live"
+        # Balance 1000, loss 45 in 60 min = 4.5%
+        user_config_breaker._get_account_balance = Mock(return_value=1000.0)
+        user_config_breaker._get_realized_pnl = Mock(return_value=-45.0)
+        state = user_config_breaker.check_rapid_loss(account_id, time_window_minutes=60)
+        assert state is None
+
+    def test_rapid_loss_exactly_5_percent_triggers(self, user_config_breaker):
+        """Exactly 5% loss in 60 min must trigger (boundary)."""
+        account_id = "live"
+        user_config_breaker._get_account_balance = Mock(return_value=1000.0)
+        user_config_breaker._get_realized_pnl = Mock(return_value=-50.0)  # 5%
+        state = user_config_breaker.check_rapid_loss(account_id, time_window_minutes=60)
+        assert state is not None
+        assert state.breaker_type == "rapid_loss"
+        assert state.trigger_value == pytest.approx(0.05, rel=0.001)
+
+    def test_rapid_loss_uses_60_minute_timeframe(self, user_config_breaker):
+        """Rapid loss check uses time_window_minutes=60 from config."""
+        account_id = "live"
+        user_config_breaker._get_account_balance = Mock(return_value=500.0)
+        user_config_breaker._get_realized_pnl = Mock(return_value=-30.0)  # 6%
+        state = user_config_breaker.check_rapid_loss(account_id, time_window_minutes=60)
+        assert state is not None
+        assert state.trigger_value == pytest.approx(0.06, rel=0.001)
+
+    def test_circuit_breaker_disabled_ignores_user_config(self, mock_db_service, mock_strategy_runner, mock_trade_service):
+        """When circuit_breaker_enabled=False, neither consecutive nor rapid loss triggers."""
+        config = Mock(spec=RiskManagementConfigResponse)
+        config.circuit_breaker_enabled = False
+        config.max_consecutive_losses = 3
+        config.rapid_loss_threshold_pct = 0.05
+        config.rapid_loss_timeframe_minutes = 60
+        config.circuit_breaker_cooldown_minutes = 60
+        breaker = CircuitBreaker(
+            account_id="live",
+            config=config,
+            db_service=mock_db_service,
+            user_id=uuid4(),
+            strategy_runner=mock_strategy_runner,
+            trade_service=mock_trade_service,
+        )
+        # 3 consecutive losses should not trigger (disabled)
+        state_c = breaker.check_consecutive_losses("s1", [Mock(net_pnl=-1), Mock(net_pnl=-1), Mock(net_pnl=-1)])
+        assert state_c is None
+        # 10% rapid loss should not trigger (disabled)
+        breaker._get_account_balance = Mock(return_value=1000.0)
+        breaker._get_realized_pnl = Mock(return_value=-100.0)
+        state_r = breaker.check_rapid_loss("live", 60)
+        assert state_r is None
+
+
 class TestCircuitBreakerOrderManagerIntegration:
     """Tests that order manager blocks orders when circuit breaker is active."""
 

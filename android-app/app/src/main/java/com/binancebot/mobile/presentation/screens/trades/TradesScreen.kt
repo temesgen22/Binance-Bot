@@ -30,7 +30,7 @@ fun TradesScreen(
     val lastSyncTime = remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(Unit) {
-        viewModel.loadPnLOverview()
+            viewModel.loadPnLOverview()
     }
 
     Scaffold(
@@ -71,11 +71,11 @@ fun TradesScreen(
                 lastSyncTime = lastSyncTime.value,
                 modifier = Modifier.fillMaxWidth()
             )
-
-            PositionsTab(
-                positions = allOpenPositions,
-                isLoading = pnlLoading,
-                onRefresh = { viewModel.loadPnLOverview() },
+            
+                    PositionsTab(
+                        positions = allOpenPositions,
+                        isLoading = pnlLoading,
+                        onRefresh = { viewModel.loadPnLOverview() },
                 onStrategyClick = { strategyId ->
                     navController.navigate("strategy_details/$strategyId")
                 },

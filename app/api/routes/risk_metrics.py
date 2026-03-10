@@ -1143,6 +1143,7 @@ async def create_risk_config(
     config_data: RiskManagementConfigCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session_dependency),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
 ) -> RiskManagementConfigResponse:
     """Create risk management configuration for an account."""
     try:
@@ -1154,6 +1155,11 @@ async def create_risk_config(
         )
         
         config = risk_service.create_risk_config(user_id, config_data)
+        # Invalidate circuit breaker cache so new config is used (account_id from created config)
+        if config and runner and getattr(runner, "circuit_breaker_factory", None) and hasattr(runner.circuit_breaker_factory, "clear_cache"):
+            aid = (config.account_id or "").strip().lower()
+            if aid:
+                runner.circuit_breaker_factory.clear_cache(aid)
         return config
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1168,6 +1174,7 @@ async def update_risk_config(
     config_data: RiskManagementConfigUpdate = ...,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session_dependency),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
 ) -> RiskManagementConfigResponse:
     """Update risk management configuration for an account."""
     try:
@@ -1184,6 +1191,10 @@ async def update_risk_config(
                 status_code=404,
                 detail=f"Risk configuration not found for account: {account_id}"
             )
+        
+        # Invalidate circuit breaker cache so next check uses updated config (e.g. circuit_breaker_enabled, rapid_loss_threshold_pct)
+        if runner and getattr(runner, "circuit_breaker_factory", None) and hasattr(runner.circuit_breaker_factory, "clear_cache"):
+            runner.circuit_breaker_factory.clear_cache(account_id.strip().lower() if account_id else None)
         
         return config
     except HTTPException:

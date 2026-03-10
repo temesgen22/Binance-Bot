@@ -285,6 +285,8 @@ class StrategyRunner:
             except Exception as e:
                 logger.warning(f"Could not create circuit breaker factory: {e}. Circuit breaker checks will be skipped.")
         
+        self.circuit_breaker_factory = circuit_breaker_factory  # Expose so risk config API can clear cache on update
+        
         # Initialize order manager
         # Note: Factories will be created when needed (lazy initialization)
         # They can be set later if factories are provided from main.py
@@ -1298,6 +1300,233 @@ class StrategyRunner:
             )
         
         return summary
+
+    async def _get_or_create_strategy_lock(self, strategy_id: str) -> asyncio.Lock:
+        """Return a per-strategy lock for user-initiated actions like manual close."""
+        if strategy_id not in self._strategy_locks:
+            async with self._lock:
+                if strategy_id not in self._strategy_locks:
+                    self._strategy_locks[strategy_id] = asyncio.Lock()
+        return self._strategy_locks[strategy_id]
+
+    async def _manual_close_strategy_owned_position(
+        self,
+        strategy_id: str,
+        summary: StrategySummary,
+        *,
+        exit_reason: str = "MANUAL",
+        expected_position_side: Optional[str] = None,
+    ) -> dict:
+        """Close only the strategy-owned quantity and persist the exit trade.
+
+        This reuses the same ownership model as the normal strategy close path:
+        `position_instance_id` + ledger-based `get_strategy_owned_quantity()`.
+        """
+        if not (self.strategy_service and self.user_id and self.trade_service):
+            raise RuntimeError("Manual close is unavailable: missing strategy_service, user_id, or trade_service")
+
+        account_id = summary.account_id or "default"
+        account_client = self._get_account_client(account_id)
+        if not account_client:
+            raise RuntimeError(f"Account client unavailable for account {account_id}")
+
+        position = await asyncio.to_thread(account_client.get_open_position, summary.symbol)
+        if not position or abs(float(position.get("positionAmt", 0) or 0)) <= 0:
+            raise ValueError(f"No open Binance position found for {summary.symbol}")
+
+        position_amt = float(position["positionAmt"])
+        position_side = "LONG" if position_amt > 0 else "SHORT"
+        binance_size = abs(position_amt)
+        if expected_position_side and expected_position_side != position_side:
+            raise ValueError(
+                f"Manual close request side mismatch: expected {expected_position_side}, Binance position is {position_side}"
+            )
+
+        db_strategy = self.strategy_service.db_service.get_strategy(self.user_id, strategy_id)
+        if not db_strategy:
+            try:
+                strategy_uuid = uuid.UUID(str(strategy_id))
+                db_strategy = self.strategy_service.db_service.get_strategy_by_uuid(strategy_uuid)
+            except (ValueError, TypeError):
+                db_strategy = None
+        if not db_strategy:
+            raise StrategyNotFoundError(strategy_id)
+
+        position_instance_id = getattr(db_strategy, "position_instance_id", None)
+        if position_instance_id is None:
+            raise ValueError(
+                f"Position for {summary.symbol} is not strategy-owned (no position_instance_id); manual close from GUI is only supported for strategy-owned positions."
+            )
+
+        owned_qty, has_entry_trades = self.strategy_service.db_service.get_strategy_owned_quantity(
+            db_strategy.id,
+            summary.symbol,
+            position_instance_id,
+            position_side,
+        )
+        if not has_entry_trades or owned_qty <= 0:
+            raise ValueError(
+                f"No strategy-owned quantity found for {summary.symbol}; position may be manual, already closed, or not attributable to this strategy."
+            )
+
+        close_qty = min(owned_qty, binance_size)
+        if close_qty <= 0:
+            raise ValueError(f"Nothing to close for {summary.symbol}")
+
+        close_side = "SELL" if position_side == "LONG" else "BUY"
+        logger.info(
+            f"🔴 MANUAL CLOSE: Closing strategy-owned {position_side} for {strategy_id}: "
+            f"{close_qty} {summary.symbol} (Binance total: {binance_size}) @ {position.get('entryPrice')} "
+            f"(Unrealized PnL: {float(position.get('unRealizedProfit', 0) or 0):.2f} USDT)"
+        )
+
+        # Reuse the normal order execution helper so we keep idempotency and order verification.
+        market_price = None
+        try:
+            raw_mark = position.get("markPrice") or position.get("entryPrice")
+            if raw_mark is not None:
+                market_price = float(raw_mark)
+        except (TypeError, ValueError):
+            market_price = None
+        sizing = PositionSizingResult(
+            quantity=close_qty,
+            notional=close_qty * (market_price or float(position.get("entryPrice", 0) or 0) or 0),
+        )
+        signal = StrategySignal(
+            action=close_side,
+            symbol=summary.symbol,
+            confidence=1.0,
+            price=market_price,
+            exit_reason=exit_reason,
+            position_side=position_side,
+        )
+        manual_executor = OrderExecutor(
+            client=account_client,
+            trade_service=self.trade_service,
+            user_id=self.user_id,
+        )
+        close_order = await asyncio.to_thread(
+            manual_executor.execute,
+            signal=signal,
+            sizing=sizing,
+            reduce_only_override=True,
+            strategy_id=summary.id,
+        )
+        if not close_order or float(close_order.executed_qty or 0) <= 0:
+            raise OrderExecutionError(
+                f"Manual close order for {summary.symbol} was not filled",
+                symbol=summary.symbol,
+            )
+
+        close_order = close_order.model_copy(
+            update={
+                "exit_reason": exit_reason,
+                "position_side": position_side,
+            }
+        )
+
+        logger.info(
+            f"[{strategy_id}] 🔴 Position CLOSED (reason: {exit_reason}): "
+            f"{close_order.side} {close_order.symbol} qty={close_order.executed_qty} "
+            f"@ {close_order.avg_price or close_order.price:.8f} (was {position_side})"
+        )
+
+        async with self._lock:
+            if strategy_id not in self._trades:
+                self._trades[strategy_id] = []
+            self._trades[strategy_id].append(close_order)
+
+        exit_trade = self.trade_service.save_trade(
+            user_id=self.user_id,
+            strategy_id=db_strategy.id,
+            order=close_order,
+            position_instance_id=position_instance_id,
+        )
+
+        return {
+            "db_strategy": db_strategy,
+            "position_side": position_side,
+            "binance_size": binance_size,
+            "owned_qty": owned_qty,
+            "close_qty": close_qty,
+            "close_order": close_order,
+            "exit_trade": exit_trade,
+        }
+
+    async def manual_close_position(
+        self,
+        strategy_id: str,
+        *,
+        expected_symbol: Optional[str] = None,
+        expected_position_side: Optional[str] = None,
+    ) -> dict:
+        """Close a strategy-owned open position from the GUI and record exit_reason=MANUAL."""
+        if strategy_id not in self._strategies:
+            if self.strategy_service and self.user_id:
+                loaded = self.strategy_service.get_strategy(self.user_id, strategy_id)
+                if not loaded:
+                    raise StrategyNotFoundError(strategy_id)
+                async with self._lock:
+                    self._strategies[strategy_id] = loaded
+            else:
+                raise StrategyNotFoundError(strategy_id)
+
+        strategy_lock = await self._get_or_create_strategy_lock(strategy_id)
+        async with strategy_lock:
+            summary = self._strategies[strategy_id]
+
+            if expected_symbol and (summary.symbol or "").strip().upper() != expected_symbol.strip().upper():
+                raise ValueError(
+                    f"Manual close request symbol mismatch: expected {expected_symbol}, strategy is {summary.symbol}"
+                )
+
+            result = await self._manual_close_strategy_owned_position(
+                strategy_id,
+                summary,
+                exit_reason="MANUAL",
+                expected_position_side=expected_position_side,
+            )
+
+            close_order = result["close_order"]
+            exit_trade = result["exit_trade"]
+            position_side = result["position_side"]
+            db_strategy = result["db_strategy"]
+
+            await _run_completed_trade_on_manual_close(
+                self.user_id,
+                str(db_strategy.id),
+                exit_trade.id,
+                close_order.order_id,
+                float(close_order.executed_qty or 0),
+                float(close_order.avg_price or close_order.price or 0),
+                position_side,
+                "MANUAL",
+            )
+
+            if self.order_manager and hasattr(self.order_manager, "run_circuit_breaker_from_completed_trades"):
+                try:
+                    await self.order_manager.run_circuit_breaker_from_completed_trades(
+                        account_id=summary.account_id or "default",
+                        strategy_id=summary.id,
+                        strategy_uuid=db_strategy.id,
+                    )
+                except Exception as e:
+                    logger.debug(f"[{summary.id}] Circuit breaker after manual close: {e}")
+
+            refreshed = await asyncio.to_thread(self._get_account_client(summary.account_id or "default").get_open_position, summary.symbol)
+            if not refreshed or abs(float(refreshed.get("positionAmt", 0) or 0)) <= 0:
+                await self.state_manager._clear_position_state_and_persist(summary)
+            else:
+                await self.state_manager.update_position_info(summary)
+
+            return {
+                "strategy_id": summary.id,
+                "symbol": summary.symbol,
+                "position_side": position_side,
+                "closed_quantity": float(close_order.executed_qty or 0),
+                "order_id": close_order.order_id,
+                "exit_reason": "MANUAL",
+            }
 
     async def stop(self, strategy_id: str) -> StrategySummary:
         # BUG FIX: Load strategy from database if not in memory

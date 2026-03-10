@@ -504,6 +504,7 @@ class StrategyPersistence:
                     summary.account_id,
                     leverage=getattr(summary, "leverage", None),
                     initial_margin=getattr(summary, "initial_margin", None),
+                    strategy_name=summary.name,
                 )
                 await self.mark_price_stream_manager.subscribe(summary.symbol)
             except Exception as exc:
@@ -727,6 +728,7 @@ class StrategyPersistence:
                                 summary.account_id,
                                 leverage=summary.leverage,
                                 initial_margin=getattr(summary, "initial_margin", None),
+                                strategy_name=summary.name,
                             )
                             await self.mark_price_stream_manager.subscribe(summary.symbol)
                         except Exception as exc:

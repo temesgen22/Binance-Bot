@@ -108,7 +108,9 @@ class TradesViewModel @Inject constructor(
     )
     
     /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId (or synthetic "manual_$symbol").
-     * When WS sends position_update with positionSize <= 0 (closed), we exclude that position so the list clears. */
+     * When WS sends position_update with positionSize <= 0 (closed), we exclude that position so the list clears.
+     * Deduplicate by (symbol, accountId): one row per actual Binance position (web app behavior).
+     * Owner strategy should come from REST because backend verifies ownership; WS only overlays live price/PnL. */
     private fun mergePositionsWithWs(
         restPositions: List<Position>,
         wsUpdates: Map<String, PositionUpdateData>
@@ -116,19 +118,41 @@ class TradesViewModel @Inject constructor(
         val wsOpen = wsUpdates.values
             .filter { it.positionSize > 0 }
             .map { it.toPosition() }
-        val wsSymbols = wsOpen.map { it.symbol }.toSet()
         // Key for matching REST position to WS: strategyId or "manual_$symbol" for unowned positions
         fun keyFor(p: Position): String = p.strategyId ?: "manual_${p.symbol}"
-        // Exclude REST position if: (1) WS has an open position for this symbol (we use WS data), or
-        // (2) WS has a closed update for this key (positionSize <= 0) so we clear it and don't show stale REST
+        // Exclude REST only when WS explicitly closed this same position key.
+        // Do not exclude REST just because WS has the same symbol: REST is the owner source of truth.
         val restOpen = restPositions.filter { p ->
             val key = keyFor(p)
             if (key in wsUpdates && (wsUpdates[key]?.positionSize ?: 0.0) <= 0.0) return@filter false
-            if (p.symbol in wsSymbols) return@filter false
             true
         }
-        return restOpen + wsOpen
+        val merged = restOpen.map { TaggedPosition(it, fromRest = true) } +
+            wsOpen.map { TaggedPosition(it, fromRest = false) }
+        // One row per (symbol, accountId): same as web app. Prefer REST for owner, overlay WS for live values.
+        fun positionKey(p: Position): String = "${p.symbol}:${p.accountId ?: ""}"
+        return merged
+            .groupBy { positionKey(it.position) }
+            .values
+            .map { group ->
+                val rest = group.firstOrNull { it.fromRest }?.position
+                val base = rest ?: group.first().position
+                val ws = group.firstOrNull { !it.fromRest }?.position
+                if (ws != null) {
+                    base.copy(
+                        currentPrice = ws.currentPrice,
+                        unrealizedPnL = ws.unrealizedPnL
+                    )
+                } else {
+                    base
+                }
+            }
     }
+
+    private data class TaggedPosition(
+        val position: Position,
+        val fromRest: Boolean
+    )
     
     // Available symbols and strategies
     private val _availableSymbols = MutableStateFlow<List<String>>(emptyList())

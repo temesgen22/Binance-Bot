@@ -298,7 +298,9 @@ class CircuitBreaker:
         loss_pct = abs(realized_pnl) / balance if realized_pnl < 0 else 0
         
         if loss_pct >= rapid_loss_threshold:
-            # Trigger breaker
+            # Use configured cooldown (same as consecutive_losses)
+            cooldown_mins = (getattr(self.config, "circuit_breaker_cooldown_minutes", None) or 60) if self.config else 60
+            cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=cooldown_mins)
             breaker_state = CircuitBreakerState(
                 breaker_type='rapid_loss',
                 scope='account',
@@ -306,7 +308,7 @@ class CircuitBreaker:
                 trigger_value=loss_pct,
                 threshold_value=rapid_loss_threshold,
                 status='active',
-                cooldown_until=datetime.now(timezone.utc) + timedelta(hours=2)  # 2 hour cooldown
+                cooldown_until=cooldown_until
             )
             
             # Store breaker

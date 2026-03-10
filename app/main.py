@@ -760,121 +760,34 @@ def create_app() -> FastAPI:
     app.include_router(price_alerts_router)  # Price alerts (Binance-style push)
     app.include_router(ws_positions_router)  # WebSocket for real-time position updates
     
-    # GUI route for backtesting
-    @app.get("/backtesting", tags=["gui"], include_in_schema=False)
-    async def backtesting_gui():
-        """Serve the Strategy Backtesting GUI (without trailing slash)."""
-        return await _serve_gui_file("backtesting.html", "Strategy Backtesting GUI")
-    
-    @app.get("/backtesting/", tags=["gui"], include_in_schema=False)
-    async def backtesting_gui_with_slash():
-        """Serve the Strategy Backtesting GUI (with trailing slash)."""
-        return await _serve_gui_file("backtesting.html", "Strategy Backtesting GUI")
-    
-    # GUI routes - registered AFTER API routers
-    # FastAPI matches more specific routes first, so /trades/list will match before /trades
-    @app.get("/trades", tags=["gui"], include_in_schema=False)
-    async def trades_gui():
-        """Serve the Trade & PnL Viewer GUI (without trailing slash)."""
-        return await _serve_gui_file("trades.html", "Trade & PnL Viewer GUI")
-    
-    @app.get("/trades/", tags=["gui"], include_in_schema=False)
-    async def trades_gui_with_slash():
-        """Serve the Trade & PnL Viewer GUI (with trailing slash)."""
-        return await _serve_gui_file("trades.html", "Trade & PnL Viewer GUI")
-    
-    # GUI routes for strategies - registered AFTER API routers
-    @app.get("/strategies", tags=["gui"], include_in_schema=False)
-    async def strategies_gui():
-        """Serve the Strategy Performance & Ranking GUI (without trailing slash)."""
-        return await _serve_gui_file("strategies.html", "Strategy Performance GUI")
-    
-    @app.get("/strategies/", tags=["gui"], include_in_schema=False)
-    async def strategies_gui_with_slash():
-        """Serve the Strategy Performance & Ranking GUI (with trailing slash)."""
-        return await _serve_gui_file("strategies.html", "Strategy Performance GUI")
-    
-    # GUI routes for test accounts
-    @app.get("/test-accounts", tags=["gui"], include_in_schema=False)
-    async def test_accounts_gui():
-        """Serve the Test API Accounts GUI (without trailing slash)."""
-        return await _serve_gui_file("test-accounts.html", "Test API Accounts GUI")
-    
-    @app.get("/test-accounts/", tags=["gui"], include_in_schema=False)
-    async def test_accounts_gui_with_slash():
-        """Serve the Test API Accounts GUI (with trailing slash)."""
-        return await _serve_gui_file("test-accounts.html", "Test API Accounts GUI")
-    
-    # GUI routes for reports - registered AFTER API routers
-    @app.get("/reports", tags=["gui"], include_in_schema=False)
-    async def reports_gui():
-        """Serve the Trading Reports GUI (without trailing slash)."""
-        return await _serve_gui_file("reports.html", "Trading Reports GUI")
-    
-    @app.get("/reports/", tags=["gui"], include_in_schema=False)
-    async def reports_gui_with_slash():
-        """Serve the Trading Reports GUI (with trailing slash)."""
-        return await _serve_gui_file("reports.html", "Trading Reports GUI")
-    
-    # GUI routes for strategy registration - registered AFTER API routers
-    @app.get("/strategy-register", tags=["gui"], include_in_schema=False)
-    async def strategy_register_gui():
-        """Serve the Strategy Registration GUI (without trailing slash)."""
-        return await _serve_gui_file("strategy-register.html", "Strategy Registration GUI")
-    
-    @app.get("/strategy-register/", tags=["gui"], include_in_schema=False)
-    async def strategy_register_gui_with_slash():
-        """Serve the Strategy Registration GUI (with trailing slash)."""
-        return await _serve_gui_file("strategy-register.html", "Strategy Registration GUI")
-    
-    # Keep /register route for backward compatibility (redirects to strategy-register)
-    @app.get("/risk-management", tags=["gui"], include_in_schema=False)
-    async def risk_management_gui():
-        """Serve the Risk Management Dashboard page."""
-        return await _serve_gui_file("risk-management.html", "Risk Management Dashboard")
-    
-    @app.get("/risk-management/", tags=["gui"], include_in_schema=False)
-    async def risk_management_gui_slash():
-        """Serve the Risk Management Dashboard page."""
-        return await _serve_gui_file("risk-management.html", "Risk Management Dashboard")
-    
+    # GUI routes - registered AFTER API routers (FastAPI matches more specific routes first, e.g. /trades/list before /trades)
+    # Single list to avoid duplicate per-page handlers for path and path/
+    _GUI_PAGES = [
+        ("/backtesting", "backtesting.html", "Strategy Backtesting GUI"),
+        ("/trades", "trades.html", "Trade & PnL Viewer GUI"),
+        ("/strategies", "strategies.html", "Strategy Performance GUI"),
+        ("/test-accounts", "test-accounts.html", "Test API Accounts GUI"),
+        ("/reports", "reports.html", "Trading Reports GUI"),
+        ("/strategy-register", "strategy-register.html", "Strategy Registration GUI"),
+        ("/risk-management", "risk-management.html", "Risk Management Dashboard"),
+        ("/market-analyzer", "market-analyzer.html", "Market Analyzer GUI"),
+        ("/dashboard", "dashboard.html", "Trading Dashboard"),
+        ("/price-alerts", "price-alerts.html", "Price Alerts"),
+    ]
+    def _make_gui_handler(filename: str, display_name: str):
+        async def _handler():
+            return await _serve_gui_file(filename, display_name)
+        return _handler
+
+    for _path, _filename, _display_name in _GUI_PAGES:
+        _handler = _make_gui_handler(_filename, _display_name)
+        app.get(_path, tags=["gui"], include_in_schema=False)(_handler)
+        app.get(_path + "/", tags=["gui"], include_in_schema=False)(_handler)
+
     @app.get("/register", tags=["gui"], include_in_schema=False)
     async def register_gui_redirect():
         """Redirect /register to /strategy-register for backward compatibility."""
         return RedirectResponse(url="/strategy-register", status_code=301)
-    
-    # GUI routes for market analyzer - registered AFTER API routers
-    @app.get("/market-analyzer", tags=["gui"], include_in_schema=False)
-    async def market_analyzer_gui():
-        """Serve the Market Analyzer GUI (without trailing slash)."""
-        return await _serve_gui_file("market-analyzer.html", "Market Analyzer GUI")
-    
-    @app.get("/market-analyzer/", tags=["gui"], include_in_schema=False)
-    async def market_analyzer_gui_with_slash():
-        """Serve the Market Analyzer GUI (with trailing slash)."""
-        return await _serve_gui_file("market-analyzer.html", "Market Analyzer GUI")
-    
-    # GUI route for dashboard
-    @app.get("/dashboard", tags=["gui"], include_in_schema=False)
-    async def dashboard_gui():
-        """Serve the Dashboard page."""
-        return await _serve_gui_file("dashboard.html", "Trading Dashboard")
-    
-    @app.get("/dashboard/", tags=["gui"], include_in_schema=False)
-    async def dashboard_gui_slash():
-        """Serve the Dashboard page (with trailing slash)."""
-        return await _serve_gui_file("dashboard.html", "Trading Dashboard")
-    
-    # GUI route for price alerts
-    @app.get("/price-alerts", tags=["gui"], include_in_schema=False)
-    async def price_alerts_gui():
-        """Serve the Price Alerts GUI (without trailing slash)."""
-        return await _serve_gui_file("price-alerts.html", "Price Alerts")
-    
-    @app.get("/price-alerts/", tags=["gui"], include_in_schema=False)
-    async def price_alerts_gui_slash():
-        """Serve the Price Alerts GUI (with trailing slash)."""
-        return await _serve_gui_file("price-alerts.html", "Price Alerts")
     
     # Diagnostic endpoint to check if register.html exists (for debugging)
     @app.get("/debug/check-register-file", tags=["debug"], include_in_schema=False)

@@ -182,7 +182,7 @@ fun BinanceStylePositionRow(
                     "Margin Type",
                     position.marginType?.takeIf { it.isNotBlank() } ?: "—"
                 )
-                // Strategy (like webapp): name or "Not matched"; clickable to open strategy detail when position has a strategy
+                // Owner: strategy that owns this position (from backend matching); "Not matched" if manual/unowned
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -195,7 +195,7 @@ fun BinanceStylePositionRow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Strategy",
+                        text = "Owner",
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
