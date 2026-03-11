@@ -18,7 +18,9 @@ import com.google.gson.Gson
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,7 +31,8 @@ import javax.inject.Singleton
 @Singleton
 class NotificationManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val notificationDao: NotificationDao
+    private val notificationDao: NotificationDao,
+    private val preferencesManager: PreferencesManager
 ) {
     private val scope = CoroutineScope(Dispatchers.IO)
     companion object {
@@ -115,6 +118,54 @@ class NotificationManager @Inject constructor(
     }
     
     /**
+     * Notification type enum for per-category sound/vibration preferences.
+     */
+    enum class NotificationType {
+        TRADE, ALERT, STRATEGY, SYSTEM
+    }
+    
+    /**
+     * Apply user's sound and vibration preferences to the notification builder.
+     * Uses per-category settings based on notification type.
+     * Note: On Android O+ (API 26+), channel settings take precedence for existing channels.
+     * This primarily affects pre-O devices and provides a fallback mechanism.
+     */
+    private fun applyUserSoundVibrationPreferences(builder: NotificationCompat.Builder, type: NotificationType) {
+        try {
+            val (soundEnabled, vibrationEnabled) = runBlocking {
+                when (type) {
+                    NotificationType.TRADE -> Pair(
+                        preferencesManager.tradesSoundEnabled.first(),
+                        preferencesManager.tradesVibrationEnabled.first()
+                    )
+                    NotificationType.ALERT -> Pair(
+                        preferencesManager.alertsSoundEnabled.first(),
+                        preferencesManager.alertsVibrationEnabled.first()
+                    )
+                    NotificationType.STRATEGY -> Pair(
+                        preferencesManager.strategySoundEnabled.first(),
+                        preferencesManager.strategyVibrationEnabled.first()
+                    )
+                    NotificationType.SYSTEM -> Pair(
+                        preferencesManager.systemSoundEnabled.first(),
+                        preferencesManager.systemVibrationEnabled.first()
+                    )
+                }
+            }
+            
+            if (!soundEnabled) {
+                builder.setSound(null)
+                builder.setSilent(true)
+            }
+            if (!vibrationEnabled) {
+                builder.setVibrate(null)
+            }
+        } catch (e: Exception) {
+            AppLogger.e("NotificationManager", "Failed to apply sound/vibration preferences: ${e.message}")
+        }
+    }
+    
+    /**
      * Show trade notification with rich content and actions
      */
     fun showTradeNotification(
@@ -194,6 +245,7 @@ class NotificationManager @Inject constructor(
             )
         }
         
+        applyUserSoundVibrationPreferences(builder, NotificationType.TRADE)
         NotificationManagerCompat.from(context).notify(
             NOTIFICATION_ID_TRADE + (tradeId?.hashCode() ?: 0),
             builder.build()
@@ -287,6 +339,7 @@ class NotificationManager @Inject constructor(
             )
         }
         
+        applyUserSoundVibrationPreferences(builder, NotificationType.ALERT)
         NotificationManagerCompat.from(context).notify(
             NOTIFICATION_ID_ALERT + (alertType?.hashCode() ?: 0),
             builder.build()
@@ -339,6 +392,7 @@ class NotificationManager @Inject constructor(
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        applyUserSoundVibrationPreferences(builder, NotificationType.ALERT)
         NotificationManagerCompat.from(context).notify(
             notificationId.hashCode().and(0x7FFFFFFF),
             builder.build()
@@ -427,6 +481,7 @@ class NotificationManager @Inject constructor(
             )
         }
         
+        applyUserSoundVibrationPreferences(builder, NotificationType.STRATEGY)
         val systemNotificationId = NOTIFICATION_ID_STRATEGY + (strategyId?.hashCode() ?: 0)
         AppLogger.d("NotificationManager", "Displaying strategy notification with system ID: $systemNotificationId")
         NotificationManagerCompat.from(context).notify(
@@ -491,6 +546,7 @@ class NotificationManager @Inject constructor(
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(expandedText))
         }
         
+        applyUserSoundVibrationPreferences(builder, NotificationType.SYSTEM)
         NotificationManagerCompat.from(context).notify(
             NOTIFICATION_ID_SYSTEM + notificationId.hashCode(),
             builder.build()

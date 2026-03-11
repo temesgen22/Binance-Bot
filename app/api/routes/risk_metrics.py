@@ -15,6 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 import asyncio
 from loguru import logger
@@ -1176,7 +1177,12 @@ async def update_risk_config(
     db: Session = Depends(get_db_session_dependency),
     runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
 ) -> RiskManagementConfigResponse:
-    """Update risk management configuration for an account."""
+    """Update risk management configuration for an account.
+    
+    When risk config is updated, active circuit breaker events are resolved
+    and strategies with stopped_by_risk status are reset to stopped,
+    allowing them to be manually restarted with the new configuration.
+    """
     try:
         user_id = current_user.id if hasattr(current_user, 'id') else current_user
         
@@ -1195,6 +1201,55 @@ async def update_risk_config(
         # Invalidate circuit breaker cache so next check uses updated config (e.g. circuit_breaker_enabled, rapid_loss_threshold_pct)
         if runner and getattr(runner, "circuit_breaker_factory", None) and hasattr(runner.circuit_breaker_factory, "clear_cache"):
             runner.circuit_breaker_factory.clear_cache(account_id.strip().lower() if account_id else None)
+        
+        # CRITICAL: Resolve active circuit breaker events and reset stopped_by_risk strategies
+        # This allows users to restart strategies after updating risk config
+        try:
+            from app.models.db_models import CircuitBreakerEvent, Account, Strategy
+            from datetime import datetime, timezone
+            
+            # Find the account UUID
+            account = db.query(Account).filter(
+                Account.user_id == user_id,
+                Account.account_id.ilike(account_id)
+            ).first()
+            
+            if account:
+                # Resolve all active circuit breaker events for this account
+                active_events = db.query(CircuitBreakerEvent).filter(
+                    CircuitBreakerEvent.user_id == user_id,
+                    CircuitBreakerEvent.account_id == account.id,
+                    CircuitBreakerEvent.status == "active"
+                ).all()
+                
+                resolved_count = 0
+                for event in active_events:
+                    event.status = "resolved"
+                    event.resolved_at = datetime.now(timezone.utc)
+                    resolved_count += 1
+                
+                # Reset strategies with stopped_by_risk status to stopped (so they can be manually restarted)
+                stopped_by_risk_strategies = db.query(Strategy).filter(
+                    Strategy.user_id == user_id,
+                    Strategy.account_id == account.id,
+                    Strategy.status == "stopped_by_risk"
+                ).all()
+                
+                reset_count = 0
+                for strategy in stopped_by_risk_strategies:
+                    strategy.status = "stopped"
+                    reset_count += 1
+                
+                if resolved_count > 0 or reset_count > 0:
+                    db.commit()
+                    logger.info(
+                        f"Risk config updated for account {account_id}: "
+                        f"resolved {resolved_count} circuit breaker events, "
+                        f"reset {reset_count} stopped_by_risk strategies to stopped"
+                    )
+        except Exception as reset_exc:
+            logger.warning(f"Failed to resolve circuit breakers after risk config update: {reset_exc}")
+            # Don't fail the config update if circuit breaker resolution fails
         
         return config
     except HTTPException:
@@ -1229,6 +1284,96 @@ async def delete_risk_config(
         raise
     except Exception as e:
         logger.error(f"Error deleting risk config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ResetCircuitBreakerResponse(BaseModel):
+    """Response for circuit breaker reset."""
+    resolved_events: int = Field(..., description="Number of circuit breaker events resolved")
+    reset_strategies: int = Field(..., description="Number of stopped_by_risk strategies reset to stopped")
+    message: str = Field(..., description="Human-readable message")
+
+
+@router.post("/circuit-breaker/reset", response_model=ResetCircuitBreakerResponse)
+async def reset_circuit_breaker(
+    account_id: str = Query(..., description="Account ID"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session_dependency),
+    runner: Optional[StrategyRunner] = Depends(get_strategy_runner),
+) -> ResetCircuitBreakerResponse:
+    """Manually reset circuit breakers for an account.
+    
+    This resolves all active circuit breaker events and resets strategies
+    with stopped_by_risk status to stopped, allowing them to be manually restarted.
+    
+    Use this when you want to restart strategies that were stopped by rapid loss
+    or consecutive loss circuit breakers without changing the risk configuration.
+    """
+    try:
+        from app.models.db_models import CircuitBreakerEvent, Account, Strategy
+        from datetime import datetime, timezone
+        
+        user_id = current_user.id if hasattr(current_user, 'id') else current_user
+        
+        # Find the account UUID
+        account = db.query(Account).filter(
+            Account.user_id == user_id,
+            Account.account_id.ilike(account_id)
+        ).first()
+        
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account not found: {account_id}"
+            )
+        
+        # Resolve all active circuit breaker events for this account
+        active_events = db.query(CircuitBreakerEvent).filter(
+            CircuitBreakerEvent.user_id == user_id,
+            CircuitBreakerEvent.account_id == account.id,
+            CircuitBreakerEvent.status == "active"
+        ).all()
+        
+        resolved_count = 0
+        for event in active_events:
+            event.status = "resolved"
+            event.resolved_at = datetime.now(timezone.utc)
+            resolved_count += 1
+        
+        # Reset strategies with stopped_by_risk status to stopped
+        stopped_by_risk_strategies = db.query(Strategy).filter(
+            Strategy.user_id == user_id,
+            Strategy.account_id == account.id,
+            Strategy.status == "stopped_by_risk"
+        ).all()
+        
+        reset_count = 0
+        for strategy in stopped_by_risk_strategies:
+            strategy.status = "stopped"
+            reset_count += 1
+        
+        db.commit()
+        
+        # Also clear the circuit breaker factory cache
+        if runner and getattr(runner, "circuit_breaker_factory", None) and hasattr(runner.circuit_breaker_factory, "clear_cache"):
+            runner.circuit_breaker_factory.clear_cache(account_id.strip().lower() if account_id else None)
+        
+        logger.info(
+            f"Circuit breaker reset for account {account_id}: "
+            f"resolved {resolved_count} events, reset {reset_count} strategies"
+        )
+        
+        return ResetCircuitBreakerResponse(
+            resolved_events=resolved_count,
+            reset_strategies=reset_count,
+            message=f"Reset complete: resolved {resolved_count} circuit breaker events, "
+                   f"reset {reset_count} stopped_by_risk strategies to stopped. "
+                   f"Strategies can now be manually restarted."
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resetting circuit breaker: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3298,6 +3443,9 @@ async def create_strategy_risk_config(
             max_drawdown_pct=config_data.max_drawdown_pct,
             max_exposure_usdt=config_data.max_exposure_usdt,
             max_exposure_pct=config_data.max_exposure_pct,
+            unrealized_profit_alert_usdt=config_data.unrealized_profit_alert_usdt,
+            unrealized_loss_alert_usdt=config_data.unrealized_loss_alert_usdt,
+            unrealized_pnl_alert_cooldown_minutes=config_data.unrealized_pnl_alert_cooldown_minutes,
             enabled=config_data.enabled,
             override_account_limits=config_data.override_account_limits,
             use_more_restrictive=config_data.use_more_restrictive,

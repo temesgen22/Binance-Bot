@@ -1,19 +1,25 @@
 package com.binancebot.mobile.presentation
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
 import com.binancebot.mobile.data.remote.websocket.PositionUpdateStore
 import com.binancebot.mobile.data.remote.websocket.UpdateMessage
 import com.binancebot.mobile.data.remote.websocket.WebSocketManager
 import com.binancebot.mobile.presentation.navigation.BinanceBotNavGraph
+import com.binancebot.mobile.util.AppLogger
 import com.binancebot.mobile.util.Constants
 import kotlinx.coroutines.flow.filterIsInstance
 import com.binancebot.mobile.presentation.navigation.Screen
@@ -54,9 +60,26 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var notificationTrigger: com.binancebot.mobile.util.NotificationTrigger
+
+    /**
+     * Permission launcher for POST_NOTIFICATIONS (Android 13+).
+     * Must be registered before onCreate lifecycle.
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            AppLogger.d("MainActivity", "Notification permission granted")
+        } else {
+            AppLogger.w("MainActivity", "Notification permission denied - push notifications will not work")
+        }
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Request notification permission for Android 13+ (API 33)
+        requestNotificationPermission()
         
         if (tokenManager.isLoggedIn()) {
             val wsUrl = Constants.BASE_URL
@@ -113,6 +136,36 @@ class MainActivity : ComponentActivity() {
         }
         if (strategyId != null) {
             PendingDeepLink.route.value = "strategy_details/$strategyId"
+        }
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission on Android 13+ (API 33).
+     * Without this permission, push notifications will not be shown.
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when {
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+                    AppLogger.d("MainActivity", "Notification permission already granted")
+                }
+                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
+                    // User previously denied - still request (they can still grant)
+                    AppLogger.d("MainActivity", "Requesting notification permission (rationale needed)")
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                else -> {
+                    // First time or "don't ask again" - request anyway
+                    AppLogger.d("MainActivity", "Requesting notification permission")
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        } else {
+            // Android 12 and below - permission granted by default via manifest
+            AppLogger.d("MainActivity", "Notification permission not required (Android < 13)")
         }
     }
 }

@@ -29,9 +29,17 @@ fun NotificationSettingsScreen(
     val alertsEnabled by settingsViewModel.alertsEnabled.collectAsState(initial = true)
     val strategyEnabled by settingsViewModel.strategyEnabled.collectAsState(initial = true)
     val systemEnabled by settingsViewModel.systemEnabled.collectAsState(initial = false)
-    val soundEnabled by settingsViewModel.soundEnabled.collectAsState(initial = true)
-    val vibrationEnabled by settingsViewModel.vibrationEnabled.collectAsState(initial = true)
     val tradePnLThreshold by settingsViewModel.tradePnLThreshold.collectAsState(initial = 100.0)
+    
+    // Per-category sound/vibration settings
+    val tradesSoundEnabled by settingsViewModel.tradesSoundEnabled.collectAsState(initial = true)
+    val tradesVibrationEnabled by settingsViewModel.tradesVibrationEnabled.collectAsState(initial = true)
+    val alertsSoundEnabled by settingsViewModel.alertsSoundEnabled.collectAsState(initial = true)
+    val alertsVibrationEnabled by settingsViewModel.alertsVibrationEnabled.collectAsState(initial = true)
+    val strategySoundEnabled by settingsViewModel.strategySoundEnabled.collectAsState(initial = true)
+    val strategyVibrationEnabled by settingsViewModel.strategyVibrationEnabled.collectAsState(initial = true)
+    val systemSoundEnabled by settingsViewModel.systemSoundEnabled.collectAsState(initial = false)
+    val systemVibrationEnabled by settingsViewModel.systemVibrationEnabled.collectAsState(initial = false)
     
     val scope = rememberCoroutineScope()
     var pnlThresholdText by remember { mutableStateOf(tradePnLThreshold.toString()) }
@@ -99,10 +107,10 @@ fun NotificationSettingsScreen(
                     title = "Trade Notifications",
                     enabled = tradesEnabled,
                     onEnabledChange = { scope.launch { settingsViewModel.setTradesEnabled(it) } },
-                    soundEnabled = soundEnabled,
-                    onSoundChange = { scope.launch { settingsViewModel.setSoundEnabled(it) } },
-                    vibrationEnabled = vibrationEnabled,
-                    onVibrationChange = { scope.launch { settingsViewModel.setVibrationEnabled(it) } }
+                    soundEnabled = tradesSoundEnabled,
+                    onSoundChange = { scope.launch { settingsViewModel.setTradesSoundEnabled(it) } },
+                    vibrationEnabled = tradesVibrationEnabled,
+                    onVibrationChange = { scope.launch { settingsViewModel.setTradesVibrationEnabled(it) } }
                 ) {
                     OutlinedTextField(
                         value = pnlThresholdText,
@@ -123,10 +131,10 @@ fun NotificationSettingsScreen(
                     title = "Alert Notifications",
                     enabled = alertsEnabled,
                     onEnabledChange = { scope.launch { settingsViewModel.setAlertsEnabled(it) } },
-                    soundEnabled = soundEnabled,
-                    onSoundChange = { scope.launch { settingsViewModel.setSoundEnabled(it) } },
-                    vibrationEnabled = vibrationEnabled,
-                    onVibrationChange = { scope.launch { settingsViewModel.setVibrationEnabled(it) } }
+                    soundEnabled = alertsSoundEnabled,
+                    onSoundChange = { scope.launch { settingsViewModel.setAlertsSoundEnabled(it) } },
+                    vibrationEnabled = alertsVibrationEnabled,
+                    onVibrationChange = { scope.launch { settingsViewModel.setAlertsVibrationEnabled(it) } }
                 )
                 
                 // Strategy Notifications
@@ -134,10 +142,10 @@ fun NotificationSettingsScreen(
                     title = "Strategy Notifications",
                     enabled = strategyEnabled,
                     onEnabledChange = { scope.launch { settingsViewModel.setStrategyEnabled(it) } },
-                    soundEnabled = soundEnabled,
-                    onSoundChange = { scope.launch { settingsViewModel.setSoundEnabled(it) } },
-                    vibrationEnabled = vibrationEnabled,
-                    onVibrationChange = { scope.launch { settingsViewModel.setVibrationEnabled(it) } }
+                    soundEnabled = strategySoundEnabled,
+                    onSoundChange = { scope.launch { settingsViewModel.setStrategySoundEnabled(it) } },
+                    vibrationEnabled = strategyVibrationEnabled,
+                    onVibrationChange = { scope.launch { settingsViewModel.setStrategyVibrationEnabled(it) } }
                 )
                 
                 // System Notifications
@@ -145,10 +153,10 @@ fun NotificationSettingsScreen(
                     title = "System Notifications",
                     enabled = systemEnabled,
                     onEnabledChange = { scope.launch { settingsViewModel.setSystemEnabled(it) } },
-                    soundEnabled = soundEnabled,
-                    onSoundChange = { scope.launch { settingsViewModel.setSoundEnabled(it) } },
-                    vibrationEnabled = vibrationEnabled,
-                    onVibrationChange = { scope.launch { settingsViewModel.setVibrationEnabled(it) } }
+                    soundEnabled = systemSoundEnabled,
+                    onSoundChange = { scope.launch { settingsViewModel.setSystemSoundEnabled(it) } },
+                    vibrationEnabled = systemVibrationEnabled,
+                    onVibrationChange = { scope.launch { settingsViewModel.setSystemVibrationEnabled(it) } }
                 )
             }
         }

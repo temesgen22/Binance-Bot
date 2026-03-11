@@ -771,6 +771,380 @@ class TestStrategyRiskConfigIntegration:
         assert retrieved.id == strategy_config.id
 
 
+class TestUnrealizedPnLAlertThresholds:
+    """Test unrealized PnL alert threshold functionality."""
+    
+    def test_create_strategy_risk_config_with_unrealized_pnl_alerts(
+        self,
+        db_service: DatabaseService,
+        test_user: User,
+        test_strategy: Strategy
+    ):
+        """Test creating strategy risk config with unrealized PnL alert thresholds."""
+        config = db_service.create_strategy_risk_config(
+            user_id=test_user.id,
+            strategy_id=test_strategy.strategy_id,
+            max_daily_loss_usdt=100.0,
+            enabled=True,
+            unrealized_profit_alert_usdt=50.0,
+            unrealized_loss_alert_usdt=25.0,
+            unrealized_pnl_alert_cooldown_minutes=15,
+        )
+        
+        assert config is not None
+        assert config.unrealized_profit_alert_usdt == Decimal("50.0")
+        assert config.unrealized_loss_alert_usdt == Decimal("25.0")
+        assert config.unrealized_pnl_alert_cooldown_minutes == 15
+    
+    def test_create_strategy_risk_config_default_cooldown(
+        self,
+        db_service: DatabaseService,
+        test_user: User,
+        test_strategy: Strategy
+    ):
+        """Test that default cooldown is 30 minutes when not specified."""
+        config = db_service.create_strategy_risk_config(
+            user_id=test_user.id,
+            strategy_id=test_strategy.strategy_id,
+            enabled=True,
+            unrealized_profit_alert_usdt=100.0,
+        )
+        
+        assert config is not None
+        assert config.unrealized_pnl_alert_cooldown_minutes == 30  # Default value
+    
+    def test_update_strategy_risk_config_unrealized_pnl_alerts(
+        self,
+        db_service: DatabaseService,
+        test_user: User,
+        test_strategy: Strategy
+    ):
+        """Test updating strategy risk config with unrealized PnL alert thresholds."""
+        # Create initial config without alerts
+        db_service.create_strategy_risk_config(
+            user_id=test_user.id,
+            strategy_id=test_strategy.strategy_id,
+            enabled=True,
+        )
+        
+        # Update with unrealized PnL alerts
+        update_dict = {
+            "unrealized_profit_alert_usdt": 75.0,
+            "unrealized_loss_alert_usdt": 30.0,
+            "unrealized_pnl_alert_cooldown_minutes": 20,
+        }
+        
+        updated = db_service.update_strategy_risk_config(
+            user_id=test_user.id,
+            strategy_id=test_strategy.strategy_id,
+            updates=update_dict
+        )
+        
+        assert updated is not None
+        assert updated.unrealized_profit_alert_usdt == Decimal("75.0")
+        assert updated.unrealized_loss_alert_usdt == Decimal("30.0")
+        assert updated.unrealized_pnl_alert_cooldown_minutes == 20
+    
+    def test_strategy_risk_config_response_includes_unrealized_pnl_fields(
+        self,
+        test_db_session: Session,
+        test_user: User,
+        test_strategy: Strategy
+    ):
+        """Test that Pydantic response model includes unrealized PnL alert fields."""
+        # Create config in database with all fields
+        db_config = StrategyRiskConfig(
+            id=uuid4(),
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            max_daily_loss_usdt=Decimal("100.0"),
+            unrealized_profit_alert_usdt=Decimal("50.0"),
+            unrealized_loss_alert_usdt=Decimal("25.0"),
+            unrealized_pnl_alert_cooldown_minutes=15,
+            enabled=True,
+            timezone="UTC",
+        )
+        test_db_session.add(db_config)
+        test_db_session.commit()
+        test_db_session.refresh(db_config)
+        
+        # Convert to Pydantic response
+        response = StrategyRiskConfigResponse.from_orm(db_config)
+        
+        assert response.unrealized_profit_alert_usdt == 50.0
+        assert response.unrealized_loss_alert_usdt == 25.0
+        assert response.unrealized_pnl_alert_cooldown_minutes == 15
+    
+    def test_strategy_risk_config_response_null_unrealized_pnl_fields(
+        self,
+        test_db_session: Session,
+        test_user: User,
+        test_strategy: Strategy
+    ):
+        """Test response model with null unrealized PnL alert fields."""
+        # Create config without unrealized PnL alert thresholds
+        db_config = StrategyRiskConfig(
+            id=uuid4(),
+            user_id=test_user.id,
+            strategy_id=test_strategy.id,
+            max_daily_loss_usdt=Decimal("100.0"),
+            enabled=True,
+            timezone="UTC",
+        )
+        test_db_session.add(db_config)
+        test_db_session.commit()
+        test_db_session.refresh(db_config)
+        
+        # Convert to Pydantic response
+        response = StrategyRiskConfigResponse.from_orm(db_config)
+        
+        assert response.unrealized_profit_alert_usdt is None
+        assert response.unrealized_loss_alert_usdt is None
+        assert response.unrealized_pnl_alert_cooldown_minutes == 30  # Default
+
+
+class TestUnrealizedPnLThresholdChecking:
+    """Test the threshold checking logic in StrategyPersistence."""
+    
+    @pytest.fixture
+    def mock_notification_service(self):
+        """Create mock notification service."""
+        service = MagicMock()
+        service.notify_unrealized_pnl_alert = AsyncMock()
+        return service
+    
+    @pytest.fixture
+    def mock_strategy_summary(self):
+        """Create mock strategy summary."""
+        return StrategySummary(
+            id="test_strategy_1",
+            name="Test Strategy",
+            symbol="BTCUSDT",
+            strategy_type=StrategyType.scalping,
+            status=StrategyState.running,
+            leverage=5,
+            risk_per_trade=0.01,
+            fixed_amount=100.0,
+            params={},
+            created_at=datetime.now(timezone.utc),
+            account_id="test_account",
+            current_price=50000.0,
+            position_size=0.1,
+            position_side="LONG",
+            last_signal=None,
+        )
+    
+    @pytest.fixture
+    def mock_risk_config_with_profit_threshold(self):
+        """Create mock risk config with profit threshold."""
+        config = MagicMock()
+        config.unrealized_profit_alert_usdt = Decimal("50.0")
+        config.unrealized_loss_alert_usdt = None
+        config.unrealized_pnl_alert_cooldown_minutes = 30
+        return config
+    
+    @pytest.fixture
+    def mock_risk_config_with_loss_threshold(self):
+        """Create mock risk config with loss threshold."""
+        config = MagicMock()
+        config.unrealized_profit_alert_usdt = None
+        config.unrealized_loss_alert_usdt = Decimal("30.0")
+        config.unrealized_pnl_alert_cooldown_minutes = 30
+        return config
+    
+    @pytest.fixture
+    def mock_risk_config_with_both_thresholds(self):
+        """Create mock risk config with both thresholds."""
+        config = MagicMock()
+        config.unrealized_profit_alert_usdt = Decimal("100.0")
+        config.unrealized_loss_alert_usdt = Decimal("50.0")
+        config.unrealized_pnl_alert_cooldown_minutes = 30
+        return config
+    
+    @pytest.mark.asyncio
+    async def test_profit_threshold_triggers_alert(
+        self,
+        mock_notification_service,
+        mock_strategy_summary: StrategySummary,
+        mock_risk_config_with_profit_threshold
+    ):
+        """Test that exceeding profit threshold triggers an alert."""
+        from app.services.strategy_persistence import StrategyPersistence
+        
+        # Create mock strategy service with db_service that returns our config
+        mock_db_service = MagicMock()
+        mock_db_service.get_strategy_risk_config = MagicMock(
+            return_value=mock_risk_config_with_profit_threshold
+        )
+        mock_strategy_service = MagicMock()
+        mock_strategy_service.db_service = mock_db_service
+        
+        # Create persistence instance with mocks
+        persistence = StrategyPersistence(
+            strategy_service=mock_strategy_service,
+            user_id=uuid4(),
+            notification_service=mock_notification_service,
+        )
+        
+        # Check threshold with profit above threshold
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=75.0  # $75 profit > $50 threshold
+        )
+        
+        # Verify notification was sent
+        mock_notification_service.notify_unrealized_pnl_alert.assert_called_once()
+        call_kwargs = mock_notification_service.notify_unrealized_pnl_alert.call_args.kwargs
+        assert call_kwargs["unrealized_pnl"] == 75.0
+        assert call_kwargs["threshold"] == 50.0
+        assert call_kwargs["threshold_type"] == "profit"
+    
+    @pytest.mark.asyncio
+    async def test_loss_threshold_triggers_alert(
+        self,
+        mock_notification_service,
+        mock_strategy_summary: StrategySummary,
+        mock_risk_config_with_loss_threshold
+    ):
+        """Test that exceeding loss threshold triggers an alert."""
+        from app.services.strategy_persistence import StrategyPersistence
+        
+        # Create mock strategy service
+        mock_db_service = MagicMock()
+        mock_db_service.get_strategy_risk_config = MagicMock(
+            return_value=mock_risk_config_with_loss_threshold
+        )
+        mock_strategy_service = MagicMock()
+        mock_strategy_service.db_service = mock_db_service
+        
+        # Create persistence instance with mocks
+        persistence = StrategyPersistence(
+            strategy_service=mock_strategy_service,
+            user_id=uuid4(),
+            notification_service=mock_notification_service,
+        )
+        
+        # Check threshold with loss exceeding threshold
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=-45.0  # $45 loss > $30 threshold
+        )
+        
+        # Verify notification was sent
+        mock_notification_service.notify_unrealized_pnl_alert.assert_called_once()
+        call_kwargs = mock_notification_service.notify_unrealized_pnl_alert.call_args.kwargs
+        assert call_kwargs["unrealized_pnl"] == -45.0
+        assert call_kwargs["threshold"] == 30.0
+        assert call_kwargs["threshold_type"] == "loss"
+    
+    @pytest.mark.asyncio
+    async def test_below_threshold_no_alert(
+        self,
+        mock_notification_service,
+        mock_strategy_summary: StrategySummary,
+        mock_risk_config_with_both_thresholds
+    ):
+        """Test that PnL below threshold does not trigger an alert."""
+        from app.services.strategy_persistence import StrategyPersistence
+        
+        # Create mock strategy service
+        mock_db_service = MagicMock()
+        mock_db_service.get_strategy_risk_config = MagicMock(
+            return_value=mock_risk_config_with_both_thresholds
+        )
+        mock_strategy_service = MagicMock()
+        mock_strategy_service.db_service = mock_db_service
+        
+        # Create persistence instance with mocks
+        persistence = StrategyPersistence(
+            strategy_service=mock_strategy_service,
+            user_id=uuid4(),
+            notification_service=mock_notification_service,
+        )
+        
+        # Check with PnL below both thresholds
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=25.0  # $25 profit < $100 threshold
+        )
+        
+        # Verify no notification was sent
+        mock_notification_service.notify_unrealized_pnl_alert.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_repeated_alerts(
+        self,
+        mock_notification_service,
+        mock_strategy_summary: StrategySummary,
+        mock_risk_config_with_profit_threshold
+    ):
+        """Test that cooldown prevents repeated alerts."""
+        from app.services.strategy_persistence import StrategyPersistence
+        
+        # Create mock strategy service
+        mock_db_service = MagicMock()
+        mock_db_service.get_strategy_risk_config = MagicMock(
+            return_value=mock_risk_config_with_profit_threshold
+        )
+        mock_strategy_service = MagicMock()
+        mock_strategy_service.db_service = mock_db_service
+        
+        # Create persistence instance
+        persistence = StrategyPersistence(
+            strategy_service=mock_strategy_service,
+            user_id=uuid4(),
+            notification_service=mock_notification_service,
+        )
+        
+        # First check - should trigger alert
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=75.0
+        )
+        
+        assert mock_notification_service.notify_unrealized_pnl_alert.call_count == 1
+        
+        # Second check immediately after - should NOT trigger (cooldown)
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=80.0
+        )
+        
+        # Should still be 1 (no new alert due to cooldown)
+        assert mock_notification_service.notify_unrealized_pnl_alert.call_count == 1
+    
+    @pytest.mark.asyncio
+    async def test_no_config_no_alert(
+        self,
+        mock_notification_service,
+        mock_strategy_summary: StrategySummary
+    ):
+        """Test that without a risk config, no alerts are sent."""
+        from app.services.strategy_persistence import StrategyPersistence
+        
+        # Create mock strategy service that returns None for config
+        mock_db_service = MagicMock()
+        mock_db_service.get_strategy_risk_config = MagicMock(return_value=None)
+        mock_strategy_service = MagicMock()
+        mock_strategy_service.db_service = mock_db_service
+        
+        # Create persistence instance
+        persistence = StrategyPersistence(
+            strategy_service=mock_strategy_service,
+            user_id=uuid4(),
+            notification_service=mock_notification_service,
+        )
+        
+        # Check threshold - should not trigger any alert
+        await persistence._check_unrealized_pnl_thresholds(
+            mock_strategy_summary,
+            unrealized_pnl=1000.0  # Large profit, but no config
+        )
+        
+        # Verify no notification was sent
+        mock_notification_service.notify_unrealized_pnl_alert.assert_not_called()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

@@ -1282,19 +1282,32 @@ class StrategyOrderManager:
         sl_order_id = None
         
         try:
-            # Place take profit order
+            # Place take profit order using new Algo Order API (required since Dec 2025)
             # Wrap sync BinanceClient call in to_thread to avoid blocking event loop
-            tp_response = await asyncio.to_thread(
-                partial(
-                    account_client.place_take_profit_order,
-                    symbol=summary.symbol,
-                    side=tp_side,
-                    quantity=summary.position_size,
-                    stop_price=tp_price,
-                    close_position=True
+            if hasattr(account_client, 'place_algo_take_profit'):
+                tp_response = await asyncio.to_thread(
+                    partial(
+                        account_client.place_algo_take_profit,
+                        symbol=summary.symbol,
+                        side=tp_side,
+                        quantity=summary.position_size,
+                        stop_price=tp_price,
+                        close_position=True
+                    )
                 )
-            )
-            tp_order_id = tp_response.get("orderId")
+            else:
+                # Fallback to legacy API (for paper trading)
+                tp_response = await asyncio.to_thread(
+                    partial(
+                        account_client.place_take_profit_order,
+                        symbol=summary.symbol,
+                        side=tp_side,
+                        quantity=summary.position_size,
+                        stop_price=tp_price,
+                        close_position=True
+                    )
+                )
+            tp_order_id = tp_response.get("orderId") or tp_response.get("algoId")
             logger.info(f"[{summary.id}] TP order placed: orderId={tp_order_id}")
         except Exception as exc:
             # Extract underlying error details for better debugging
@@ -1305,18 +1318,31 @@ class StrategyOrderManager:
             )
         
         try:
-            # Place stop loss order
-            sl_response = await asyncio.to_thread(
-                partial(
-                    account_client.place_stop_loss_order,
-                    symbol=summary.symbol,
-                    side=sl_side,
-                    quantity=summary.position_size,
-                    stop_price=sl_price,
-                    close_position=True
+            # Place stop loss order using new Algo Order API (required since Dec 2025)
+            if hasattr(account_client, 'place_algo_stop_loss'):
+                sl_response = await asyncio.to_thread(
+                    partial(
+                        account_client.place_algo_stop_loss,
+                        symbol=summary.symbol,
+                        side=sl_side,
+                        quantity=summary.position_size,
+                        stop_price=sl_price,
+                        close_position=True
+                    )
                 )
-            )
-            sl_order_id = sl_response.get("orderId")
+            else:
+                # Fallback to legacy API (for paper trading)
+                sl_response = await asyncio.to_thread(
+                    partial(
+                        account_client.place_stop_loss_order,
+                        symbol=summary.symbol,
+                        side=sl_side,
+                        quantity=summary.position_size,
+                        stop_price=sl_price,
+                        close_position=True
+                    )
+                )
+            sl_order_id = sl_response.get("orderId") or sl_response.get("algoId")
             logger.info(f"[{summary.id}] SL order placed: orderId={sl_order_id}")
         except Exception as exc:
             # Extract underlying error details for better debugging

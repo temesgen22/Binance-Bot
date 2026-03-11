@@ -249,6 +249,193 @@
             border-left-color: #dc3545;
         }
 
+        /* Manual Trading Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.25rem;
+            color: #333;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: #333;
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            box-sizing: border-box;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .form-section {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .form-section-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 0.95em;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+
+        .side-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .side-btn {
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+        }
+
+        .side-btn.long {
+            background: white;
+            color: #28a745;
+            border-color: #28a745;
+        }
+
+        .side-btn.long:hover,
+        .side-btn.long.active {
+            background: #28a745;
+            color: white;
+        }
+
+        .side-btn.short {
+            background: white;
+            color: #dc3545;
+            border-color: #dc3545;
+        }
+
+        .side-btn.short:hover,
+        .side-btn.short.active {
+            background: #dc3545;
+            color: white;
+        }
+
+        .modal-footer {
+            padding: 15px 20px;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+        }
+
+        .btn-success:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .new-position-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
         .position-header {
             display: flex;
             justify-content: space-between;
@@ -534,10 +721,108 @@
             <div id="positions" class="tab-content">
                 <div class="refresh-controls">
                     <h2>Open Positions</h2>
-                    <button class="btn btn-primary" onclick="loadData()">Refresh</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-success new-position-btn" onclick="openManualTradeModal()">
+                            <span>+</span> New Position
+                        </button>
+                        <button class="btn btn-primary" onclick="loadData()">Refresh</button>
+                    </div>
                 </div>
                 <div id="positionsContent">
                     <div class="loading">Loading positions...</div>
+                </div>
+            </div>
+
+            <!-- Manual Trading Modal -->
+            <div id="manualTradeModal" class="modal-overlay">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h2>Open Manual Position</h2>
+                        <button class="modal-close" onclick="closeManualTradeModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Symbol</label>
+                            <input type="text" id="mtSymbol" placeholder="e.g., BTCUSDT" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Side</label>
+                            <div class="side-buttons">
+                                <button type="button" class="side-btn long" onclick="selectSide('LONG')">LONG</button>
+                                <button type="button" class="side-btn short" onclick="selectSide('SHORT')">SHORT</button>
+                            </div>
+                            <input type="hidden" id="mtSide" value="">
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Amount (USDT)</label>
+                                <input type="number" id="mtUsdtAmount" placeholder="e.g., 100" step="any" min="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Leverage</label>
+                                <input type="number" id="mtLeverage" value="10" min="1" max="125">
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Account</label>
+                                <select id="mtAccount">
+                                    <option value="default">default</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Margin Type</label>
+                                <select id="mtMarginType">
+                                    <option value="CROSSED">CROSSED</option>
+                                    <option value="ISOLATED">ISOLATED</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section">
+                            <div class="form-section-title">Take Profit / Stop Loss (Optional)</div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Take Profit %</label>
+                                    <input type="number" id="mtTpPct" placeholder="e.g., 2 for 2%" step="any" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Stop Loss %</label>
+                                    <input type="number" id="mtSlPct" placeholder="e.g., 1 for 1%" step="any" min="0">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>TP Price (overrides %)</label>
+                                    <input type="number" id="mtTpPrice" placeholder="Optional" step="any" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label>SL Price (overrides %)</label>
+                                    <input type="number" id="mtSlPrice" placeholder="Optional" step="any" min="0">
+                                </div>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="mtTrailingStop">
+                                <label for="mtTrailingStop" style="margin: 0;">Enable Trailing Stop</label>
+                            </div>
+                            <div class="form-group" id="mtTrailingRateGroup" style="display: none; margin-top: 10px;">
+                                <label>Trailing Stop Callback Rate %</label>
+                                <input type="number" id="mtTrailingRate" placeholder="e.g., 1.5" step="0.1" min="0.1" max="5">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label>Notes (Optional)</label>
+                            <input type="text" id="mtNotes" placeholder="Trade notes...">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeManualTradeModal()">Cancel</button>
+                        <button class="btn btn-success" id="mtSubmitBtn" onclick="submitManualTrade()">Open Position</button>
+                    </div>
                 </div>
             </div>
 
@@ -875,10 +1160,30 @@
                 } else {
                     html += `<div class="position-detail-item"><span>Owner:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
                 }
+                // Show TP/SL info for manual positions
+                if (pos.tp_price) {
+                    html += `<div class="position-detail-item"><span>Take Profit:</span><span style="color: #28a745;">$${formatPrice(pos.tp_price)}</span></div>`;
+                }
+                if (pos.sl_price) {
+                    html += `<div class="position-detail-item"><span>Stop Loss:</span><span style="color: #dc3545;">$${formatPrice(pos.sl_price)}</span></div>`;
+                }
                 html += `</div>`;
-                if (pos.strategy_id) {
+                
+                // Check if this is a manual position (strategy_id starts with "manual_")
+                const isManualPosition = pos.strategy_id && String(pos.strategy_id).startsWith('manual_');
+                const manualPositionId = isManualPosition ? String(pos.strategy_id).replace('manual_', '') : null;
+                
+                if (isManualPosition && manualPositionId) {
+                    // Manual position - use manual trading API
+                    const closeDisabled = manualCloseInProgress === pos.strategy_id ? 'disabled' : '';
+                    const closeLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Close';
+                    html += `<div class="position-actions">`;
+                    html += `<button class="position-close-btn" ${closeDisabled} onclick="closeManualPosition('${manualPositionId}')">${closeLabel}</button>`;
+                    html += `</div>`;
+                } else if (pos.strategy_id) {
+                    // Strategy position - use existing manual close
                     const manualCloseDisabled = manualCloseInProgress === pos.strategy_id ? 'disabled' : '';
-                    const manualCloseLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Manual Close';
+                    const manualCloseLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Close';
                     html += `<div class="position-actions">`;
                     html += `<button class="position-close-btn" ${manualCloseDisabled} onclick="manualClosePosition('${String(pos.strategy_id).replace(/'/g, "\\'")}', '${String(pos.symbol || '').replace(/'/g, "\\'")}', '${String(pos.position_side || '').replace(/'/g, "\\'")}')">${manualCloseLabel}</button>`;
                     html += `</div>`;
@@ -916,6 +1221,28 @@
                     throw new Error(data.detail || `Manual close failed (${response.status})`);
                 }
 
+                // CRITICAL: Immediately remove the closed position from local data
+                // Don't wait for REST to update - the position is already closed on Binance
+                if (lastPnlData && Array.isArray(lastPnlData)) {
+                    lastPnlData.forEach(symbolData => {
+                        if (symbolData.open_positions && Array.isArray(symbolData.open_positions)) {
+                            symbolData.open_positions = symbolData.open_positions.filter(pos => 
+                                !(pos.strategy_id === strategyId && pos.symbol === symbol)
+                            );
+                        }
+                    });
+                }
+                // Also clear from WebSocket position store so merged view is correct
+                if (window.positionUpdates) {
+                    delete window.positionUpdates[strategyId];
+                }
+                // Refresh display immediately with the closed position removed
+                const merged = mergePnlWithWs(lastPnlData || []);
+                displayOverview(merged);
+                displayPositions(merged);
+                updateOverallStats(merged);
+
+                // Then load fresh data from REST (in background, positions already cleared)
                 await loadData();
                 await loadTrades();
                 window.alert(`Manual close submitted successfully for ${symbol}. Exit reason recorded as ${data.exit_reason || 'MANUAL'}.`);
@@ -1200,6 +1527,259 @@
         }
 
         // formatCurrency is now in utils.js
+
+        // ==================== Manual Trading Functions ====================
+        
+        let selectedSide = '';
+        let manualTradeInProgress = false;
+        
+        function openManualTradeModal() {
+            // Reset form
+            document.getElementById('mtSymbol').value = '';
+            document.getElementById('mtUsdtAmount').value = '';
+            document.getElementById('mtLeverage').value = '10';
+            document.getElementById('mtTpPct').value = '';
+            document.getElementById('mtSlPct').value = '';
+            document.getElementById('mtTpPrice').value = '';
+            document.getElementById('mtSlPrice').value = '';
+            document.getElementById('mtTrailingStop').checked = false;
+            document.getElementById('mtTrailingRate').value = '';
+            document.getElementById('mtTrailingRateGroup').style.display = 'none';
+            document.getElementById('mtNotes').value = '';
+            document.getElementById('mtMarginType').value = 'CROSSED';
+            selectedSide = '';
+            document.querySelectorAll('.side-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('mtSubmitBtn').disabled = false;
+            document.getElementById('mtSubmitBtn').textContent = 'Open Position';
+            
+            // Load accounts
+            loadAccountsForModal();
+            
+            // Show modal
+            document.getElementById('manualTradeModal').classList.add('active');
+        }
+        
+        function closeManualTradeModal() {
+            document.getElementById('manualTradeModal').classList.remove('active');
+        }
+        
+        function selectSide(side) {
+            selectedSide = side;
+            document.getElementById('mtSide').value = side;
+            document.querySelectorAll('.side-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`.side-btn.${side.toLowerCase()}`).classList.add('active');
+        }
+        
+        // Toggle trailing stop input visibility
+        document.addEventListener('DOMContentLoaded', function() {
+            const trailingCheckbox = document.getElementById('mtTrailingStop');
+            if (trailingCheckbox) {
+                trailingCheckbox.addEventListener('change', function() {
+                    document.getElementById('mtTrailingRateGroup').style.display = 
+                        this.checked ? 'block' : 'none';
+                });
+            }
+        });
+        
+        async function loadAccountsForModal() {
+            try {
+                const response = await authFetch('/api/accounts/list');
+                if (response.ok) {
+                    const accounts = await response.json();
+                    const select = document.getElementById('mtAccount');
+                    select.innerHTML = '';
+                    
+                    // Response is an array of account objects
+                    if (accounts && Array.isArray(accounts) && accounts.length > 0) {
+                        // Filter out paper trading accounts if needed
+                        const liveAccounts = accounts.filter(acc => !acc.paper_trading);
+                        
+                        if (liveAccounts.length > 0) {
+                            liveAccounts.forEach(acc => {
+                                const option = document.createElement('option');
+                                option.value = acc.account_id;
+                                const testnetLabel = acc.testnet ? ' [TESTNET]' : '';
+                                option.textContent = `${acc.name || acc.account_id}${testnetLabel}`;
+                                select.appendChild(option);
+                            });
+                        } else {
+                            // If only paper accounts, show all accounts
+                            accounts.forEach(acc => {
+                                const option = document.createElement('option');
+                                option.value = acc.account_id;
+                                const paperLabel = acc.paper_trading ? ' [PAPER]' : '';
+                                const testnetLabel = acc.testnet ? ' [TESTNET]' : '';
+                                option.textContent = `${acc.name || acc.account_id}${paperLabel}${testnetLabel}`;
+                                select.appendChild(option);
+                            });
+                        }
+                    } else {
+                        select.innerHTML = '<option value="default">default</option>';
+                    }
+                } else {
+                    console.error('Failed to load accounts:', response.status);
+                    document.getElementById('mtAccount').innerHTML = '<option value="default">default</option>';
+                }
+            } catch (e) {
+                console.error('Failed to load accounts:', e);
+                document.getElementById('mtAccount').innerHTML = '<option value="default">default</option>';
+            }
+        }
+        
+        async function submitManualTrade() {
+            if (manualTradeInProgress) return;
+            
+            const symbol = document.getElementById('mtSymbol').value.trim().toUpperCase();
+            const side = selectedSide;
+            const usdtAmount = parseFloat(document.getElementById('mtUsdtAmount').value);
+            const leverage = parseInt(document.getElementById('mtLeverage').value) || 10;
+            const accountId = document.getElementById('mtAccount').value || 'default';
+            const marginType = document.getElementById('mtMarginType').value;
+            
+            // Validation
+            if (!symbol) {
+                alert('Please enter a symbol');
+                return;
+            }
+            if (!side) {
+                alert('Please select LONG or SHORT');
+                return;
+            }
+            if (!usdtAmount || usdtAmount <= 0) {
+                alert('Please enter a valid USDT amount');
+                return;
+            }
+            
+            // Build request
+            const request = {
+                symbol: symbol,
+                side: side,
+                usdt_amount: usdtAmount,
+                leverage: leverage,
+                account_id: accountId,
+                margin_type: marginType
+            };
+            
+            // TP/SL
+            const tpPct = parseFloat(document.getElementById('mtTpPct').value);
+            const slPct = parseFloat(document.getElementById('mtSlPct').value);
+            const tpPrice = parseFloat(document.getElementById('mtTpPrice').value);
+            const slPrice = parseFloat(document.getElementById('mtSlPrice').value);
+            
+            if (tpPct > 0) request.take_profit_pct = tpPct / 100; // Convert from % to decimal
+            if (slPct > 0) request.stop_loss_pct = slPct / 100;
+            if (tpPrice > 0) request.tp_price = tpPrice;
+            if (slPrice > 0) request.sl_price = slPrice;
+            
+            // Trailing stop
+            if (document.getElementById('mtTrailingStop').checked) {
+                request.trailing_stop_enabled = true;
+                const trailingRate = parseFloat(document.getElementById('mtTrailingRate').value);
+                if (trailingRate > 0) {
+                    request.trailing_stop_callback_rate = trailingRate;
+                }
+            }
+            
+            // Notes
+            const notes = document.getElementById('mtNotes').value.trim();
+            if (notes) request.notes = notes;
+            
+            // Submit
+            manualTradeInProgress = true;
+            const submitBtn = document.getElementById('mtSubmitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Opening...';
+            
+            try {
+                const response = await authFetch('/api/manual-trades/open', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(request)
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Failed to open position');
+                }
+                
+                // Success
+                closeManualTradeModal();
+                alert(`Position opened successfully!\n\nSymbol: ${data.symbol}\nSide: ${data.side}\nEntry: $${data.entry_price.toFixed(2)}\nQuantity: ${data.quantity}`);
+                
+                // Refresh positions
+                loadData();
+                
+            } catch (error) {
+                console.error('Manual trade error:', error);
+                alert('Failed to open position: ' + error.message);
+            } finally {
+                manualTradeInProgress = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Open Position';
+            }
+        }
+        
+        // Close modal on overlay click
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeManualTradeModal();
+            }
+        });
+        
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeManualTradeModal();
+            }
+        });
+        
+        // Close a manual position via the manual trading API
+        async function closeManualPosition(positionId) {
+            if (!positionId) return;
+            
+            const confirmed = window.confirm('Close this manual position?');
+            if (!confirmed) return;
+            
+            const strategyIdKey = 'manual_' + positionId;
+            manualCloseInProgress = strategyIdKey;
+            displayPositions(mergePnlWithWs(lastPnlData || []));
+            
+            try {
+                const response = await authFetch('/api/manual-trades/close', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        position_id: positionId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Failed to close position');
+                }
+                
+                // Clear from WebSocket position store
+                if (window.positionUpdates) {
+                    delete window.positionUpdates[strategyIdKey];
+                }
+                
+                alert(`Position closed!\n\nPnL: $${data.realized_pnl.toFixed(2)}\nExit Price: $${data.exit_price.toFixed(2)}`);
+                
+                // Refresh data
+                loadData();
+                
+            } catch (error) {
+                console.error('Close manual position error:', error);
+                alert('Failed to close position: ' + error.message);
+            } finally {
+                manualCloseInProgress = null;
+                displayPositions(mergePnlWithWs(lastPnlData || []));
+            }
+        }
+        
+        // ==================== End Manual Trading Functions ====================
 
         // Format price to show exact database value (up to 8 decimal places, remove trailing zeros)
         function formatPrice(price) {

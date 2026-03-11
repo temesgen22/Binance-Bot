@@ -540,3 +540,62 @@ class FCMNotifier:
             user_id, title, body, data, db, channel_id="alerts_channel"
         )
         return sent_count > 0
+    
+    async def notify_unrealized_pnl_threshold(
+        self,
+        user_id: UUID,
+        strategy_id: str,
+        strategy_name: str,
+        symbol: str,
+        unrealized_pnl: float,
+        threshold: float,
+        threshold_type: str,
+        position_side: str,
+        db: Optional[AsyncSession] = None,
+    ) -> bool:
+        """Send FCM notification when unrealized PnL crosses a threshold.
+        
+        Args:
+            user_id: User UUID
+            strategy_id: Strategy ID
+            strategy_name: Strategy name
+            symbol: Trading symbol
+            unrealized_pnl: Current unrealized PnL
+            threshold: The threshold that was crossed
+            threshold_type: "profit" or "loss"
+            position_side: LONG or SHORT
+            db: Async database session
+            
+        Returns:
+            True if notification was sent successfully
+        """
+        is_profit = threshold_type == "profit"
+        
+        if is_profit:
+            title = "Unrealized Profit Target"
+            emoji = "📈"
+        else:
+            title = "Unrealized Loss Alert"
+            emoji = "📉"
+        
+        pnl_sign = "+" if unrealized_pnl >= 0 else ""
+        body = f"{emoji} {strategy_name} ({symbol} {position_side}): {pnl_sign}${unrealized_pnl:.2f}"
+        
+        data = {
+            "type": "alert",
+            "category": "unrealized_pnl_threshold",
+            "title": title,
+            "message": body,
+            "strategy_id": strategy_id,
+            "strategy_name": strategy_name[:50],
+            "symbol": symbol,
+            "unrealized_pnl": str(unrealized_pnl),
+            "threshold": str(threshold),
+            "threshold_type": threshold_type,
+            "position_side": position_side,
+        }
+        
+        sent_count = await self.send_to_user(
+            user_id, title, body, data, db, channel_id="alerts_channel"
+        )
+        return sent_count > 0

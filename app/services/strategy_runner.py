@@ -241,6 +241,7 @@ class StrategyRunner:
             position_broadcast_service=position_broadcast_service,
             mark_price_stream_manager=mark_price_stream_manager,
             trade_service=self.trade_service,
+            notification_service=notification_service,
         )
         self.position_broadcast_service = position_broadcast_service
         self.mark_price_stream_manager = mark_price_stream_manager
@@ -1151,6 +1152,19 @@ class StrategyRunner:
                 # asyncio.Lock is not re-entrant, so nested acquisition would deadlock
                 self._tasks[strategy_id] = task
                 summary.status = StrategyState.running
+            
+            # CRITICAL FIX: Persist running status to database IMMEDIATELY after setting in memory
+            # Without this, the executor loop refreshes status from DB and sees old status (e.g., stopped_by_risk),
+            # causing it to exit immediately - resulting in "dead task" behavior
+            try:
+                self.state_manager.update_strategy_in_db(
+                    strategy_id,
+                    save_to_redis=True,
+                    status=StrategyState.running.value
+                )
+                logger.debug(f"[{strategy_id}] Persisted running status to database")
+            except Exception as persist_exc:
+                logger.warning(f"[{strategy_id}] Failed to persist running status to DB: {persist_exc}")
             
             # Start User Data Stream for this account if enabled (real-time position updates)
             try:

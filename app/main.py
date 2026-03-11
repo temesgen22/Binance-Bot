@@ -33,6 +33,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.price_alerts import router as price_alerts_router
 from app.api.routes.ws_positions import router as ws_positions_router
+from app.api.routes.manual_trading import router as manual_trading_router
 from app.core.position_broadcast import PositionConnectionManager, PositionBroadcastService
 from app.core.mark_price_stream_manager import MarkPriceStreamManager
 from app.api.exception_handlers import (
@@ -759,6 +760,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router)  # FCM token management for push notifications
     app.include_router(price_alerts_router)  # Price alerts (Binance-style push)
     app.include_router(ws_positions_router)  # WebSocket for real-time position updates
+    app.include_router(manual_trading_router)  # Manual trading with TP/SL
     
     # GUI routes - registered AFTER API routers (FastAPI matches more specific routes first, e.g. /trades/list before /trades)
     # Single list to avoid duplicate per-page handlers for path and path/

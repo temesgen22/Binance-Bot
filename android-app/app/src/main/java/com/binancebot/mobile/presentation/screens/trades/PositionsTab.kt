@@ -36,6 +36,8 @@ fun PositionsTab(
     isLoading: Boolean,
     onRefresh: () -> Unit,
     onStrategyClick: ((strategyId: String) -> Unit)? = null,
+    onManualClose: ((Position) -> Unit)? = null,
+    manualCloseInProgressStrategyId: String? = null,
     modifier: Modifier = Modifier
 ) {
     SwipeRefreshBox(
@@ -76,7 +78,9 @@ fun PositionsTab(
                 ) { position ->
                     BinanceStylePositionRow(
                         position = position,
-                        onStrategyClick = onStrategyClick
+                        onStrategyClick = onStrategyClick,
+                        onManualClose = onManualClose,
+                        isManualCloseInProgress = position.strategyId == manualCloseInProgressStrategyId
                     )
                 }
             }
@@ -91,14 +95,44 @@ fun PositionsTab(
 @Composable
 fun BinanceStylePositionRow(
     position: Position,
-    onStrategyClick: ((strategyId: String) -> Unit)? = null
+    onStrategyClick: ((strategyId: String) -> Unit)? = null,
+    onManualClose: ((Position) -> Unit)? = null,
+    isManualCloseInProgress: Boolean = false
 ) {
     val isLong = position.isLong
     val sideColor = if (isLong) LongGreen else ShortRed
     val cardBg = if (isLong) LongBg else ShortBg
     val pnlColor = if (position.unrealizedPnL >= 0) LongGreen else ShortRed
-    val strategyLabel = position.strategyName?.takeIf { it.isNotBlank() } ?: "Not matched"
     val hasStrategy = !position.strategyId.isNullOrBlank()
+    val isManualPosition = position.strategyId?.startsWith("manual_") == true
+    var showManualCloseConfirm by remember { mutableStateOf(false) }
+
+    if (showManualCloseConfirm) {
+        AlertDialog(
+            onDismissRequest = { showManualCloseConfirm = false },
+            title = { Text("Manual Close") },
+            text = {
+                Text(
+                    "Manually close ${position.symbol} ${position.positionSide} and record exit reason as MANUAL?"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showManualCloseConfirm = false
+                        position.strategyId?.let { onManualClose?.invoke(position) }
+                    }
+                ) {
+                    Text("Close position", color = ShortRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualCloseConfirm = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        )
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -182,12 +216,19 @@ fun BinanceStylePositionRow(
                     "Margin Type",
                     position.marginType?.takeIf { it.isNotBlank() } ?: "—"
                 )
+                // Owner label based on position type
+                val ownerLabel = when {
+                    isManualPosition -> "Manual Trade"
+                    position.strategyName?.isNotBlank() == true -> position.strategyName
+                    else -> "Not matched"
+                }
+                
                 // Owner: strategy that owns this position (from backend matching); "Not matched" if manual/unowned
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
-                            if (hasStrategy && onStrategyClick != null)
+                            if (hasStrategy && !isManualPosition && onStrategyClick != null)
                                 Modifier.clickable { position.strategyId?.let { onStrategyClick(it) } }
                             else Modifier
                         ),
@@ -201,16 +242,39 @@ fun BinanceStylePositionRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = strategyLabel,
+                        text = ownerLabel,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
-                        color = if (hasStrategy) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = when {
+                            isManualPosition -> Color(0xFF667EEA)
+                            hasStrategy -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+            }
+
+            // Close button - for both strategy-owned and manual positions
+            if ((hasStrategy || isManualPosition) && onManualClose != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { showManualCloseConfirm = true },
+                    enabled = !isManualCloseInProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ShortRed)
+                ) {
+                    Text(
+                        if (isManualCloseInProgress) "Closing…" else "Close"
                     )
                 }
             }
         }
     }
 }
+
+// Computed property to check if position is manual
+private val Position.isManualPosition: Boolean
+    get() = strategyId?.startsWith("manual_") == true
 
 @Composable
 private fun PositionParamRow(label: String, value: String) {

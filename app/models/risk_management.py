@@ -352,6 +352,11 @@ class StrategyRiskConfigBase(BaseModel):
     max_exposure_usdt: Optional[float] = Field(default=None, ge=0, description="Maximum exposure in USDT")
     max_exposure_pct: Optional[float] = Field(default=None, ge=0, le=1, description="Maximum exposure as percentage of balance (0-1)")
     
+    # Unrealized PnL Alert Thresholds (for push notifications)
+    unrealized_profit_alert_usdt: Optional[float] = Field(default=None, ge=0, description="Send alert when unrealized profit reaches this amount in USDT")
+    unrealized_loss_alert_usdt: Optional[float] = Field(default=None, ge=0, description="Send alert when unrealized loss reaches this amount in USDT (positive value)")
+    unrealized_pnl_alert_cooldown_minutes: int = Field(default=30, ge=1, le=1440, description="Cooldown between unrealized PnL alerts (1-1440 minutes)")
+    
     enabled: bool = Field(default=True, description="Enable strategy-level risk config")
     override_account_limits: bool = Field(default=False, description="If True, strategy limits replace account limits")
     use_more_restrictive: bool = Field(default=True, description="If True, use most restrictive of both configs")
@@ -406,6 +411,9 @@ class StrategyRiskConfigResponse(StrategyRiskConfigBase):
             max_drawdown_pct=float(db_config.max_drawdown_pct) if db_config.max_drawdown_pct else None,
             max_exposure_usdt=float(db_config.max_exposure_usdt) if db_config.max_exposure_usdt else None,
             max_exposure_pct=float(db_config.max_exposure_pct) if db_config.max_exposure_pct else None,
+            unrealized_profit_alert_usdt=float(db_config.unrealized_profit_alert_usdt) if db_config.unrealized_profit_alert_usdt else None,
+            unrealized_loss_alert_usdt=float(db_config.unrealized_loss_alert_usdt) if db_config.unrealized_loss_alert_usdt else None,
+            unrealized_pnl_alert_cooldown_minutes=db_config.unrealized_pnl_alert_cooldown_minutes or 30,
             enabled=db_config.enabled,
             override_account_limits=db_config.override_account_limits,
             use_more_restrictive=db_config.use_more_restrictive,

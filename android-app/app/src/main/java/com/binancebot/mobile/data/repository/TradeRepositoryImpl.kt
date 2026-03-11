@@ -8,8 +8,14 @@ import com.binancebot.mobile.data.remote.api.BinanceBotApi
 import com.binancebot.mobile.data.remote.paging.TradePagingSource
 import com.binancebot.mobile.domain.model.Trade
 import com.binancebot.mobile.domain.model.SymbolPnL
+import com.binancebot.mobile.data.remote.dto.ManualCloseRequestDto
+import com.binancebot.mobile.data.remote.dto.ManualOpenRequestDto
+import com.binancebot.mobile.data.remote.dto.ManualPositionCloseRequestDto
 import com.binancebot.mobile.domain.model.Position
 import com.binancebot.mobile.domain.repository.TradeRepository
+import com.binancebot.mobile.domain.repository.ManualOpenResult
+import com.binancebot.mobile.domain.repository.ManualCloseResult
+import com.binancebot.mobile.domain.repository.ManualPositionInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
@@ -89,6 +95,160 @@ class TradeRepositoryImpl @Inject constructor(
                 Result.success(response.body()!!)
             } else {
                 Result.failure(Exception("Failed to load symbols: ${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun manualClosePosition(
+        strategyId: String,
+        symbol: String?,
+        positionSide: String?
+    ): Result<Unit> {
+        return try {
+            val request = ManualCloseRequestDto(symbol = symbol, positionSide = positionSide)
+            val response = api.manualClosePosition(strategyId, request)
+            if (response.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                val body = response.errorBody()?.string()
+                val msg = body?.takeIf { it.isNotBlank() } ?: response.message() ?: "Manual close failed"
+                Result.failure(Exception(msg))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    // ========== Manual Trading ==========
+    
+    override suspend fun openManualPosition(
+        symbol: String,
+        side: String,
+        usdtAmount: Double,
+        accountId: String,
+        leverage: Int,
+        marginType: String?,
+        takeProfitPct: Double?,
+        stopLossPct: Double?,
+        tpPrice: Double?,
+        slPrice: Double?,
+        trailingStopEnabled: Boolean,
+        trailingStopCallbackRate: Double?,
+        notes: String?
+    ): Result<ManualOpenResult> {
+        return try {
+            val request = ManualOpenRequestDto(
+                symbol = symbol,
+                side = side,
+                usdtAmount = usdtAmount,
+                accountId = accountId,
+                leverage = leverage,
+                marginType = marginType,
+                takeProfitPct = takeProfitPct,
+                stopLossPct = stopLossPct,
+                tpPrice = tpPrice,
+                slPrice = slPrice,
+                trailingStopEnabled = trailingStopEnabled,
+                trailingStopCallbackRate = trailingStopCallbackRate,
+                notes = notes
+            )
+            val response = api.openManualPosition(request)
+            if (response.isSuccessful && response.body() != null) {
+                val dto = response.body()!!
+                Result.success(
+                    ManualOpenResult(
+                        positionId = dto.positionId,
+                        entryOrderId = dto.entryOrderId,
+                        symbol = dto.symbol,
+                        side = dto.side,
+                        quantity = dto.quantity,
+                        entryPrice = dto.entryPrice,
+                        leverage = dto.leverage,
+                        tpOrderId = dto.tpOrderId,
+                        tpPrice = dto.tpPrice,
+                        slOrderId = dto.slOrderId,
+                        slPrice = dto.slPrice,
+                        trailingStopEnabled = dto.trailingStopEnabled
+                    )
+                )
+            } else {
+                val body = response.errorBody()?.string()
+                val msg = body?.takeIf { it.isNotBlank() } ?: response.message() ?: "Failed to open position"
+                Result.failure(Exception(msg))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    override suspend fun closeManualPosition(
+        positionId: String,
+        quantity: Double?
+    ): Result<ManualCloseResult> {
+        return try {
+            val request = ManualPositionCloseRequestDto(
+                positionId = positionId,
+                quantity = quantity
+            )
+            val response = api.closeManualPosition(request)
+            if (response.isSuccessful && response.body() != null) {
+                val dto = response.body()!!
+                Result.success(
+                    ManualCloseResult(
+                        positionId = dto.positionId,
+                        exitOrderId = dto.exitOrderId,
+                        symbol = dto.symbol,
+                        side = dto.side,
+                        closedQuantity = dto.closedQuantity,
+                        remainingQuantity = dto.remainingQuantity,
+                        exitPrice = dto.exitPrice,
+                        realizedPnl = dto.realizedPnl,
+                        feePaid = dto.feePaid
+                    )
+                )
+            } else {
+                val body = response.errorBody()?.string()
+                val msg = body?.takeIf { it.isNotBlank() } ?: response.message() ?: "Failed to close position"
+                Result.failure(Exception(msg))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    override suspend fun getManualPositions(
+        status: String?,
+        accountId: String?,
+        symbol: String?
+    ): Result<List<ManualPositionInfo>> {
+        return try {
+            val response = api.getManualPositions(status, accountId, symbol)
+            if (response.isSuccessful && response.body() != null) {
+                val dto = response.body()!!
+                Result.success(dto.positions.map { pos ->
+                    ManualPositionInfo(
+                        id = pos.id,
+                        symbol = pos.symbol,
+                        side = pos.side,
+                        quantity = pos.quantity,
+                        remainingQuantity = pos.remainingQuantity,
+                        entryPrice = pos.entryPrice,
+                        leverage = pos.leverage,
+                        status = pos.status,
+                        tpPrice = pos.tpPrice,
+                        slPrice = pos.slPrice,
+                        currentPrice = pos.currentPrice,
+                        unrealizedPnl = pos.unrealizedPnl,
+                        realizedPnl = pos.realizedPnl,
+                        createdAt = pos.createdAt
+                    )
+                })
+            } else {
+                val body = response.errorBody()?.string()
+                val msg = body?.takeIf { it.isNotBlank() } ?: response.message() ?: "Failed to get positions"
+                Result.failure(Exception(msg))
             }
         } catch (e: Exception) {
             Result.failure(e)

@@ -1,5 +1,7 @@
 package com.binancebot.mobile.data.remote.api
 
+import com.binancebot.mobile.data.remote.dto.ManualCloseRequestDto
+import com.binancebot.mobile.data.remote.dto.ManualCloseResponseDto
 import com.binancebot.mobile.data.remote.dto.*
 import retrofit2.Response
 import retrofit2.http.*
@@ -182,7 +184,42 @@ interface BinanceBotApi {
     
     @GET("trades/symbols")
     suspend fun getSymbols(): Response<List<String>>
+
+    @POST("trades/strategies/{strategy_id}/manual-close")
+    suspend fun manualClosePosition(
+        @Path("strategy_id") strategyId: String,
+        @Body request: ManualCloseRequestDto
+    ): Response<ManualCloseResponseDto>
     
+    // ========== Manual Trading ==========
+    
+    @POST("manual-trades/open")
+    suspend fun openManualPosition(
+        @Body request: ManualOpenRequestDto
+    ): Response<ManualOpenResponseDto>
+    
+    @POST("manual-trades/close")
+    suspend fun closeManualPosition(
+        @Body request: ManualPositionCloseRequestDto
+    ): Response<ManualPositionCloseResponseDto>
+    
+    @PUT("manual-trades/modify-tp-sl")
+    suspend fun modifyManualPositionTpSl(
+        @Body request: ManualModifyTpSlRequestDto
+    ): Response<ManualModifyResponseDto>
+    
+    @GET("manual-trades/positions")
+    suspend fun getManualPositions(
+        @Query("status") status: String? = null,
+        @Query("account_id") accountId: String? = null,
+        @Query("symbol") symbol: String? = null
+    ): Response<ManualPositionListResponseDto>
+    
+    @GET("manual-trades/positions/{position_id}")
+    suspend fun getManualPosition(
+        @Path("position_id") positionId: String
+    ): Response<ManualPositionResponseDto>
+
     // ========== Accounts ==========
     
     @GET("accounts/list")

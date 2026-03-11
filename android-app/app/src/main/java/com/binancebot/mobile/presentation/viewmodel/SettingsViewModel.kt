@@ -36,10 +36,18 @@ class SettingsViewModel @Inject constructor(
     val alertsEnabled = preferencesManager.alertsEnabled
     val strategyEnabled = preferencesManager.strategyEnabled
     val systemEnabled = preferencesManager.systemEnabled
-    val soundEnabled = preferencesManager.soundEnabled
-    val vibrationEnabled = preferencesManager.vibrationEnabled
     val tradePnLThreshold = preferencesManager.tradePnLThreshold
     val alertPriority = preferencesManager.alertPriority
+    
+    // Per-category sound/vibration preferences
+    val tradesSoundEnabled = preferencesManager.tradesSoundEnabled
+    val tradesVibrationEnabled = preferencesManager.tradesVibrationEnabled
+    val alertsSoundEnabled = preferencesManager.alertsSoundEnabled
+    val alertsVibrationEnabled = preferencesManager.alertsVibrationEnabled
+    val strategySoundEnabled = preferencesManager.strategySoundEnabled
+    val strategyVibrationEnabled = preferencesManager.strategyVibrationEnabled
+    val systemSoundEnabled = preferencesManager.systemSoundEnabled
+    val systemVibrationEnabled = preferencesManager.systemVibrationEnabled
     
     init {
         loadCurrentUser()
@@ -114,12 +122,36 @@ class SettingsViewModel @Inject constructor(
         preferencesManager.setSystemEnabled(enabled)
     }
     
-    suspend fun setSoundEnabled(enabled: Boolean) {
-        preferencesManager.setSoundEnabled(enabled)
+    suspend fun setTradesSoundEnabled(enabled: Boolean) {
+        preferencesManager.setTradesSoundEnabled(enabled)
     }
     
-    suspend fun setVibrationEnabled(enabled: Boolean) {
-        preferencesManager.setVibrationEnabled(enabled)
+    suspend fun setTradesVibrationEnabled(enabled: Boolean) {
+        preferencesManager.setTradesVibrationEnabled(enabled)
+    }
+    
+    suspend fun setAlertsSoundEnabled(enabled: Boolean) {
+        preferencesManager.setAlertsSoundEnabled(enabled)
+    }
+    
+    suspend fun setAlertsVibrationEnabled(enabled: Boolean) {
+        preferencesManager.setAlertsVibrationEnabled(enabled)
+    }
+    
+    suspend fun setStrategySoundEnabled(enabled: Boolean) {
+        preferencesManager.setStrategySoundEnabled(enabled)
+    }
+    
+    suspend fun setStrategyVibrationEnabled(enabled: Boolean) {
+        preferencesManager.setStrategyVibrationEnabled(enabled)
+    }
+    
+    suspend fun setSystemSoundEnabled(enabled: Boolean) {
+        preferencesManager.setSystemSoundEnabled(enabled)
+    }
+    
+    suspend fun setSystemVibrationEnabled(enabled: Boolean) {
+        preferencesManager.setSystemVibrationEnabled(enabled)
     }
     
     suspend fun setTradePnLThreshold(threshold: Double) {

@@ -163,6 +163,14 @@ class TradesViewModel @Inject constructor(
     
     private val _pnlError = MutableStateFlow<String?>(null)
     val pnlError: StateFlow<String?> = _pnlError.asStateFlow()
+
+    /** Strategy ID for which manual close is in progress (null when idle). */
+    private val _manualCloseInProgress = MutableStateFlow<String?>(null)
+    val manualCloseInProgress: StateFlow<String?> = _manualCloseInProgress.asStateFlow()
+
+    /** Error message from last manual close attempt (cleared on next attempt or clearManualCloseError()). */
+    private val _manualCloseError = MutableStateFlow<String?>(null)
+    val manualCloseError: StateFlow<String?> = _manualCloseError.asStateFlow()
     
     // Recreate Flow when filters change
     // Combine filters in two groups since combine supports max 5 parameters
@@ -245,7 +253,130 @@ class TradesViewModel @Inject constructor(
                 .onFailure { /* Silent fail */ }
         }
     }
+
+    /** Manually close a strategy-owned position. On success refreshes PnL/positions. */
+    fun manualClosePosition(strategyId: String, symbol: String?, positionSide: String?) {
+        if (strategyId.isBlank()) return
+        viewModelScope.launch {
+            _manualCloseError.value = null
+            _manualCloseInProgress.value = strategyId
+            tradeRepository.manualClosePosition(
+                strategyId = strategyId,
+                symbol = symbol?.takeIf { it.isNotBlank() },
+                positionSide = positionSide?.takeIf { it.isNotBlank() }
+            )
+                .onSuccess {
+                    _manualCloseInProgress.value = null
+                    // CRITICAL: Immediately remove the closed position from local data
+                    // Don't wait for REST to update - the position is already closed on Binance
+                    _pnlOverview.value = _pnlOverview.value.map { symbolPnL ->
+                        symbolPnL.copy(
+                            openPositions = symbolPnL.openPositions.filter { pos ->
+                                !(pos.strategyId == strategyId && (symbol == null || pos.symbol == symbol))
+                            }
+                        )
+                    }
+                    // Also clear from WebSocket position store
+                    positionUpdateStore.removePosition(strategyId)
+                    // Then refresh from REST (in background, position already cleared from UI)
+                    loadPnLOverview()
+                }
+                .onFailure { e ->
+                    _manualCloseInProgress.value = null
+                    _manualCloseError.value = e.message ?: "Manual close failed"
+                }
+        }
+    }
+
+    fun clearManualCloseError() {
+        _manualCloseError.value = null
+    }
     
+    // ========== Manual Trading ==========
+    
+    private val _manualTradeLoading = MutableStateFlow(false)
+    val manualTradeLoading: StateFlow<Boolean> = _manualTradeLoading.asStateFlow()
+    
+    private val _manualTradeError = MutableStateFlow<String?>(null)
+    val manualTradeError: StateFlow<String?> = _manualTradeError.asStateFlow()
+    
+    private val _manualTradeSuccess = MutableStateFlow<String?>(null)
+    val manualTradeSuccess: StateFlow<String?> = _manualTradeSuccess.asStateFlow()
+    
+    /** Open a new manual position */
+    fun openManualPosition(
+        symbol: String,
+        side: String,
+        usdtAmount: Double,
+        accountId: String = "default",
+        leverage: Int = 10,
+        marginType: String? = "CROSSED",
+        takeProfitPct: Double? = null,
+        stopLossPct: Double? = null,
+        tpPrice: Double? = null,
+        slPrice: Double? = null,
+        trailingStopEnabled: Boolean = false,
+        trailingStopCallbackRate: Double? = null,
+        notes: String? = null
+    ) {
+        viewModelScope.launch {
+            _manualTradeLoading.value = true
+            _manualTradeError.value = null
+            _manualTradeSuccess.value = null
+            
+            tradeRepository.openManualPosition(
+                symbol = symbol,
+                side = side,
+                usdtAmount = usdtAmount,
+                accountId = accountId,
+                leverage = leverage,
+                marginType = marginType,
+                takeProfitPct = takeProfitPct,
+                stopLossPct = stopLossPct,
+                tpPrice = tpPrice,
+                slPrice = slPrice,
+                trailingStopEnabled = trailingStopEnabled,
+                trailingStopCallbackRate = trailingStopCallbackRate,
+                notes = notes
+            )
+                .onSuccess { result ->
+                    _manualTradeSuccess.value = "Position opened: ${result.symbol} ${result.side} @ $${String.format("%.2f", result.entryPrice)}"
+                    loadPnLOverview() // Refresh positions
+                }
+                .onFailure { e ->
+                    _manualTradeError.value = e.message ?: "Failed to open position"
+                }
+            
+            _manualTradeLoading.value = false
+        }
+    }
+    
+    /** Close a manual position by ID (extracted from strategy_id like "manual_xxx") */
+    fun closeManualPositionById(positionId: String) {
+        viewModelScope.launch {
+            _manualTradeLoading.value = true
+            _manualTradeError.value = null
+            
+            tradeRepository.closeManualPosition(positionId)
+                .onSuccess { result ->
+                    _manualTradeSuccess.value = "Position closed: PnL $${String.format("%.2f", result.realizedPnl)}"
+                    // Remove from WebSocket store
+                    positionUpdateStore.removePosition("manual_$positionId")
+                    loadPnLOverview()
+                }
+                .onFailure { e ->
+                    _manualTradeError.value = e.message ?: "Failed to close position"
+                }
+            
+            _manualTradeLoading.value = false
+        }
+    }
+    
+    fun clearManualTradeMessages() {
+        _manualTradeError.value = null
+        _manualTradeSuccess.value = null
+    }
+
     init {
         loadSymbols()
         loadPnLOverview()

@@ -33,10 +33,18 @@ class PreferencesManager @Inject constructor(
         private val ALERTS_ENABLED_KEY = booleanPreferencesKey("alerts_enabled")
         private val STRATEGY_ENABLED_KEY = booleanPreferencesKey("strategy_enabled")
         private val SYSTEM_ENABLED_KEY = booleanPreferencesKey("system_enabled")
-        private val SOUND_ENABLED_KEY = booleanPreferencesKey("sound_enabled")
-        private val VIBRATION_ENABLED_KEY = booleanPreferencesKey("vibration_enabled")
         private val TRADE_PNL_THRESHOLD_KEY = doublePreferencesKey("trade_pnl_threshold")
         private val ALERT_PRIORITY_KEY = intPreferencesKey("alert_priority")
+        
+        // Per-category sound/vibration preferences
+        private val TRADES_SOUND_KEY = booleanPreferencesKey("trades_sound_enabled")
+        private val TRADES_VIBRATION_KEY = booleanPreferencesKey("trades_vibration_enabled")
+        private val ALERTS_SOUND_KEY = booleanPreferencesKey("alerts_sound_enabled")
+        private val ALERTS_VIBRATION_KEY = booleanPreferencesKey("alerts_vibration_enabled")
+        private val STRATEGY_SOUND_KEY = booleanPreferencesKey("strategy_sound_enabled")
+        private val STRATEGY_VIBRATION_KEY = booleanPreferencesKey("strategy_vibration_enabled")
+        private val SYSTEM_SOUND_KEY = booleanPreferencesKey("system_sound_enabled")
+        private val SYSTEM_VIBRATION_KEY = booleanPreferencesKey("system_vibration_enabled")
     }
     
     // Theme Mode
@@ -114,23 +122,84 @@ class PreferencesManager @Inject constructor(
         }
     }
     
-    val soundEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
-        preferences[SOUND_ENABLED_KEY] ?: true
+    // Per-category sound preferences
+    val tradesSoundEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[TRADES_SOUND_KEY] ?: true
     }
     
-    suspend fun setSoundEnabled(enabled: Boolean) {
+    suspend fun setTradesSoundEnabled(enabled: Boolean) {
         dataStore.edit { preferences ->
-            preferences[SOUND_ENABLED_KEY] = enabled
+            preferences[TRADES_SOUND_KEY] = enabled
         }
     }
     
-    val vibrationEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
-        preferences[VIBRATION_ENABLED_KEY] ?: true
+    val tradesVibrationEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[TRADES_VIBRATION_KEY] ?: true
     }
     
-    suspend fun setVibrationEnabled(enabled: Boolean) {
+    suspend fun setTradesVibrationEnabled(enabled: Boolean) {
         dataStore.edit { preferences ->
-            preferences[VIBRATION_ENABLED_KEY] = enabled
+            preferences[TRADES_VIBRATION_KEY] = enabled
+        }
+    }
+    
+    val alertsSoundEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[ALERTS_SOUND_KEY] ?: true
+    }
+    
+    suspend fun setAlertsSoundEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[ALERTS_SOUND_KEY] = enabled
+        }
+    }
+    
+    val alertsVibrationEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[ALERTS_VIBRATION_KEY] ?: true
+    }
+    
+    suspend fun setAlertsVibrationEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[ALERTS_VIBRATION_KEY] = enabled
+        }
+    }
+    
+    val strategySoundEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[STRATEGY_SOUND_KEY] ?: true
+    }
+    
+    suspend fun setStrategySoundEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[STRATEGY_SOUND_KEY] = enabled
+        }
+    }
+    
+    val strategyVibrationEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[STRATEGY_VIBRATION_KEY] ?: true
+    }
+    
+    suspend fun setStrategyVibrationEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[STRATEGY_VIBRATION_KEY] = enabled
+        }
+    }
+    
+    val systemSoundEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SYSTEM_SOUND_KEY] ?: false
+    }
+    
+    suspend fun setSystemSoundEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[SYSTEM_SOUND_KEY] = enabled
+        }
+    }
+    
+    val systemVibrationEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SYSTEM_VIBRATION_KEY] ?: false
+    }
+    
+    suspend fun setSystemVibrationEnabled(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[SYSTEM_VIBRATION_KEY] = enabled
         }
     }
     

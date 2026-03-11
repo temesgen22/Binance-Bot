@@ -1434,4 +1434,65 @@ class NotificationService:
                     limit_value=limit_value,
                 )
             )
+    
+    async def notify_unrealized_pnl_alert(
+        self,
+        strategy_id: str,
+        strategy_name: str,
+        symbol: str,
+        unrealized_pnl: float,
+        threshold: float,
+        threshold_type: str,
+        position_side: str,
+        user_id: Optional[UUID] = None,
+    ) -> None:
+        """Notify about unrealized PnL crossing a threshold.
+        
+        Args:
+            strategy_id: Strategy ID
+            strategy_name: Strategy name
+            symbol: Trading symbol
+            unrealized_pnl: Current unrealized PnL
+            threshold: The threshold that was crossed
+            threshold_type: "profit" or "loss"
+            position_side: LONG or SHORT
+            user_id: User UUID for FCM notifications
+        """
+        # Format message for Telegram
+        if self.telegram:
+            is_profit = threshold_type == "profit"
+            emoji = "📈" if is_profit else "📉"
+            title = "Unrealized Profit Target" if is_profit else "Unrealized Loss Alert"
+            
+            pnl_sign = "+" if unrealized_pnl >= 0 else ""
+            message = f"{emoji} <b>{title}</b>\n\n"
+            message += f"Strategy: <b>{strategy_name}</b>\n"
+            message += f"Symbol: {symbol} ({position_side})\n"
+            message += f"Unrealized PnL: <b>{pnl_sign}${unrealized_pnl:.2f}</b>\n"
+            message += f"Threshold: ${threshold:.2f}\n"
+            
+            if is_profit:
+                message += "\n💰 Consider taking profit or adjusting stop loss."
+            else:
+                message += "\n⚠️ Consider reviewing position or cutting losses."
+            
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            message += f"\n\n⏰ {timestamp}"
+            
+            await self.telegram.send_message(message, disable_notification=False)
+        
+        # FCM notification for mobile
+        if self.fcm and user_id:
+            asyncio.create_task(
+                self._send_fcm_notification(
+                    user_id, "notify_unrealized_pnl_threshold",
+                    strategy_id=strategy_id,
+                    strategy_name=strategy_name,
+                    symbol=symbol,
+                    unrealized_pnl=unrealized_pnl,
+                    threshold=threshold,
+                    threshold_type=threshold_type,
+                    position_side=position_side,
+                )
+            )
 

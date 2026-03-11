@@ -1432,15 +1432,17 @@ class BinanceClient:
             "side": side,
             "type": "STOP_MARKET",
             "stopPrice": stop_price,
-            "reduceOnly": True,  # Stop-loss always reduces position
+            "workingType": "MARK_PRICE",  # Trigger based on mark price
             "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
         
         if close_position:
+            # closePosition and reduceOnly are mutually exclusive
             params["closePosition"] = True
         else:
             rounded_quantity = self.round_quantity(symbol, quantity)
             params["quantity"] = rounded_quantity
+            params["reduceOnly"] = True  # Only add reduceOnly when not using closePosition
         
         logger.info(
             f"Placing STOP_MARKET order: {side} {symbol} stop_price={stop_price} "
@@ -1517,15 +1519,17 @@ class BinanceClient:
             "side": side,
             "type": "TAKE_PROFIT_MARKET",
             "stopPrice": stop_price,
-            "reduceOnly": True,  # Take-profit always reduces position
+            "workingType": "MARK_PRICE",  # Trigger based on mark price
             "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
         
         if close_position:
+            # closePosition and reduceOnly are mutually exclusive
             params["closePosition"] = True
         else:
             rounded_quantity = self.round_quantity(symbol, quantity)
             params["quantity"] = rounded_quantity
+            params["reduceOnly"] = True  # Only add reduceOnly when not using closePosition
         
         logger.info(
             f"Placing TAKE_PROFIT_MARKET order: {side} {symbol} stop_price={stop_price} "
@@ -1565,6 +1569,233 @@ class BinanceClient:
             raise BinanceNetworkError(
                 f"Network error placing TAKE_PROFIT_MARKET order: {exc}",
                 details={"symbol": symbol}
+            ) from exc
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def place_algo_order(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        order_type: Literal["STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"],
+        trigger_price: float,
+        quantity: Optional[float] = None,
+        close_position: bool = False,
+        working_type: str = "MARK_PRICE",
+        callback_rate: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Place an algo order using Binance's new Algo Order API.
+        
+        Required since December 2025 for conditional orders (STOP_MARKET, TAKE_PROFIT_MARKET).
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            side: "BUY" or "SELL"
+            order_type: STOP_MARKET, TAKE_PROFIT_MARKET, or TRAILING_STOP_MARKET
+            trigger_price: Price at which the order triggers
+            quantity: Order quantity (ignored if close_position=True)
+            close_position: If True, closes entire position
+            working_type: MARK_PRICE or CONTRACT_PRICE (default: MARK_PRICE)
+            callback_rate: Required for TRAILING_STOP_MARKET (percentage, e.g., 1.0 for 1%)
+            
+        Returns:
+            Order response dict with algoId, etc.
+        """
+        import hashlib
+        import hmac as hm
+        import urllib.parse
+        import requests
+        
+        # Ensure client is initialized
+        self._ensure()
+        
+        # Time sync
+        if abs(self._time_offset_ms) > 500:
+            logger.debug(f"Large time offset detected ({self._time_offset_ms}ms), resyncing before algo order")
+            self._sync_time_with_binance()
+        
+        base = "https://testnet.binancefuture.com" if self.testnet else "https://fapi.binance.com"
+        url = f"{base}/fapi/v1/algoOrder"
+        
+        ts = int(time.time() * 1000) + self._time_offset_ms
+        
+        params: Dict[str, Any] = {
+            "algoType": "CONDITIONAL",  # Required parameter
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "triggerPrice": str(trigger_price),
+            "workingType": working_type,
+            "timestamp": ts,
+            "recvWindow": 10000,
+        }
+        
+        if close_position:
+            params["closePosition"] = "true"
+        else:
+            rounded_quantity = self.round_quantity(symbol, quantity or 0)
+            params["quantity"] = str(rounded_quantity)
+            params["reduceOnly"] = "true"
+        
+        if order_type == "TRAILING_STOP_MARKET" and callback_rate:
+            params["callbackRate"] = str(callback_rate)
+        
+        # Build query string and sign
+        query_string = urllib.parse.urlencode(params)
+        signature = hm.new(
+            self._api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        
+        logger.info(
+            f"Placing algo {order_type} order: {side} {symbol} trigger_price={trigger_price} "
+            f"quantity={params.get('quantity', 'CLOSE_POSITION')}"
+        )
+        
+        try:
+            resp = requests.post(
+                f"{url}?{query_string}&signature={signature}",
+                headers={"X-MBX-APIKEY": self._api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            algo_id = data.get("algoId")
+            logger.info(f"Algo {order_type} order placed: algoId={algo_id}")
+            # Return in a format compatible with regular orders
+            return {
+                "orderId": algo_id,  # Map algoId to orderId for compatibility
+                "algoId": algo_id,
+                "symbol": symbol,
+                "side": side,
+                "type": order_type,
+                "triggerPrice": trigger_price,
+                "status": data.get("status", "NEW"),
+            }
+        except requests.exceptions.HTTPError as exc:
+            error_data = {}
+            try:
+                error_data = exc.response.json() if exc.response else {}
+            except Exception:
+                pass
+            error_code = error_data.get("code")
+            error_msg = error_data.get("msg", str(exc))
+            raise BinanceAPIError(
+                f"Failed to place algo {order_type} order for {symbol}: {error_msg}",
+                status_code=exc.response.status_code if exc.response else None,
+                error_code=error_code,
+                details={"symbol": symbol, "order_type": order_type}
+            ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error placing algo order: {exc}",
+                details={"symbol": symbol}
+            ) from exc
+
+    def place_algo_stop_loss(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
+        """Place a STOP_MARKET order using the Algo Order API."""
+        return self.place_algo_order(
+            symbol=symbol,
+            side=side,
+            order_type="STOP_MARKET",
+            trigger_price=stop_price,
+            quantity=quantity,
+            close_position=close_position,
+        )
+
+    def place_algo_take_profit(
+        self,
+        *,
+        symbol: str,
+        side: Literal["BUY", "SELL"],
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> Dict[str, Any]:
+        """Place a TAKE_PROFIT_MARKET order using the Algo Order API."""
+        return self.place_algo_order(
+            symbol=symbol,
+            side=side,
+            order_type="TAKE_PROFIT_MARKET",
+            trigger_price=stop_price,
+            quantity=quantity,
+            close_position=close_position,
+        )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def cancel_algo_order(self, symbol: str, algo_id: int) -> Dict[str, Any]:
+        """Cancel an algo order by algoId.
+        
+        Args:
+            symbol: Trading symbol
+            algo_id: Algo order ID to cancel
+            
+        Returns:
+            Cancellation response dict
+        """
+        import hashlib
+        import hmac as hm
+        import urllib.parse
+        import requests
+        
+        self._ensure()
+        
+        base = "https://testnet.binancefuture.com" if self.testnet else "https://fapi.binance.com"
+        url = f"{base}/fapi/v1/algoOrder"
+        
+        ts = int(time.time() * 1000) + self._time_offset_ms
+        
+        params = {
+            "symbol": symbol,
+            "algoId": algo_id,
+            "timestamp": ts,
+            "recvWindow": 10000,
+        }
+        
+        query_string = urllib.parse.urlencode(params)
+        signature = hm.new(
+            self._api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        
+        logger.info(f"Cancelling algo order {algo_id} for {symbol}")
+        
+        try:
+            resp = requests.delete(
+                f"{url}?{query_string}&signature={signature}",
+                headers={"X-MBX-APIKEY": self._api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as exc:
+            error_data = {}
+            try:
+                error_data = exc.response.json() if exc.response else {}
+            except Exception:
+                pass
+            error_code = error_data.get("code")
+            error_msg = error_data.get("msg", str(exc))
+            raise BinanceAPIError(
+                f"Failed to cancel algo order {algo_id} for {symbol}: {error_msg}",
+                status_code=exc.response.status_code if exc.response else None,
+                error_code=error_code,
+                details={"symbol": symbol, "algo_id": algo_id}
+            ) from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            raise BinanceNetworkError(
+                f"Network error cancelling algo order: {exc}",
+                details={"symbol": symbol, "algo_id": algo_id}
             ) from exc
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))

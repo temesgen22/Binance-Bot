@@ -60,6 +60,32 @@ class PositionSummary(BaseModel):
     liquidation_price: Optional[float] = None
     initial_margin: Optional[float] = None
     margin_type: Optional[Literal["CROSSED", "ISOLATED"]] = None
+    
+    # Manual position tracking (optional - only set if position is tracked by ManualTradingService)
+    manual_position_id: Optional[str] = Field(
+        default=None,
+        description="UUID of ManualPosition record if this position is tracked"
+    )
+    tp_price: Optional[float] = Field(
+        default=None,
+        description="Take profit price from ManualPosition"
+    )
+    sl_price: Optional[float] = Field(
+        default=None,
+        description="Stop loss price from ManualPosition"
+    )
+    tp_order_id: Optional[int] = Field(
+        default=None,
+        description="Binance TP order ID"
+    )
+    sl_order_id: Optional[int] = Field(
+        default=None,
+        description="Binance SL order ID"
+    )
+    trailing_stop_enabled: bool = Field(
+        default=False,
+        description="Whether trailing stop is active"
+    )
 
 
 class TradeSummary(BaseModel):

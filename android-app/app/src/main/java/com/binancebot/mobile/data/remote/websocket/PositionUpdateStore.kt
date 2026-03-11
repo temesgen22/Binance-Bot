@@ -38,6 +38,19 @@ class PositionUpdateStore @Inject constructor() {
             _updates.value = _updates.value + (key to data)
         }
     }
+
+    /**
+     * Remove a position from the store (e.g., after manual close).
+     * Sets position size to 0 so merged views filter it out.
+     */
+    fun removePosition(strategyId: String) {
+        if (strategyId.isBlank()) return
+        val current = _updates.value[strategyId]
+        if (current != null) {
+            // Mark position as closed (size 0) so merge logic excludes it
+            _updates.value = _updates.value + (strategyId to current.copy(positionSize = 0.0))
+        }
+    }
 }
 
 data class PositionUpdateData(

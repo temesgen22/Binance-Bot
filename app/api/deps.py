@@ -423,3 +423,33 @@ async def get_account_service_async(
     account_service = AccountService(db, redis_storage)
     request.state.account_service = account_service
     return account_service
+
+
+# ============================================
+# MANUAL TRADING DEPENDENCIES
+# ============================================
+
+def get_notification_service(
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> Optional["NotificationService"]:
+    """
+    Get notification service from strategy runner.
+    Returns None if notifications are not configured.
+    """
+    from app.services.notifier import NotificationService
+    if runner is None:
+        return None
+    return getattr(runner, 'notifications', None)
+
+
+def get_position_broadcast_service(
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> Optional["PositionBroadcastService"]:
+    """
+    Get position broadcast service from strategy runner.
+    Returns None if WebSocket broadcasting is not configured.
+    """
+    from app.core.position_broadcast import PositionBroadcastService
+    if runner is None:
+        return None
+    return getattr(runner, 'position_broadcast_service', None)

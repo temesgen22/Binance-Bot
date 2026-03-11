@@ -94,6 +94,7 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
     /**
      * Check user preferences before showing push. Only show if notifications are enabled
      * and the specific type (trade / alert / strategy / system) is enabled.
+     * Also checks PnL threshold for trade notifications.
      */
     private fun handleDataMessage(data: Map<String, String>) {
         scope.launch {
@@ -113,6 +114,20 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                 AppLogger.d("FCM", "Notification type '$type' disabled in settings, skipping push")
                 return@launch
             }
+            
+            // For trade notifications, check PnL threshold
+            if (type == "trade") {
+                val pnlThreshold = preferencesManager.tradePnLThreshold.first()
+                val pnlString = data["pnl"]
+                if (pnlString != null && pnlThreshold > 0) {
+                    val pnl = pnlString.toDoubleOrNull()
+                    if (pnl != null && kotlin.math.abs(pnl) < pnlThreshold) {
+                        AppLogger.d("FCM", "Trade PnL (${pnl}) below threshold ($pnlThreshold), skipping push")
+                        return@launch
+                    }
+                }
+            }
+            
             showDataMessage(data)
         }
     }
@@ -195,6 +210,20 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                 AppLogger.d("FCM", "Notification type '$type' disabled in settings, skipping push")
                 return@launch
             }
+            
+            // For trade notifications, check PnL threshold
+            if (type == "trade") {
+                val pnlThreshold = preferencesManager.tradePnLThreshold.first()
+                val pnlString = data["pnl"]
+                if (pnlString != null && pnlThreshold > 0) {
+                    val pnl = pnlString.toDoubleOrNull()
+                    if (pnl != null && kotlin.math.abs(pnl) < pnlThreshold) {
+                        AppLogger.d("FCM", "Trade PnL (${pnl}) below threshold ($pnlThreshold), skipping push")
+                        return@launch
+                    }
+                }
+            }
+            
             showNotificationMessage(notification, data)
         }
     }

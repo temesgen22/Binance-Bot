@@ -1,7 +1,7 @@
 """Strategy persistence operations for Redis and database."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Dict, List, Optional
 from uuid import UUID, uuid4
 
@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from app.services.trade_service import TradeService
     from app.core.position_broadcast import PositionBroadcastService
     from app.core.mark_price_stream_manager import MarkPriceStreamManager
+    from app.services.notifier import NotificationService
+    from app.services.notifier import NotificationService
 
 
 class StrategyPersistence:
@@ -36,6 +38,7 @@ class StrategyPersistence:
         position_broadcast_service: Optional["PositionBroadcastService"] = None,
         mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
         trade_service: Optional["TradeService"] = None,
+        notification_service: Optional["NotificationService"] = None,
     ):
         """Initialize persistence handler.
         
@@ -50,6 +53,7 @@ class StrategyPersistence:
             position_broadcast_service: Optional service to push position updates to client WebSockets
             mark_price_stream_manager: Optional manager for mark price streams (real-time PnL)
             trade_service: Optional; required for external-close ingestion (fetch manual close from Binance, save Trade, create CompletedTrade)
+            notification_service: Optional notification service for unrealized PnL alerts
         """
         self.redis = redis_storage
         self.strategy_service = strategy_service
@@ -61,6 +65,10 @@ class StrategyPersistence:
         self.position_broadcast_service = position_broadcast_service
         self.mark_price_stream_manager = mark_price_stream_manager
         self.trade_service = trade_service
+        self.notification_service = notification_service
+        
+        # Cooldown tracking for unrealized PnL alerts: {strategy_id: {alert_type: last_alert_time}}
+        self._unrealized_pnl_alert_cooldowns: Dict[str, Dict[str, datetime]] = {}
     
     @staticmethod
     def _get_or_generate_position_instance_id(
@@ -492,6 +500,11 @@ class StrategyPersistence:
             initial_margin=getattr(summary, "initial_margin", None),
             margin_type=getattr(summary, "margin_type", None),
         )
+        
+        # Check unrealized PnL thresholds and send alerts if needed
+        if position_size > 0 and unrealized_pnl != 0:
+            asyncio.create_task(self._check_unrealized_pnl_thresholds(summary, unrealized_pnl))
+        
         if self.user_id and self.mark_price_stream_manager:
             try:
                 self.mark_price_stream_manager.register_position(
@@ -1269,5 +1282,123 @@ class StrategyPersistence:
             result["consistent"] = False
         
         return result
+    
+    async def _check_unrealized_pnl_thresholds(
+        self,
+        summary: StrategySummary,
+        unrealized_pnl: float,
+    ) -> None:
+        """Check if unrealized PnL crossed alert thresholds and send notifications.
+        
+        Uses cooldown to prevent notification spam. Checks per-strategy risk config
+        for threshold values.
+        
+        Args:
+            summary: Strategy summary
+            unrealized_pnl: Current unrealized PnL value
+        """
+        if not self.notification_service or not self.user_id:
+            return
+        
+        if not self.strategy_service or not hasattr(self.strategy_service, "db_service"):
+            return
+        
+        strategy_id = summary.id
+        
+        try:
+            # Get strategy risk config using existing db_service method
+            risk_config = None
+            
+            try:
+                risk_config = await asyncio.to_thread(
+                    self.strategy_service.db_service.get_strategy_risk_config,
+                    self.user_id,
+                    strategy_id,
+                )
+            except Exception as e:
+                logger.debug(f"[{strategy_id}] Could not fetch strategy risk config: {e}")
+                return
+            
+            if not risk_config:
+                return
+            
+            # Check if thresholds are configured
+            profit_threshold = float(risk_config.unrealized_profit_alert_usdt) if risk_config.unrealized_profit_alert_usdt else None
+            loss_threshold = float(risk_config.unrealized_loss_alert_usdt) if risk_config.unrealized_loss_alert_usdt else None
+            cooldown_minutes = risk_config.unrealized_pnl_alert_cooldown_minutes or 30
+            
+            if not profit_threshold and not loss_threshold:
+                return
+            
+            # Initialize cooldown tracking for this strategy
+            if strategy_id not in self._unrealized_pnl_alert_cooldowns:
+                self._unrealized_pnl_alert_cooldowns[strategy_id] = {}
+            
+            now = datetime.now(timezone.utc)
+            cooldown_delta = timedelta(minutes=cooldown_minutes)
+            
+            # Check profit threshold
+            if profit_threshold and unrealized_pnl >= profit_threshold:
+                last_profit_alert = self._unrealized_pnl_alert_cooldowns[strategy_id].get("profit")
+                if not last_profit_alert or (now - last_profit_alert) >= cooldown_delta:
+                    # Send profit alert
+                    self._unrealized_pnl_alert_cooldowns[strategy_id]["profit"] = now
+                    logger.info(
+                        f"[{strategy_id}] Unrealized profit threshold crossed: "
+                        f"${unrealized_pnl:.2f} >= ${profit_threshold:.2f}"
+                    )
+                    await self._send_unrealized_pnl_alert(
+                        summary, unrealized_pnl, profit_threshold, "profit"
+                    )
+            
+            # Check loss threshold (unrealized_pnl is negative for losses)
+            if loss_threshold and unrealized_pnl <= -abs(loss_threshold):
+                last_loss_alert = self._unrealized_pnl_alert_cooldowns[strategy_id].get("loss")
+                if not last_loss_alert or (now - last_loss_alert) >= cooldown_delta:
+                    # Send loss alert
+                    self._unrealized_pnl_alert_cooldowns[strategy_id]["loss"] = now
+                    logger.info(
+                        f"[{strategy_id}] Unrealized loss threshold crossed: "
+                        f"${unrealized_pnl:.2f} <= -${loss_threshold:.2f}"
+                    )
+                    await self._send_unrealized_pnl_alert(
+                        summary, unrealized_pnl, loss_threshold, "loss"
+                    )
+                    
+        except Exception as e:
+            logger.debug(f"[{strategy_id}] Error checking unrealized PnL thresholds: {e}")
+    
+    async def _send_unrealized_pnl_alert(
+        self,
+        summary: StrategySummary,
+        unrealized_pnl: float,
+        threshold: float,
+        threshold_type: str,
+    ) -> None:
+        """Send unrealized PnL alert notification via FCM and Telegram.
+        
+        Args:
+            summary: Strategy summary
+            unrealized_pnl: Current unrealized PnL
+            threshold: The threshold that was crossed
+            threshold_type: "profit" or "loss"
+        """
+        if not self.notification_service:
+            return
+        
+        try:
+            # Send via NotificationService (handles both Telegram and FCM)
+            await self.notification_service.notify_unrealized_pnl_alert(
+                strategy_id=summary.id,
+                strategy_name=summary.name,
+                symbol=summary.symbol,
+                unrealized_pnl=unrealized_pnl,
+                threshold=threshold,
+                threshold_type=threshold_type,
+                position_side=summary.position_side or "LONG",
+                user_id=self.user_id,
+            )
+        except Exception as e:
+            logger.warning(f"[{summary.id}] Failed to send unrealized PnL alert: {e}")
 
 

@@ -77,6 +77,7 @@ class User(Base):
     api_tokens = relationship("APIToken", back_populates="user", cascade="all, delete-orphan")
     fcm_tokens = relationship("FCMToken", back_populates="user", cascade="all, delete-orphan")
     price_alerts = relationship("PriceAlert", back_populates="user", cascade="all, delete-orphan")
+    manual_positions = relationship("ManualPosition", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("username ~ '^[a-z0-9_-]+$'", name="users_username_check"),
@@ -1032,6 +1033,11 @@ class StrategyRiskConfig(Base):
     max_drawdown_pct = Column(Numeric(10, 6), nullable=True)
     max_exposure_usdt = Column(Numeric(20, 8), nullable=True)
     max_exposure_pct = Column(Numeric(10, 6), nullable=True)
+    
+    # Unrealized PnL Alert Thresholds (for push notifications)
+    unrealized_profit_alert_usdt = Column(Numeric(20, 8), nullable=True)  # Alert when unrealized profit reaches this
+    unrealized_loss_alert_usdt = Column(Numeric(20, 8), nullable=True)    # Alert when unrealized loss reaches this (positive value)
+    unrealized_pnl_alert_cooldown_minutes = Column(Integer, nullable=False, default=30)  # Cooldown between alerts (minutes)
 
     # Behavior Settings
     enabled = Column(Boolean, nullable=False, default=True)
@@ -1264,5 +1270,121 @@ class CompletedTradeOrder(Base):
         Index("idx_completed_trade_orders_completed_trade", "completed_trade_id"),
         # Prevent duplicate entries (same trade, same role, same completed trade)
         UniqueConstraint("completed_trade_id", "trade_id", "order_role", name="uq_completed_trade_order"),
+    )
+
+
+# ============================================
+# MANUAL TRADING TABLES
+# ============================================
+
+class ManualPosition(Base):
+    """Track manually opened positions independently from strategies.
+    
+    Manual positions are opened via the /api/manual-trades/ endpoints and
+    support Binance native TP/SL orders, partial closes, and trailing stops.
+    """
+    __tablename__ = "manual_positions"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(String(50), nullable=False, default="default", index=True)
+    
+    # Position details
+    symbol = Column(String(20), nullable=False, index=True)
+    side = Column(String(10), nullable=False)  # "LONG" or "SHORT"
+    quantity = Column(Numeric(precision=20, scale=8), nullable=False)
+    entry_price = Column(Numeric(precision=20, scale=8), nullable=False)
+    leverage = Column(Integer, nullable=False, default=10)
+    margin_type = Column(String(10), default="CROSSED")  # CROSSED or ISOLATED
+    
+    # Order IDs from Binance
+    entry_order_id = Column(BigInteger, nullable=False, unique=True)
+    tp_order_id = Column(BigInteger, nullable=True)
+    sl_order_id = Column(BigInteger, nullable=True)
+    
+    # TP/SL configuration
+    take_profit_pct = Column(Numeric(precision=10, scale=6), nullable=True)
+    stop_loss_pct = Column(Numeric(precision=10, scale=6), nullable=True)
+    tp_price = Column(Numeric(precision=20, scale=8), nullable=True)
+    sl_price = Column(Numeric(precision=20, scale=8), nullable=True)
+    trailing_stop_enabled = Column(Boolean, default=False)
+    trailing_stop_callback_rate = Column(Numeric(precision=5, scale=2), nullable=True)
+    
+    # Position state
+    status = Column(String(20), default="OPEN", index=True)  # OPEN, CLOSED, TP_HIT, SL_HIT, LIQUIDATED
+    remaining_quantity = Column(Numeric(precision=20, scale=8), nullable=True)
+    paper_trading = Column(Boolean, default=False, index=True)
+    
+    # Exit details (filled when closed)
+    exit_price = Column(Numeric(precision=20, scale=8), nullable=True)
+    exit_order_id = Column(BigInteger, nullable=True)
+    exit_reason = Column(String(20), nullable=True)  # MANUAL, TP, SL, LIQUIDATION
+    realized_pnl = Column(Numeric(precision=20, scale=8), nullable=True)
+    fee_paid = Column(Numeric(precision=20, scale=8), nullable=True)
+    funding_fee = Column(Numeric(precision=20, scale=8), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Notes
+    notes = Column(Text, nullable=True)
+    
+    # Relationships
+    user = relationship("User", back_populates="manual_positions")
+    trades = relationship("ManualTrade", back_populates="position", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        CheckConstraint("side IN ('LONG', 'SHORT')", name="manual_positions_side_check"),
+        CheckConstraint("status IN ('OPEN', 'CLOSED', 'TP_HIT', 'SL_HIT', 'LIQUIDATED', 'PARTIAL_CLOSE')", name="manual_positions_status_check"),
+        Index('ix_manual_positions_user_status', 'user_id', 'status'),
+        Index('ix_manual_positions_user_account', 'user_id', 'account_id'),
+        Index('ix_manual_positions_symbol_account', 'symbol', 'account_id'),
+    )
+
+
+class ManualTrade(Base):
+    """Individual trades within a manual position (entry, partial close, exit).
+    
+    Each ManualTrade represents a single order execution associated with
+    a ManualPosition. This allows tracking of partial fills and trade history.
+    """
+    __tablename__ = "manual_trades"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    position_id = Column(PGUUID(as_uuid=True), ForeignKey("manual_positions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Trade details
+    order_id = Column(BigInteger, nullable=False, unique=True)
+    symbol = Column(String(20), nullable=False)
+    side = Column(String(10), nullable=False)  # BUY or SELL
+    order_type = Column(String(20), nullable=False)  # MARKET, TAKE_PROFIT_MARKET, STOP_MARKET
+    quantity = Column(Numeric(precision=20, scale=8), nullable=False)
+    price = Column(Numeric(precision=20, scale=8), nullable=False)
+    
+    # Trade classification
+    trade_type = Column(String(20), nullable=False)  # ENTRY, PARTIAL_CLOSE, EXIT, TP, SL
+    
+    # Costs
+    commission = Column(Numeric(precision=20, scale=8), nullable=True)
+    commission_asset = Column(String(10), nullable=True)
+    realized_pnl = Column(Numeric(precision=20, scale=8), nullable=True)
+    
+    # Timestamps
+    executed_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    position = relationship("ManualPosition", back_populates="trades")
+    user = relationship("User")
+    
+    __table_args__ = (
+        CheckConstraint("side IN ('BUY', 'SELL')", name="manual_trades_side_check"),
+        CheckConstraint("trade_type IN ('ENTRY', 'PARTIAL_CLOSE', 'EXIT', 'TP', 'SL')", name="manual_trades_type_check"),
+        Index('ix_manual_trades_position', 'position_id'),
+        Index('ix_manual_trades_user', 'user_id'),
+        Index('ix_manual_trades_executed', 'executed_at'),
     )
 
