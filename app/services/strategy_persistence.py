@@ -446,7 +446,15 @@ class StrategyPersistence:
                                 trade_service=self.trade_service,
                                 paper_trading=paper_trading,
                                 order_manager=self.order_manager,
-                                entry_quantity=entry_quantity if (entry_quantity and entry_quantity > 0) else None,
+                                entry_quantity=(
+                                    entry_quantity
+                                    if (
+                                        entry_quantity is not None
+                                        and isinstance(entry_quantity, (int, float))
+                                        and entry_quantity > 0
+                                    )
+                                    else None
+                                ),
                             )
                         else:
                             logger.debug(f"[{summary.id}] External close skipped: db_strategy not found")
@@ -800,7 +808,15 @@ class StrategyPersistence:
                                     trade_service=self.trade_service,
                                     paper_trading=paper_trading,
                                     order_manager=self.order_manager,
-                                    entry_quantity=entry_quantity if (entry_quantity and entry_quantity > 0) else None,
+                                    entry_quantity=(
+                                        entry_quantity
+                                        if (
+                                            entry_quantity is not None
+                                            and isinstance(entry_quantity, (int, float))
+                                            and entry_quantity > 0
+                                        )
+                                        else None
+                                    ),
                                 )
                             else:
                                 logger.debug(f"[{summary.id}] External close (REST) skipped: db_strategy not found")
