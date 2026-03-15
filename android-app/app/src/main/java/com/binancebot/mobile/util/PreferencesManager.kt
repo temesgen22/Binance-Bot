@@ -34,6 +34,7 @@ class PreferencesManager @Inject constructor(
         private val STRATEGY_ENABLED_KEY = booleanPreferencesKey("strategy_enabled")
         private val SYSTEM_ENABLED_KEY = booleanPreferencesKey("system_enabled")
         private val TRADE_PNL_THRESHOLD_KEY = doublePreferencesKey("trade_pnl_threshold")
+        private val UNREALIZED_PNL_THRESHOLD_KEY = doublePreferencesKey("unrealized_pnl_threshold")
         private val ALERT_PRIORITY_KEY = intPreferencesKey("alert_priority")
         
         // Per-category sound/vibration preferences
@@ -210,6 +211,16 @@ class PreferencesManager @Inject constructor(
     suspend fun setTradePnLThreshold(threshold: Double) {
         dataStore.edit { preferences ->
             preferences[TRADE_PNL_THRESHOLD_KEY] = threshold
+        }
+    }
+    
+    val unrealizedPnLThreshold: Flow<Double> = dataStore.data.map { preferences ->
+        preferences[UNREALIZED_PNL_THRESHOLD_KEY] ?: 100.0
+    }
+    
+    suspend fun setUnrealizedPnLThreshold(threshold: Double) {
+        dataStore.edit { preferences ->
+            preferences[UNREALIZED_PNL_THRESHOLD_KEY] = threshold
         }
     }
     

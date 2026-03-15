@@ -126,15 +126,24 @@ class TradesViewModel @Inject constructor(
         }
         val merged = restOpen.map { TaggedPosition(it, fromRest = true) } +
             wsOpen.map { TaggedPosition(it, fromRest = false) }
-        fun positionKey(p: Position): String = "${p.symbol}:${p.positionSide}:${p.accountId ?: ""}"
-        return merged
+        // Normalize accountId so REST (often null) and WS ("default") group together; otherwise manual positions from REST show as separate from WS and can appear as "External" (web app uses same idea)
+        fun positionKey(p: Position): String = "${p.symbol}:${p.positionSide}:${p.accountId?.takeIf { it.isNotBlank() } ?: "default"}"
+        val deduped = merged
             .groupBy { positionKey(it.position) }
             .values
             .map { group ->
                 val rest = group.firstOrNull { it.fromRest }?.position
-                val base = rest ?: group.first().position
+                // When no REST, prefer manual over strategy over external (same as web app bySymbolSide)
+                val base = rest ?: group.map { it.position }.maxByOrNull { p ->
+                    when {
+                        p.strategyId?.startsWith("manual_") == true -> 2
+                        p.strategyId?.startsWith("external_") == true -> 0
+                        else -> 1
+                    }
+                } ?: group.first().position
                 val ws = group.firstOrNull { !it.fromRest }?.position
                 if (ws != null) {
+                    // Overlay WS price/pnl only; keep strategyId/strategyName from REST so owner (Manual Trade / External / strategy) is correct
                     base.copy(
                         currentPrice = ws.currentPrice,
                         unrealizedPnL = ws.unrealizedPnL
@@ -143,6 +152,14 @@ class TradesViewModel @Inject constructor(
                     base
                 }
             }
+        // Sort like web app: by symbol, then LONG before SHORT, then by strategy_id
+        return deduped.sortedWith(
+            compareBy(
+                { it.symbol },
+                { if (it.positionSide == "LONG") 0 else 1 },
+                { it.strategyId ?: "" }
+            )
+        )
     }
 
     private data class TaggedPosition(

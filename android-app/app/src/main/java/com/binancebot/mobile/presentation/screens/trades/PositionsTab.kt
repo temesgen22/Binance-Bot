@@ -216,12 +216,13 @@ fun BinanceStylePositionRow(
                     "Margin Type",
                     position.marginType?.takeIf { it.isNotBlank() } ?: "—"
                 )
-                // Owner label based on position type (matches web app: Manual Trade, External, or strategy name)
+                // Owner label: same as web app — Manual Trade, External, strategy name, "Strategy" (id but no name), or External (no id)
                 val ownerLabel = when {
                     isManualPosition -> "Manual Trade"
                     isExternalPosition -> "External"
                     position.strategyName?.isNotBlank() == true -> position.strategyName
-                    else -> "Not matched"
+                    position.strategyId?.isNotBlank() == true -> "Strategy"
+                    else -> "External"
                 }
                 
                 // Owner: strategy that owns this position (from backend matching); External = opened on Binance outside bot

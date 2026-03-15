@@ -155,14 +155,7 @@ class NotificationTrigger @Inject constructor(
                     }
                     
                     is UpdateMessage.Error -> {
-                        if (prefs.alertsEnabled) {
-                            notificationManager.showAlertNotification(
-                                title = "Connection Error",
-                                message = message.message,
-                                alertType = "error",
-                                category = "system_error"
-                            )
-                        }
+                        // Do not show connection error notification (WebSocket reconnects automatically)
                     }
                     
                     is UpdateMessage.Connected -> {

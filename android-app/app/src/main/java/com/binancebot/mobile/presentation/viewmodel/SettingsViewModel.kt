@@ -37,6 +37,7 @@ class SettingsViewModel @Inject constructor(
     val strategyEnabled = preferencesManager.strategyEnabled
     val systemEnabled = preferencesManager.systemEnabled
     val tradePnLThreshold = preferencesManager.tradePnLThreshold
+    val unrealizedPnLThreshold = preferencesManager.unrealizedPnLThreshold
     val alertPriority = preferencesManager.alertPriority
     
     // Per-category sound/vibration preferences
@@ -156,6 +157,10 @@ class SettingsViewModel @Inject constructor(
     
     suspend fun setTradePnLThreshold(threshold: Double) {
         preferencesManager.setTradePnLThreshold(threshold)
+    }
+    
+    suspend fun setUnrealizedPnLThreshold(threshold: Double) {
+        preferencesManager.setUnrealizedPnLThreshold(threshold)
     }
     
     suspend fun setAlertPriority(priority: Int) {

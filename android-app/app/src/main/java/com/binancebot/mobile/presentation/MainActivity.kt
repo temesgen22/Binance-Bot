@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermission()
         
         if (tokenManager.isLoggedIn()) {
+            // Real-time open positions: same as web app — connect to /api/ws/positions, feed updates into store; TradesViewModel merges with REST and UI updates live
             val wsUrl = Constants.BASE_URL
                 .replace("http://", "ws://")
                 .replace("https://", "wss://") + "ws/positions"

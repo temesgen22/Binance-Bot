@@ -30,6 +30,7 @@ fun NotificationSettingsScreen(
     val strategyEnabled by settingsViewModel.strategyEnabled.collectAsState(initial = true)
     val systemEnabled by settingsViewModel.systemEnabled.collectAsState(initial = false)
     val tradePnLThreshold by settingsViewModel.tradePnLThreshold.collectAsState(initial = 100.0)
+    val unrealizedPnLThreshold by settingsViewModel.unrealizedPnLThreshold.collectAsState(initial = 100.0)
     
     // Per-category sound/vibration settings
     val tradesSoundEnabled by settingsViewModel.tradesSoundEnabled.collectAsState(initial = true)
@@ -43,6 +44,14 @@ fun NotificationSettingsScreen(
     
     val scope = rememberCoroutineScope()
     var pnlThresholdText by remember { mutableStateOf(tradePnLThreshold.toString()) }
+    var unrealizedPnLThresholdText by remember { mutableStateOf(unrealizedPnLThreshold.toString()) }
+    // Sync text fields when saved thresholds load from DataStore (e.g. when opening screen)
+    LaunchedEffect(tradePnLThreshold) {
+        pnlThresholdText = tradePnLThreshold.toString()
+    }
+    LaunchedEffect(unrealizedPnLThreshold) {
+        unrealizedPnLThresholdText = unrealizedPnLThreshold.toString()
+    }
     
     Scaffold(
         topBar = {
@@ -114,19 +123,22 @@ fun NotificationSettingsScreen(
                 ) {
                     OutlinedTextField(
                         value = pnlThresholdText,
-                        onValueChange = { 
+                        onValueChange = {
                             pnlThresholdText = it
                             it.toDoubleOrNull()?.let { threshold ->
                                 scope.launch { settingsViewModel.setTradePnLThreshold(threshold) }
                             }
                         },
                         label = { Text("PnL Threshold (USD)") },
+                        supportingText = {
+                            Text("Positive: notify when profit or loss ≥ this. Negative (e.g. -78): notify for loss only.")
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
                 }
                 
-                // Alert Notifications
+                // Alert Notifications (includes unrealized PnL alerts)
                 NotificationCategoryCard(
                     title = "Alert Notifications",
                     enabled = alertsEnabled,
@@ -135,7 +147,23 @@ fun NotificationSettingsScreen(
                     onSoundChange = { scope.launch { settingsViewModel.setAlertsSoundEnabled(it) } },
                     vibrationEnabled = alertsVibrationEnabled,
                     onVibrationChange = { scope.launch { settingsViewModel.setAlertsVibrationEnabled(it) } }
-                )
+                ) {
+                    OutlinedTextField(
+                        value = unrealizedPnLThresholdText,
+                        onValueChange = {
+                            unrealizedPnLThresholdText = it
+                            it.toDoubleOrNull()?.let { threshold ->
+                                scope.launch { settingsViewModel.setUnrealizedPnLThreshold(threshold) }
+                            }
+                        },
+                        label = { Text("Unrealized PnL Threshold (USD)") },
+                        supportingText = {
+                            Text("Positive: notify when profit or loss ≥ this. Negative (e.g. -78): notify for loss only.")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
                 
                 // Strategy Notifications
                 NotificationCategoryCard(

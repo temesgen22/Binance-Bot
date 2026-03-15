@@ -34,14 +34,22 @@ class WebSocketManager @Inject constructor(
     @Volatile
     private var isConnected = false
     
+    @Volatile
+    private var isConnecting = false
+    
     fun connect(url: String) {
         if (isConnected) {
             AppLogger.d("WebSocketManager", "WebSocket already connected, skipping")
             return
         }
-        
+        if (isConnecting) {
+            AppLogger.d("WebSocketManager", "WebSocket connection already in progress, skipping duplicate attempt")
+            return
+        }
+        isConnecting = true
         AppLogger.d("WebSocketManager", "Attempting to connect to WebSocket: $url")
         val token = tokenManager.getAccessToken() ?: run {
+            isConnecting = false
             AppLogger.e("WebSocketManager", "No access token available, cannot connect")
             scope.launch {
                 _updates.tryEmit(UpdateMessage.Error("Not authenticated"))
@@ -56,6 +64,7 @@ class WebSocketManager @Inject constructor(
         AppLogger.d("WebSocketManager", "Creating WebSocket connection...")
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                isConnecting = false
                 isConnected = true
                 AppLogger.d("WebSocketManager", "WebSocket connection opened successfully")
                 // ✅ Use tryEmit from coroutine scope
@@ -153,21 +162,22 @@ class WebSocketManager @Inject constructor(
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                isConnecting = false
                 isConnected = false
-                val errorMessage = when {
+                val rawMessage = when {
                     response?.code == 404 -> "WebSocket endpoint not found (404). Backend WebSocket server not implemented yet."
                     response != null -> "WebSocket connection failed: ${response.code} ${response.message}"
                     else -> t.message ?: "Connection failed"
                 }
-                AppLogger.e("WebSocketManager", errorMessage)
-                // Don't emit error to avoid showing error notifications when WebSocket isn't available
-                // Only emit if it's a real connection error (not 404)
+                AppLogger.e("WebSocketManager", rawMessage)
+                // User-facing message: avoid raw "failed to connect to /IP from /IP (port)" on transient failures; we reconnect automatically
+                val userMessage = if (response?.code == 404) rawMessage
+                else "Connection lost. Reconnecting…"
                 if (response?.code != 404) {
                     scope.launch {
-                        _updates.tryEmit(UpdateMessage.Error(errorMessage))
+                        _updates.tryEmit(UpdateMessage.Error(userMessage))
                     }
                 }
-                // Don't attempt reconnection for 404 errors
                 if (response?.code != 404) {
                     reconnect(url)
                 }
@@ -186,6 +196,7 @@ class WebSocketManager @Inject constructor(
     fun disconnect() {
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
+        isConnecting = false
         isConnected = false
         scope.cancel()
     }

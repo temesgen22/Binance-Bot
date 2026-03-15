@@ -23,6 +23,28 @@ ALERT_TYPES = ("PRICE_RISES_ABOVE", "PRICE_DROPS_BELOW", "PRICE_REACHES")
 PRICE_ALERTS_CHANNEL_ID = "price_alerts_channel"
 
 
+def _format_price_for_display(price: float | Decimal, symbol: str = "") -> str:
+    """Format price for notification body (show enough decimals so e.g. 0.01158 is not shown as 0.01)."""
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return str(price)
+    if p != p or p == 0:
+        return "0"
+    if p >= 1:
+        return f"{p:,.2f}"
+    # Small prices: use enough decimals to avoid losing digits (e.g. 0.01158 -> "0.01158", not "0.01")
+    if p >= 0.1:
+        s = f"{p:.4f}".rstrip("0").rstrip(".")
+    elif p >= 0.01:
+        s = f"{p:.5f}".rstrip("0").rstrip(".")
+    elif p >= 0.0001:
+        s = f"{p:.6f}".rstrip("0").rstrip(".")
+    else:
+        s = f"{p:.8f}".rstrip("0").rstrip(".")
+    return s
+
+
 def fetch_prices(symbols: List[str], testnet: bool = False) -> Dict[str, float]:
     """
     Fetch current price for each symbol. Uses sync PublicMarketDataClient in thread pool.
@@ -137,13 +159,16 @@ async def run_price_alert_check(
 
     # Send FCM after commit so DB state is consistent
     for alert, current_price in triggered_alerts:
+        symbol = alert.symbol or ""
+        target_str = _format_price_for_display(alert.target_price, symbol)
+        current_str = _format_price_for_display(current_price, symbol)
         title = f"Price Alert: {alert.symbol}"
         if alert.alert_type == "PRICE_RISES_ABOVE":
-            body = f"{alert.symbol} rose above ${alert.target_price:,.2f} (current: ${current_price:,.2f})"
+            body = f"{alert.symbol} rose above ${target_str} (current: ${current_str})"
         elif alert.alert_type == "PRICE_DROPS_BELOW":
-            body = f"{alert.symbol} dropped below ${alert.target_price:,.2f} (current: ${current_price:,.2f})"
+            body = f"{alert.symbol} dropped below ${target_str} (current: ${current_str})"
         else:
-            body = f"{alert.symbol} reached ${alert.target_price:,.2f} (current: ${current_price:,.2f})"
+            body = f"{alert.symbol} reached ${target_str} (current: ${current_str})"
         data = {
             "type": "price_alert",
             "symbol": alert.symbol,

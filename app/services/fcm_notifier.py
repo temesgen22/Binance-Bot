@@ -29,6 +29,38 @@ except ImportError:
 from app.models.strategy import StrategySummary
 
 
+def _format_qty_for_display(qty: float) -> str:
+    """Format quantity for notification display (avoid long decimals)."""
+    try:
+        x = float(qty) if qty is not None else 0
+    except (TypeError, ValueError):
+        return str(qty) if qty is not None else "0"
+    if x == 0 or (isinstance(qty, float) and qty != qty):
+        return "0"
+    if x >= 1:
+        return f"{x:,.2f}".rstrip("0").rstrip(".")
+    if x >= 0.01:
+        return f"{x:.4f}".rstrip("0").rstrip(".")
+    return f"{x:.6f}".rstrip("0").rstrip(".")
+
+
+def _format_price_for_display(price: float, symbol: str = "") -> str:
+    """Format price for notification display (readable decimals)."""
+    if price is None or (isinstance(price, float) and price != price):
+        return "0"
+    try:
+        p = float(price)
+        if symbol and "USDT" in symbol.upper():
+            if p >= 1:
+                return f"{p:,.2f}"
+            return f"{p:.4f}"
+        if p >= 1:
+            return f"{p:,.2f}"
+        return f"{p:.6f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(price)
+
+
 class FCMNotifier:
     """FCM notifier for sending push notifications to mobile devices."""
     
@@ -165,6 +197,10 @@ class FCMNotifier:
                 return 0
             
             # Prepare messages for each token (firebase-admin 6.0+ uses send_each instead of send_multicast)
+            # Include title and message in data so data-only delivery (e.g. foreground) still shows correct text
+            data_payload: Dict[str, str] = {k: str(v) for k, v in (data or {}).items()}
+            data_payload["title"] = title
+            data_payload["message"] = body
             token_list = [token.token for token in tokens]
             messages = [
                 messaging.Message(
@@ -172,7 +208,7 @@ class FCMNotifier:
                         title=title,
                         body=body,
                     ),
-                    data=data or {},
+                    data=data_payload,
                     token=token_str,
                     android=messaging.AndroidConfig(
                         priority="high",
@@ -378,7 +414,18 @@ class FCMNotifier:
             True if notification was sent successfully
         """
         title = f"Trade Executed - {strategy_name}"
-        body = f"{side} {quantity} {symbol} @ {price}"
+        # Format quantity and price for user-friendly display (avoid raw long decimals)
+        try:
+            qty_f = float(quantity)
+            qty_display = _format_qty_for_display(qty_f)
+        except (TypeError, ValueError):
+            qty_display = quantity
+        try:
+            price_f = float(price)
+            price_display = _format_price_for_display(price_f, symbol)
+        except (TypeError, ValueError):
+            price_display = price
+        body = f"{side} {qty_display} {symbol} @ {price_display}"
         if pnl is not None:
             pnl_sign = "+" if pnl >= 0 else ""
             body += f" | PnL: {pnl_sign}${pnl:.2f}"

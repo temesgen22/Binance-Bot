@@ -115,15 +115,41 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                 return@launch
             }
             
-            // For trade notifications, check PnL threshold
+            // For trade notifications (realized PnL), filter by threshold. Positive = min magnitude for both profit/loss; negative = loss only (e.g. -78 = notify when loss >= 78).
             if (type == "trade") {
                 val pnlThreshold = preferencesManager.tradePnLThreshold.first()
                 val pnlString = data["pnl"]
-                if (pnlString != null && pnlThreshold > 0) {
+                if (pnlString != null && pnlThreshold != 0.0) {
                     val pnl = pnlString.toDoubleOrNull()
-                    if (pnl != null && kotlin.math.abs(pnl) < pnlThreshold) {
-                        AppLogger.d("FCM", "Trade PnL (${pnl}) below threshold ($pnlThreshold), skipping push")
-                        return@launch
+                    if (pnl != null) {
+                        val skip = when {
+                            pnlThreshold < 0 -> pnl > pnlThreshold  // loss-only: show when pnl <= threshold (e.g. -78: show when pnl <= -78)
+                            else -> kotlin.math.abs(pnl) < pnlThreshold  // positive: show when |pnl| >= threshold
+                        }
+                        if (skip) {
+                            AppLogger.d("FCM", "Trade PnL ($pnl) does not meet threshold ($pnlThreshold), skipping push")
+                            return@launch
+                        }
+                    }
+                }
+            }
+            // For alert notifications with unrealized PnL: same rule — positive = both, negative = loss only.
+            if (type == "alert") {
+                val unrealizedPnlString = data["unrealized_pnl"]
+                if (unrealizedPnlString != null) {
+                    val unrealizedThreshold = preferencesManager.unrealizedPnLThreshold.first()
+                    if (unrealizedThreshold != 0.0) {
+                        val pnl = unrealizedPnlString.toDoubleOrNull()
+                        if (pnl != null) {
+                            val skip = when {
+                                unrealizedThreshold < 0 -> pnl > unrealizedThreshold
+                                else -> kotlin.math.abs(pnl) < unrealizedThreshold
+                            }
+                            if (skip) {
+                                AppLogger.d("FCM", "Unrealized PnL ($pnl) does not meet threshold ($unrealizedThreshold), skipping push")
+                                return@launch
+                            }
+                        }
                     }
                 }
             }
@@ -211,15 +237,41 @@ class BinanceBotFirebaseMessagingService : FirebaseMessagingService() {
                 return@launch
             }
             
-            // For trade notifications, check PnL threshold
+            // For trade notifications (realized PnL): positive = both, negative = loss only (e.g. -78 = notify when loss >= 78).
             if (type == "trade") {
                 val pnlThreshold = preferencesManager.tradePnLThreshold.first()
                 val pnlString = data["pnl"]
-                if (pnlString != null && pnlThreshold > 0) {
+                if (pnlString != null && pnlThreshold != 0.0) {
                     val pnl = pnlString.toDoubleOrNull()
-                    if (pnl != null && kotlin.math.abs(pnl) < pnlThreshold) {
-                        AppLogger.d("FCM", "Trade PnL (${pnl}) below threshold ($pnlThreshold), skipping push")
-                        return@launch
+                    if (pnl != null) {
+                        val skip = when {
+                            pnlThreshold < 0 -> pnl > pnlThreshold
+                            else -> kotlin.math.abs(pnl) < pnlThreshold
+                        }
+                        if (skip) {
+                            AppLogger.d("FCM", "Trade PnL ($pnl) does not meet threshold ($pnlThreshold), skipping push")
+                            return@launch
+                        }
+                    }
+                }
+            }
+            // For alert notifications with unrealized PnL: same rule.
+            if (type == "alert") {
+                val unrealizedPnlString = data["unrealized_pnl"]
+                if (unrealizedPnlString != null) {
+                    val unrealizedThreshold = preferencesManager.unrealizedPnLThreshold.first()
+                    if (unrealizedThreshold != 0.0) {
+                        val pnl = unrealizedPnlString.toDoubleOrNull()
+                        if (pnl != null) {
+                            val skip = when {
+                                unrealizedThreshold < 0 -> pnl > unrealizedThreshold
+                                else -> kotlin.math.abs(pnl) < unrealizedThreshold
+                            }
+                            if (skip) {
+                                AppLogger.d("FCM", "Unrealized PnL ($pnl) does not meet threshold ($unrealizedThreshold), skipping push")
+                                return@launch
+                            }
+                        }
                     }
                 }
             }
