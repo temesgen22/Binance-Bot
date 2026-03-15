@@ -413,7 +413,32 @@ def create_app() -> FastAPI:
                 error_msg = f"Failed to restore running strategies: {str(exc)[:200]}"
                 startup_errors.append(error_msg)
                 logger.error(f"Failed to restore running strategies on startup: {exc}", exc_info=True)
-            
+
+            # Eager: start User Data Stream for all accounts so manual/external positions get real-time updates without a running strategy
+            try:
+                if getattr(settings, "use_user_data_stream_for_position", True):
+                    account_ids_from_manager = set(client_manager.list_accounts().keys())
+                    account_ids_from_db = set()
+                    if db_init_success and hasattr(runner, "strategy_service") and runner.strategy_service:
+                        try:
+                            from app.models.db_models import Account
+                            db_svc = getattr(runner.strategy_service, "db_service", None)
+                            if db_svc and getattr(db_svc, "db", None):
+                                for row in db_svc.db.query(Account.account_id).filter(Account.is_active == True).distinct().all():
+                                    s = (row[0] or "").strip() if row else ""
+                                    if s:
+                                        account_ids_from_db.add(s.lower())
+                        except Exception as db_exc:
+                            logger.debug(f"[UserDataStream] Eager account list from DB skipped: {db_exc}")
+                    all_account_ids = account_ids_from_manager | account_ids_from_db
+                    for acc_id in all_account_ids:
+                        if acc_id:
+                            asyncio.create_task(runner.user_data_stream_manager.ensure_stream(acc_id))
+                    if all_account_ids:
+                        logger.info(f"[UserDataStream] Eager start: ensuring streams for {len(all_account_ids)} account(s): {sorted(all_account_ids)}")
+            except Exception as stream_exc:
+                logger.debug(f"[UserDataStream] Eager start skipped: {stream_exc}")
+
             # Start Telegram command handler if enabled
             if telegram_command_handler:
                 try:

@@ -4,8 +4,11 @@ import asyncio
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, List, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.core.mark_price_stream_manager import MarkPriceStreamManager
 
 from loguru import logger
 from sqlalchemy import and_
@@ -32,6 +35,109 @@ from app.models.manual_trading import (
 from app.services.notifier import NotificationService
 
 
+def get_open_manual_position(
+    db: Session,
+    user_id: UUID,
+    account_id: str,
+    symbol: str,
+    position_side: str,
+) -> Optional[ManualPosition]:
+    """Return the open ManualPosition for this user/account/symbol/side, or None.
+    Used by StrategyRunner when User Data Stream reports a position with no matching strategy.
+    """
+    return (
+        db.query(ManualPosition)
+        .filter(
+            ManualPosition.user_id == user_id,
+            ManualPosition.account_id == (account_id or "default"),
+            ManualPosition.symbol == (symbol or "").strip().upper(),
+            ManualPosition.side == (position_side or "").upper(),
+            ManualPosition.status == "OPEN",
+        )
+        .first()
+    )
+
+
+def _close_open_manual_positions_externally_sync(
+    db: Session,
+    user_id: UUID,
+    account_id: str,
+    symbol: str,
+    position_side: str,
+) -> List[UUID]:
+    """Find open manual positions for this user/account/symbol/side, set status=CLOSED, commit; return their ids."""
+    positions = (
+        db.query(ManualPosition)
+        .filter(
+            ManualPosition.user_id == user_id,
+            ManualPosition.account_id == (account_id or "default"),
+            ManualPosition.symbol == (symbol or "").strip().upper(),
+            ManualPosition.side == (position_side or "").upper(),
+            ManualPosition.status == "OPEN",
+        )
+        .all()
+    )
+    ids: List[UUID] = [p.id for p in positions]
+    now = datetime.now(timezone.utc)
+    for p in positions:
+        p.status = "CLOSED"
+        p.closed_at = now
+    if ids:
+        db.commit()
+    return ids
+
+
+async def notify_manual_positions_closed_externally(
+    db: Session,
+    user_id: UUID,
+    account_id: str,
+    symbol: str,
+    position_side: str,
+    broadcast_service: Optional[PositionBroadcastService],
+    mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
+) -> None:
+    """When Binance sends position_amt=0 and no strategy matched: close matching manual positions in DB,
+    broadcast position_size=0 for each manual_<id>, and broadcast strategy_id=null so the GUI removes the row.
+    Optionally unregisters from mark price stream so PnL stops updating.
+    """
+    closed_ids = await asyncio.to_thread(
+        _close_open_manual_positions_externally_sync,
+        db,
+        user_id,
+        account_id or "default",
+        symbol,
+        position_side,
+    )
+    if broadcast_service:
+        for pid in closed_ids:
+            await broadcast_service.broadcast_position_update(
+                user_id=user_id,
+                strategy_id=f"manual_{pid}",
+                symbol=symbol,
+                account_id=account_id or "default",
+                position_size=0,
+                position_side=position_side,
+                strategy_name="Manual Trade",
+            )
+        await broadcast_service.broadcast_position_update(
+            user_id=user_id,
+            strategy_id=f"external_{position_side}",
+            symbol=symbol,
+            account_id=account_id or "default",
+            position_size=0,
+            position_side=position_side,
+            strategy_name="External",
+        )
+    # Unregister from mark price stream so real-time PnL stops for closed manual positions
+    if mark_price_stream_manager and closed_ids:
+        try:
+            for pid in closed_ids:
+                mark_price_stream_manager.unregister_position(symbol, f"manual_{pid}")
+            await mark_price_stream_manager.maybe_unsubscribe(symbol)
+        except Exception as exc:
+            logger.debug(f"[ManualTrade] mark price unregister (external close) failed: {exc}")
+
+
 class ManualTradingService:
     """
     Standalone manual trading service with full Binance features.
@@ -53,12 +159,14 @@ class ManualTradingService:
         user_id: UUID,
         notification_service: Optional[NotificationService] = None,
         broadcast_service: Optional[PositionBroadcastService] = None,
+        mark_price_stream_manager: Optional["MarkPriceStreamManager"] = None,
     ):
         self.db = db
         self.client_manager = client_manager
         self.user_id = user_id
         self.notification_service = notification_service
         self.broadcast_service = broadcast_service
+        self.mark_price_stream_manager = mark_price_stream_manager
     
     # ==================== Position Opening ====================
     
@@ -228,6 +336,26 @@ class ManualTradingService:
         if self.broadcast_service:
             await self._broadcast_position(position, entry_price)
         
+        # Register with mark price stream for real-time PnL (like strategy positions)
+        if self.mark_price_stream_manager:
+            try:
+                qty = float(position.remaining_quantity or position.quantity)
+                self.mark_price_stream_manager.register_position(
+                    symbol=position.symbol,
+                    strategy_id=f"manual_{position.id}",
+                    user_id=self.user_id,
+                    entry_price=float(position.entry_price),
+                    position_size=qty,
+                    position_side=position.side,
+                    account_id=position.account_id,
+                    leverage=position.leverage,
+                    initial_margin=float(entry_price * executed_qty / position.leverage) if position.leverage else None,
+                    strategy_name="Manual Trade",
+                )
+                await self.mark_price_stream_manager.subscribe(position.symbol)
+            except Exception as exc:
+                logger.debug(f"[ManualTrade] mark price register/subscribe failed: {exc}")
+        
         # Send notification
         if self.notification_service:
             asyncio.create_task(
@@ -333,6 +461,16 @@ class ManualTradingService:
             f"[ManualTrade] Position {'closed' if is_full_close else 'partially closed'}: "
             f"PnL={realized_pnl:.2f}"
         )
+        
+        # Unregister from mark price stream when fully closed
+        if is_full_close and self.mark_price_stream_manager:
+            try:
+                self.mark_price_stream_manager.unregister_position(
+                    position.symbol, f"manual_{position.id}"
+                )
+                await self.mark_price_stream_manager.maybe_unsubscribe(position.symbol)
+            except Exception as exc:
+                logger.debug(f"[ManualTrade] mark price unregister/unsubscribe failed: {exc}")
         
         # Broadcast update
         if self.broadcast_service:

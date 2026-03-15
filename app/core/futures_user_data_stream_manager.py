@@ -33,7 +33,7 @@ def _normalize_position_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     position_side = (entry.get("ps") or "BOTH").upper()
     if position_side not in ("LONG", "SHORT", "BOTH"):
         position_side = "BOTH"
-    # Map BOTH to LONG/SHORT from sign of pa for one-way mode
+    # Map BOTH to LONG/SHORT from sign of pa for one-way mode (when not flat)
     if position_side == "BOTH" and position_amt != 0:
         position_side = "LONG" if position_amt > 0 else "SHORT"
     return {

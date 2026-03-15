@@ -107,10 +107,9 @@ class TradesViewModel @Inject constructor(
         )
     )
     
-    /** Merge REST positions with WebSocket store: WS adds/updates/removes by strategyId (or synthetic "manual_$symbol").
-     * When WS sends position_update with positionSize <= 0 (closed), we exclude that position so the list clears.
-     * Deduplicate by (symbol, accountId): one row per actual Binance position (web app behavior).
-     * Owner strategy should come from REST because backend verifies ownership; WS only overlays live price/PnL. */
+    /** Merge REST positions with WebSocket store. WS store uses composite key "accountId|strategyId".
+     * When WS sends position_update with positionSize <= 0 (closed), we exclude that position.
+     * Deduplicate by (symbol, positionSide, accountId): one row per position (matches web app). */
     private fun mergePositionsWithWs(
         restPositions: List<Position>,
         wsUpdates: Map<String, PositionUpdateData>
@@ -118,19 +117,16 @@ class TradesViewModel @Inject constructor(
         val wsOpen = wsUpdates.values
             .filter { it.positionSize > 0 }
             .map { it.toPosition() }
-        // Key for matching REST position to WS: strategyId or "manual_$symbol" for unowned positions
-        fun keyFor(p: Position): String = p.strategyId ?: "manual_${p.symbol}"
-        // Exclude REST only when WS explicitly closed this same position key.
-        // Do not exclude REST just because WS has the same symbol: REST is the owner source of truth.
+        fun compositeKeyFor(p: Position): String =
+            positionUpdateStore.compositeKey(p.accountId ?: "default", p.strategyId ?: "", p.symbol)
         val restOpen = restPositions.filter { p ->
-            val key = keyFor(p)
-            if (key in wsUpdates && (wsUpdates[key]?.positionSize ?: 0.0) <= 0.0) return@filter false
+            val cKey = compositeKeyFor(p)
+            if (cKey in wsUpdates && (wsUpdates[cKey]?.positionSize ?: 0.0) <= 0.0) return@filter false
             true
         }
         val merged = restOpen.map { TaggedPosition(it, fromRest = true) } +
             wsOpen.map { TaggedPosition(it, fromRest = false) }
-        // One row per (symbol, accountId): same as web app. Prefer REST for owner, overlay WS for live values.
-        fun positionKey(p: Position): String = "${p.symbol}:${p.accountId ?: ""}"
+        fun positionKey(p: Position): String = "${p.symbol}:${p.positionSide}:${p.accountId ?: ""}"
         return merged
             .groupBy { positionKey(it.position) }
             .values
@@ -164,7 +160,7 @@ class TradesViewModel @Inject constructor(
     private val _pnlError = MutableStateFlow<String?>(null)
     val pnlError: StateFlow<String?> = _pnlError.asStateFlow()
 
-    /** Strategy ID for which manual close is in progress (null when idle). */
+    /** Composite key "accountId|strategyId" for which manual close is in progress (null when idle). */
     private val _manualCloseInProgress = MutableStateFlow<String?>(null)
     val manualCloseInProgress: StateFlow<String?> = _manualCloseInProgress.asStateFlow()
 
@@ -197,7 +193,8 @@ class TradesViewModel @Inject constructor(
             symbol = params.symbol,
             side = params.side,
             dateFrom = params.dateFrom,
-            dateTo = params.dateTo
+            dateTo = params.dateTo,
+            accountId = params.accountId
         )
     }.cachedIn(viewModelScope)
     
@@ -254,12 +251,14 @@ class TradesViewModel @Inject constructor(
         }
     }
 
-    /** Manually close a strategy-owned position. On success refreshes PnL/positions. */
-    fun manualClosePosition(strategyId: String, symbol: String?, positionSide: String?) {
+    /** Manually close a strategy-owned position. accountId used for composite key and filtering (multi-account). */
+    fun manualClosePosition(strategyId: String, symbol: String?, positionSide: String?, accountId: String? = null) {
         if (strategyId.isBlank()) return
+        val acc = accountId?.takeIf { it.isNotBlank() } ?: "default"
         viewModelScope.launch {
             _manualCloseError.value = null
-            _manualCloseInProgress.value = strategyId
+            val compositeInProgress = positionUpdateStore.compositeKey(acc, strategyId, symbol ?: "")
+            _manualCloseInProgress.value = compositeInProgress
             tradeRepository.manualClosePosition(
                 strategyId = strategyId,
                 symbol = symbol?.takeIf { it.isNotBlank() },
@@ -267,18 +266,16 @@ class TradesViewModel @Inject constructor(
             )
                 .onSuccess {
                     _manualCloseInProgress.value = null
-                    // CRITICAL: Immediately remove the closed position from local data
-                    // Don't wait for REST to update - the position is already closed on Binance
                     _pnlOverview.value = _pnlOverview.value.map { symbolPnL ->
                         symbolPnL.copy(
                             openPositions = symbolPnL.openPositions.filter { pos ->
-                                !(pos.strategyId == strategyId && (symbol == null || pos.symbol == symbol))
+                                !(pos.strategyId == strategyId && (pos.accountId ?: "default") == acc &&
+                                    (symbol == null || pos.symbol == symbol))
                             }
                         )
                     }
-                    // Also clear from WebSocket position store
-                    positionUpdateStore.removePosition(strategyId)
-                    // Then refresh from REST (in background, position already cleared from UI)
+                    val compositeKey = positionUpdateStore.compositeKey(acc, strategyId, symbol ?: "")
+                    positionUpdateStore.removePosition(compositeKey)
                     loadPnLOverview()
                 }
                 .onFailure { e ->
@@ -351,27 +348,40 @@ class TradesViewModel @Inject constructor(
         }
     }
     
-    /** Close a manual position by ID (extracted from strategy_id like "manual_xxx") */
-    fun closeManualPositionById(positionId: String) {
+    /** Close a manual position by ID. accountId required for composite key and filtering (multi-account). */
+    fun closeManualPositionById(positionId: String, accountId: String? = null) {
+        val acc = accountId?.takeIf { it.isNotBlank() } ?: "default"
+        val strategyIdKey = "manual_$positionId"
+        val compositeInProgress = positionUpdateStore.compositeKey(acc, strategyIdKey, "")
         viewModelScope.launch {
             _manualTradeLoading.value = true
             _manualTradeError.value = null
-            
+            _manualCloseInProgress.value = compositeInProgress
+
             tradeRepository.closeManualPosition(positionId)
                 .onSuccess { result ->
+                    _manualCloseInProgress.value = null
                     _manualTradeSuccess.value = "Position closed: PnL $${String.format("%.2f", result.realizedPnl)}"
-                    // Remove from WebSocket store
-                    positionUpdateStore.removePosition("manual_$positionId")
+                    _pnlOverview.value = _pnlOverview.value.map { symbolPnL ->
+                        symbolPnL.copy(
+                            openPositions = symbolPnL.openPositions.filter { pos ->
+                                pos.strategyId != strategyIdKey || (pos.accountId ?: "default") != acc
+                            }
+                        )
+                    }
+                    val compositeKey = positionUpdateStore.compositeKey(acc, strategyIdKey, "")
+                    positionUpdateStore.removePosition(compositeKey)
                     loadPnLOverview()
                 }
                 .onFailure { e ->
+                    _manualCloseInProgress.value = null
                     _manualTradeError.value = e.message ?: "Failed to close position"
                 }
-            
+
             _manualTradeLoading.value = false
         }
     }
-    
+
     fun clearManualTradeMessages() {
         _manualTradeError.value = null
         _manualTradeSuccess.value = null
@@ -391,9 +401,9 @@ private fun PositionUpdateData.toPosition(): Position = Position(
     positionSide = positionSide ?: "LONG",
     unrealizedPnL = unrealizedPnl ?: 0.0,
     leverage = leverage ?: 1,
-    strategyId = if (strategyId.startsWith("manual_")) null else strategyId,
+    strategyId = strategyId.takeIf { it.isNotBlank() },
     strategyName = strategyName,
-    accountId = accountId.takeIf { it.isNotBlank() },
+    accountId = accountId.takeIf { it.isNotBlank() } ?: "default",
     liquidationPrice = liquidationPrice,
     initialMargin = initialMargin,
     marginType = marginType

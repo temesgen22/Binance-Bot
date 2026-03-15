@@ -15,7 +15,8 @@ interface TradeRepository {
         symbol: String? = null,
         side: String? = null,
         dateFrom: String? = null,
-        dateTo: String? = null
+        dateTo: String? = null,
+        accountId: String? = null
     ): Flow<PagingData<Trade>>
     fun getTradesByStrategy(strategyId: String): Flow<List<Trade>>
     suspend fun getPnLOverview(

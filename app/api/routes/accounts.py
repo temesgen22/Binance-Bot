@@ -1,4 +1,5 @@
 """API routes for managing Binance accounts."""
+import asyncio
 import os
 import re
 from fastapi import APIRouter, Depends, Request, HTTPException, status
@@ -214,8 +215,36 @@ async def create_account(
             )
         
         logger.info(f"Created account {request_data.account_id} for user {current_user.id}")
+
+        # Add client to runner's manager and start User Data Stream so manual/external positions get real-time updates
+        try:
+            from app.core.config import get_settings, BinanceAccountConfig
+            settings = get_settings()
+            runner = getattr(request.app.state, "strategy_runner", None)
+            if runner and getattr(settings, "use_user_data_stream_for_position", True):
+                acc_id = (request_data.account_id or "").strip()
+                if acc_id and hasattr(runner, "client_manager") and runner.client_manager:
+                    config_plain = BinanceAccountConfig(
+                        account_id=acc_id,
+                        api_key=request_data.api_key or getattr(config, "api_key", None),
+                        api_secret=request_data.api_secret or getattr(config, "api_secret", None),
+                        testnet=getattr(config, "testnet", request_data.testnet),
+                        paper_trading=getattr(config, "paper_trading", request_data.paper_trading),
+                        paper_balance=getattr(config, "paper_balance", request_data.paper_balance),
+                        name=getattr(config, "name", request_data.name),
+                    )
+                    try:
+                        runner.client_manager.add_client(acc_id, config_plain)
+                    except Exception as add_exc:
+                        logger.debug(f"[UserDataStream] Add client for new account skipped: {add_exc}")
+                if hasattr(runner, "user_data_stream_manager"):
+                    asyncio.create_task(runner.user_data_stream_manager.ensure_stream(request_data.account_id))
+                    logger.info(f"[UserDataStream] Ensuring stream for newly registered account: {request_data.account_id}")
+        except Exception as stream_exc:
+            logger.debug(f"[UserDataStream] Start on new account skipped: {stream_exc}")
+
         return AccountResponse.from_account(db_account)
-        
+
     except HTTPException:
         raise
     except Exception as e:

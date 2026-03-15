@@ -74,13 +74,14 @@ fun PositionsTab(
             ) {
                 items(
                     items = positions,
-                    key = { "${it.symbol}_${it.strategyId ?: "manual"}_${it.accountId.orEmpty()}" }
+                    key = { "${it.symbol}_${it.positionSide}_${it.strategyId ?: "manual"}_${it.accountId.orEmpty()}" }
                 ) { position ->
+                    val compositeKey = "${position.accountId?.takeIf { it.isNotBlank() } ?: "default"}|${position.strategyId?.takeIf { it.isNotBlank() } ?: "manual_${position.symbol}"}"
                     BinanceStylePositionRow(
                         position = position,
                         onStrategyClick = onStrategyClick,
                         onManualClose = onManualClose,
-                        isManualCloseInProgress = position.strategyId == manualCloseInProgressStrategyId
+                        isManualCloseInProgress = (manualCloseInProgressStrategyId != null && compositeKey == manualCloseInProgressStrategyId)
                     )
                 }
             }
@@ -105,6 +106,7 @@ fun BinanceStylePositionRow(
     val pnlColor = if (position.unrealizedPnL >= 0) LongGreen else ShortRed
     val hasStrategy = !position.strategyId.isNullOrBlank()
     val isManualPosition = position.strategyId?.startsWith("manual_") == true
+    val isExternalPosition = position.strategyId?.startsWith("external_") == true
     var showManualCloseConfirm by remember { mutableStateOf(false) }
 
     if (showManualCloseConfirm) {
@@ -158,13 +160,11 @@ fun BinanceStylePositionRow(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    position.accountId?.takeIf { it.isNotBlank() }?.let { id ->
-                        Text(
-                            text = "Account: $id",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "Account: ${position.accountId?.takeIf { it.isNotBlank() } ?: "default" }",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -216,19 +216,20 @@ fun BinanceStylePositionRow(
                     "Margin Type",
                     position.marginType?.takeIf { it.isNotBlank() } ?: "—"
                 )
-                // Owner label based on position type
+                // Owner label based on position type (matches web app: Manual Trade, External, or strategy name)
                 val ownerLabel = when {
                     isManualPosition -> "Manual Trade"
+                    isExternalPosition -> "External"
                     position.strategyName?.isNotBlank() == true -> position.strategyName
                     else -> "Not matched"
                 }
                 
-                // Owner: strategy that owns this position (from backend matching); "Not matched" if manual/unowned
+                // Owner: strategy that owns this position (from backend matching); External = opened on Binance outside bot
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
-                            if (hasStrategy && !isManualPosition && onStrategyClick != null)
+                            if (hasStrategy && !isManualPosition && !isExternalPosition && onStrategyClick != null)
                                 Modifier.clickable { position.strategyId?.let { onStrategyClick(it) } }
                             else Modifier
                         ),
@@ -247,6 +248,7 @@ fun BinanceStylePositionRow(
                         fontWeight = FontWeight.Medium,
                         color = when {
                             isManualPosition -> Color(0xFF667EEA)
+                            isExternalPosition -> MaterialTheme.colorScheme.onSurfaceVariant
                             hasStrategy -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
@@ -254,8 +256,8 @@ fun BinanceStylePositionRow(
                 }
             }
 
-            // Close button - for both strategy-owned and manual positions
-            if ((hasStrategy || isManualPosition) && onManualClose != null) {
+            // Close button - for strategy-owned and manual positions only; external positions cannot be closed via app
+            if ((hasStrategy || isManualPosition) && !isExternalPosition && onManualClose != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = { showManualCloseConfirm = true },

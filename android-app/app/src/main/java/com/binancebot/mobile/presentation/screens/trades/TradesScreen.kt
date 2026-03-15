@@ -75,10 +75,10 @@ fun TradesScreen(
         }
     }
 
-    // Manual Trade Dialog
+    // Manual Trade Dialog: show all accounts (live + paper) like web app
     if (showManualTradeDialog) {
         ManualTradeDialog(
-            accounts = accounts.filter { !it.paperTrading },
+            accounts = accounts,
             onDismiss = { showManualTradeDialog = false },
             onSubmit = { symbol, side, usdtAmount, leverage, accountId, marginType, tpPct, slPct, tpPrice, slPrice, trailingEnabled, trailingRate, notes ->
                 viewModel.openManualPosition(
@@ -154,27 +154,26 @@ fun TradesScreen(
                 isLoading = pnlLoading,
                 onRefresh = { viewModel.loadPnLOverview() },
                 onStrategyClick = { strategyId ->
-                    // Check if this is a manual position
                     if (strategyId.startsWith("manual_")) {
-                        // Close manual position
                         val positionId = strategyId.removePrefix("manual_")
-                        viewModel.closeManualPositionById(positionId)
+                        val position = allOpenPositions.find { it.strategyId == strategyId }
+                        viewModel.closeManualPositionById(positionId, position?.accountId)
                     } else {
                         navController.navigate("strategy_details/$strategyId")
                     }
                 },
                 onManualClose = { position ->
                     val strategyId = position.strategyId ?: return@PositionsTab
+                    if (strategyId.startsWith("external_")) return@PositionsTab
                     if (strategyId.startsWith("manual_")) {
-                        // Close manual position via manual trading API
                         val positionId = strategyId.removePrefix("manual_")
-                        viewModel.closeManualPositionById(positionId)
+                        viewModel.closeManualPositionById(positionId, position.accountId)
                     } else {
-                        // Close strategy position via existing API
                         viewModel.manualClosePosition(
                             strategyId = strategyId,
                             symbol = position.symbol,
-                            positionSide = position.positionSide
+                            positionSide = position.positionSide,
+                            accountId = position.accountId
                         )
                     }
                 },
@@ -287,7 +286,11 @@ fun ManualTradeDialog(
                     ) {
                         OutlinedTextField(
                             value = accounts.find { it.accountId == selectedAccountId }?.let { acc ->
-                                "${acc.name ?: acc.accountId}${if (acc.testnet) " [TESTNET]" else ""}"
+                                buildString {
+                                    append(acc.name ?: acc.accountId)
+                                    if (acc.paperTrading) append(" [PAPER]")
+                                    if (acc.testnet) append(" [TESTNET]")
+                                }
                             } ?: selectedAccountId,
                             onValueChange = {},
                             readOnly = true,
@@ -305,7 +308,13 @@ fun ManualTradeDialog(
                             accounts.forEach { account ->
                                 DropdownMenuItem(
                                     text = {
-                                        Text("${account.name ?: account.accountId}${if (account.testnet) " [TESTNET]" else ""}")
+                                        Text(
+                                            buildString {
+                                                append(account.name ?: account.accountId)
+                                                if (account.paperTrading) append(" [PAPER]")
+                                                if (account.testnet) append(" [TESTNET]")
+                                            }
+                                        )
                                     },
                                     onClick = {
                                         selectedAccountId = account.accountId

@@ -453,3 +453,15 @@ def get_position_broadcast_service(
     if runner is None:
         return None
     return getattr(runner, 'position_broadcast_service', None)
+
+
+def get_mark_price_stream_manager(
+    runner: StrategyRunner = Depends(get_strategy_runner)
+):
+    """
+    Get mark price stream manager from strategy runner (for real-time PnL).
+    Returns None if not configured.
+    """
+    if runner is None:
+        return None
+    return getattr(runner, "mark_price_stream_manager", None)

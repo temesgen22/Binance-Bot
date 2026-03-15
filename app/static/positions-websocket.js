@@ -30,6 +30,13 @@
             return Object.assign({}, this._updates);
         },
 
+        /** Remove a key (e.g. after position closed) so merge does not keep filtering out a future reopen. */
+        deleteKey(strategyId) {
+            if (strategyId != null && strategyId !== '') {
+                delete this._updates[strategyId];
+            }
+        },
+
         /** Call after rendering strategy table so Unrealized PnL shows latest WebSocket data immediately */
         applyStoredToDOM() {
             const all = this.getAll();
@@ -58,12 +65,14 @@
                         const data = JSON.parse(event.data);
                         if (data.type === 'position_update') {
                             const sid = data.strategy_id ?? data.strategyId;
-                            const key = (sid != null && sid !== '') ? sid : ('manual_' + (data.symbol || 'unknown'));
+                            const stratPart = (sid != null && sid !== '') ? sid : ('manual_' + (data.symbol || 'unknown'));
+                            const accId = data.account_id || 'default';
+                            const key = accId + '|' + stratPart;
                             this._updates[key] = {
                                 strategy_id: sid ?? null,
                                 strategy_name: data.strategy_name ?? null,
                                 symbol: data.symbol,
-                                account_id: data.account_id || 'default',
+                                account_id: accId,
                                 position_size: data.position_size,
                                 entry_price: data.entry_price,
                                 unrealized_pnl: data.unrealized_pnl,
@@ -78,6 +87,9 @@
                                 this._updates[key] = { ...this._updates[key], position_size: 0 };
                             }
                             window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[key] }));
+                            if (data.position_size <= 0) {
+                                delete this._updates[key];
+                            }
                         }
                     } catch (e) {
                         console.warn('[positions-ws] Parse error', e);

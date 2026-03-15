@@ -26,6 +26,7 @@ class TradePagingSource(
                 side = filters.side,
                 startDate = filters.dateFrom,
                 endDate = filters.dateTo,
+                accountId = filters.accountId,
                 limit = pageSize,
                 offset = page * pageSize
             )
@@ -73,7 +74,8 @@ data class TradeFilters(
     val symbol: String? = null,
     val side: String? = null,
     val dateFrom: String? = null,
-    val dateTo: String? = null
+    val dateTo: String? = null,
+    val accountId: String? = null
 )
 
 // Extension to convert DTO to domain

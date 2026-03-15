@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import uuid
@@ -33,6 +34,10 @@ from app.services.strategy_persistence import StrategyPersistence
 from app.services.strategy_order_manager import StrategyOrderManager
 from app.services.strategy_executor import StrategyExecutor
 from app.services.strategy_statistics import StrategyStatistics
+from app.services.manual_trading_service import (
+    get_open_manual_position,
+    notify_manual_positions_closed_externally,
+)
 from app.core.futures_user_data_stream_manager import FuturesUserDataStreamManager
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -176,6 +181,9 @@ class StrategyRunner:
         # Concurrency safety: Lock to protect shared state (_tasks, _strategies, _trades)
         # This prevents race conditions when multiple async tasks access/modify these dictionaries
         self._lock = asyncio.Lock()
+        # Dedupe non-strategy position broadcasts (User Data Stream can send duplicate ACCOUNT_UPDATE)
+        self._pos_broadcast_lock = asyncio.Lock()
+        self._last_non_strategy_broadcast: Optional[tuple] = None  # ((key_tuple), timestamp)
         
         # Track if we're using a directly provided client (for tests with mock clients)
         self._has_direct_client = client is not None and client_manager is None
@@ -357,9 +365,12 @@ class StrategyRunner:
     async def _on_user_data_position_update(
         self, account_id: str, symbol: str, position_data: Dict
     ) -> None:
-        """Callback from User Data Stream manager: apply position update to matching strategies."""
+        """Callback from User Data Stream manager: apply position update to matching strategies.
+        When no strategy matches, broadcast manual or external position so GUI updates without refresh.
+        """
         account_id = (account_id or "default").lower()
         position_side = (position_data.get("position_side") or "").upper()
+        strategy_matched = False
         for summary in list(self._strategies.values()):
             if (summary.account_id or "default").lower() != account_id:
                 continue
@@ -369,6 +380,7 @@ class StrategyRunner:
             if position_side in ("LONG", "SHORT") and getattr(summary, "position_side", None):
                 if (summary.position_side or "").upper() != position_side:
                     continue
+            strategy_matched = True
             try:
                 await self.state_manager.apply_position_data(summary, position_data)
             except Exception as exc:
@@ -379,7 +391,157 @@ class StrategyRunner:
             # In hedge mode, one event updates one side; avoid applying same payload to a second strategy
             if position_side in ("LONG", "SHORT"):
                 break
-    
+
+        # No strategy matched: broadcast manual or external so GUI shows/removes position without refresh
+        if strategy_matched or not (self.strategy_service and self.user_id and self.position_broadcast_service):
+            return
+        try:
+            position_amt = position_data.get("position_amt")
+            if position_amt is None:
+                position_amt = 0.0
+            else:
+                position_amt = float(position_amt)
+        except (TypeError, ValueError):
+            position_amt = 0.0
+
+        broadcast_key = (account_id, (symbol or "").strip().upper(), position_side, "open" if position_amt > 0 else "close")
+        now = time.monotonic()
+        async with self._pos_broadcast_lock:
+            last = getattr(self, "_last_non_strategy_broadcast", None)
+            if last is not None and isinstance(last, (tuple, list)) and len(last) >= 2:
+                last_key, last_ts = last[0], last[1]
+                if last_key == broadcast_key and (now - last_ts) < 2.0:
+                    return
+            setattr(self, "_last_non_strategy_broadcast", (broadcast_key, now))
+
+        if position_amt > 0:
+            # New or updated position: manual or external
+            db = getattr(self.strategy_service, "db_service", None) and getattr(
+                self.strategy_service.db_service, "db", None
+            )
+            if db is None:
+                strategy_id = f"external_{position_side}"
+                strategy_name = "External"
+            else:
+                manual_pos = await asyncio.to_thread(
+                    get_open_manual_position,
+                    db,
+                    self.user_id,
+                    account_id,
+                    symbol,
+                    position_side,
+                )
+                if manual_pos is not None:
+                    # Only attribute to manual if Binance position matches the ManualPosition (entry + size)
+                    entry_from_data = position_data.get("entry_price")
+                    try:
+                        binance_entry = float(entry_from_data) if entry_from_data is not None else 0.0
+                    except (TypeError, ValueError):
+                        binance_entry = 0.0
+                    manual_entry = float(manual_pos.entry_price or 0)
+                    manual_qty = float(manual_pos.remaining_quantity or manual_pos.quantity or 0)
+                    entry_ok = abs(binance_entry - manual_entry) <= max(1e-6, 1e-4 * max(abs(binance_entry), abs(manual_entry), 0.01))
+                    size_ok = abs(position_amt - manual_qty) <= max(1e-8, 0.01 * max(position_amt, manual_qty, 0.0001))
+                    if entry_ok and size_ok:
+                        strategy_id = f"manual_{manual_pos.id}"
+                        strategy_name = "Manual Trade"
+                    else:
+                        strategy_id = f"external_{position_side}"
+                        strategy_name = "External"
+                else:
+                    strategy_id = f"external_{position_side}"
+                    strategy_name = "External"
+            entry_price = position_data.get("entry_price")
+            try:
+                entry_price = float(entry_price) if entry_price is not None else None
+            except (TypeError, ValueError):
+                entry_price = None
+            unrealized_pnl = position_data.get("unrealized_pnl")
+            try:
+                unrealized_pnl = float(unrealized_pnl) if unrealized_pnl is not None else None
+            except (TypeError, ValueError):
+                unrealized_pnl = None
+            await self.position_broadcast_service.broadcast_position_update(
+                user_id=self.user_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                account_id=account_id,
+                position_size=position_amt,
+                entry_price=entry_price,
+                unrealized_pnl=unrealized_pnl,
+                position_side=position_side,
+                strategy_name=strategy_name,
+            )
+            # Register with mark price stream so external (and manual) get real-time PnL
+            mp_manager = getattr(self, "mark_price_stream_manager", None)
+            if mp_manager and position_amt > 0:
+                reg_id = strategy_id if strategy_id else f"external_{position_side}"
+                reg_name = strategy_name if strategy_name else "External"
+                try:
+                    mp_manager.register_position(
+                        symbol=symbol,
+                        strategy_id=reg_id,
+                        user_id=self.user_id,
+                        entry_price=float(entry_price) if entry_price is not None else 0.0,
+                        position_size=position_amt,
+                        position_side=position_side,
+                        account_id=account_id or "default",
+                        leverage=None,
+                        initial_margin=None,
+                        strategy_name=reg_name,
+                    )
+                    await mp_manager.subscribe(symbol)
+                except Exception as exc:
+                    logger.debug(
+                        f"[UserDataStream] mark price register/subscribe for {symbol} {reg_id}: {exc}"
+                    )
+            logger.info(
+                f"[UserDataStream] Broadcasting new/updated position: {symbol} {position_side} "
+                f"({strategy_id or 'external'}) to clients"
+            )
+        else:
+            # Position closed on Binance: update manual status and broadcast so GUI removes row.
+            # When Binance sends position_side=BOTH for FLAT, we must broadcast close for both LONG and SHORT
+            # so the frontend can clear external_LONG/external_SHORT (it keys by side, not BOTH).
+            sides_to_close = ["LONG", "SHORT"] if position_side == "BOTH" else [position_side]
+            db = getattr(self.strategy_service, "db_service", None) and getattr(
+                self.strategy_service.db_service, "db", None
+            )
+            for close_side in sides_to_close:
+                if db is not None:
+                    await notify_manual_positions_closed_externally(
+                        db,
+                        self.user_id,
+                        account_id,
+                        symbol,
+                        close_side,
+                        self.position_broadcast_service,
+                        getattr(self, "mark_price_stream_manager", None),
+                    )
+                else:
+                    await self.position_broadcast_service.broadcast_position_update(
+                        user_id=self.user_id,
+                        strategy_id=f"external_{close_side}",
+                        symbol=symbol,
+                        account_id=account_id,
+                        position_size=0,
+                        position_side=close_side,
+                        strategy_name="External",
+                    )
+            mp_manager = getattr(self, "mark_price_stream_manager", None)
+            if mp_manager:
+                try:
+                    for close_side in sides_to_close:
+                        mp_manager.unregister_position(symbol, f"external_{close_side}")
+                    await mp_manager.maybe_unsubscribe(symbol)
+                except Exception as exc:
+                    logger.debug(
+                        f"[UserDataStream] mark price unregister (external close) for {symbol}: {exc}"
+                    )
+            logger.info(
+                f"[UserDataStream] Broadcasting position closed: {symbol} {position_side} (external/manual) to clients"
+            )
+
     def _check_symbol_conflict(
         self,
         user_id: "UUID",

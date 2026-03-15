@@ -38,7 +38,8 @@ class TradeRepositoryImpl @Inject constructor(
         symbol: String?,
         side: String?,
         dateFrom: String?,
-        dateTo: String?
+        dateTo: String?,
+        accountId: String?
     ): Flow<PagingData<Trade>> {
         return Pager(
             config = PagingConfig(
@@ -54,7 +55,8 @@ class TradeRepositoryImpl @Inject constructor(
                         symbol = symbol,
                         side = side,
                         dateFrom = dateFrom,
-                        dateTo = dateTo
+                        dateTo = dateTo,
+                        accountId = accountId
                     )
                 )
             }

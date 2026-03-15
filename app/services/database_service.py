@@ -2373,3 +2373,10 @@ class DatabaseService:
         
         return history
 
+
+def get_all_active_account_ids() -> List[str]:
+    """Return distinct account_id strings for all active accounts (e.g. for eager User Data Stream startup)."""
+    with get_db_session() as db:
+        rows = db.query(Account.account_id).filter(Account.is_active == True).distinct().all()
+        return [r[0] for r in rows] if rows else []
+

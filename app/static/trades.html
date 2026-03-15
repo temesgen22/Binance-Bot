@@ -227,10 +227,24 @@
             margin-top: 30px;
         }
 
+        #positionsContent {
+            width: 100%;
+            overflow: visible;
+            display: block;
+        }
+
         .positions-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-auto-rows: minmax(min-content, auto);
+            grid-auto-flow: row;
             gap: 20px;
+            align-items: start;
+            width: 100%;
+            min-height: 0;
+            list-style: none;
+            padding: 0;
+            margin: 0;
         }
 
         .position-card {
@@ -239,6 +253,11 @@
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             border-left: 4px solid #667eea;
+            position: relative;
+            min-width: 0;
+            break-inside: avoid;
+            align-self: start;
+            display: block;
         }
 
         .position-card.long {
@@ -940,25 +959,43 @@
                 updateOverallStats(merged);
             } catch (error) {
                 console.error('Error loading data:', error);
-                document.getElementById('overviewContent').innerHTML = 
-                    `<div class="error">Error loading data: ${error.message}</div>`;
+                const el = document.getElementById('overviewContent');
+                if (el) el.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
             }
+        }
+
+        function _normSymbol(s) {
+            return (s != null && s !== '') ? String(s).trim().toUpperCase() : '';
         }
 
         /** Merge REST PnL data with live position updates from WebSocket so Open Positions tab updates in real time */
         function mergePnlWithWs(pnlData) {
-            const base = (pnlData && Array.isArray(pnlData)) ? pnlData.map(s => ({
-                ...s,
-                open_positions: (s.open_positions && s.open_positions.length) ? s.open_positions.map(p => ({ ...p })) : []
-            })) : [];
+            const base = (pnlData && Array.isArray(pnlData)) ? pnlData.map(s => {
+                const symNorm = _normSymbol(s.symbol);
+                return {
+                    ...s,
+                    symbol: symNorm || s.symbol || '',
+                    open_positions: (s.open_positions && s.open_positions.length) ? s.open_positions.map(p => ({
+                        ...p,
+                        symbol: _normSymbol(p.symbol) || _normSymbol(s.symbol) || (p.symbol || s.symbol || '')
+                    })) : []
+                };
+            }).filter(s => (s.symbol || '').length > 0) : [];
             if (typeof window.PositionUpdates === 'undefined' || !window.PositionUpdates.getAll) return base;
             const ws = window.PositionUpdates.getAll();
-            for (const [sid, data] of Object.entries(ws)) {
+            for (const [storeKey, data] of Object.entries(ws)) {
                 if (!data || data.position_size == null) continue;
+                const stratPart = (storeKey && storeKey.indexOf('|') >= 0) ? storeKey.split('|').slice(1).join('|') : storeKey;
+                const isManualKey = (stratPart && stratPart.startsWith && stratPart.startsWith('manual_'));
+                const isExternalKey = (stratPart && stratPart.startsWith && stratPart.startsWith('external_'));
+                const strategyNameFromWs = (data.strategy_name !== undefined && data.strategy_name !== null && data.strategy_name !== '') ? data.strategy_name : null;
+                const matchedStrategy = (typeof allStrategies !== 'undefined' && Array.isArray(allStrategies)) ? allStrategies.find(s => s.id === (data.strategy_id || stratPart)) : null;
+                const posSymbol = _normSymbol(data.symbol || '');
                 const pos = {
-                    strategy_id: data.strategy_id !== undefined ? data.strategy_id : sid,
-                    strategy_name: data.strategy_name !== undefined ? data.strategy_name : (allStrategies.find(s => s.id === sid) || {}).name || null,
-                    symbol: data.symbol || '',
+                    strategy_id: data.strategy_id !== undefined ? data.strategy_id : stratPart,
+                    strategy_name: strategyNameFromWs || (isManualKey ? 'Manual Trade' : null) || (isExternalKey ? 'External' : null) || (matchedStrategy ? (matchedStrategy.name || null) : null),
+                    symbol: posSymbol,
+                    account_id: data.account_id != null ? data.account_id : undefined,
                     position_size: data.position_size,
                     entry_price: data.entry_price,
                     current_price: data.current_price,
@@ -970,33 +1007,72 @@
                     margin_type: data.margin_type
                 };
                 if (data.position_size > 0 && pos.symbol) {
-                    let sym = base.find(m => m.symbol === pos.symbol);
+                    let sym = base.find(m => _normSymbol(m.symbol) === pos.symbol);
                     if (!sym) {
                         sym = { symbol: pos.symbol, open_positions: [], total_realized_pnl: 0, total_unrealized_pnl: 0, total_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 };
                         base.push(sym);
                     }
-                    // Binance has one position per symbol: avoid duplicates; merge with existing so REST fields (leverage, initial_margin) are kept when WS only sends price/pnl
-                    const isUnowned = (data.strategy_id == null || (sid.startsWith && sid.startsWith('manual_')));
-                    const mergeWithExisting = (existing) => ({ ...existing, ...pos });
+                    // External positions share strategy_id (e.g. external_LONG) across symbols: match by (symbol + strategy_id) so we don't add duplicates.
+                    const isUnowned = (data.strategy_id == null || (stratPart && stratPart.startsWith && stratPart.startsWith('manual_')));
+                    const mergeWithExisting = (existing) => {
+                        const out = { ...existing, ...pos };
+                        // Preserve owner from REST on update/refresh so naming stays consistent when WS omits strategy_id/strategy_name
+                        if ((!out.strategy_id || out.strategy_id === '') && (existing.strategy_id)) out.strategy_id = existing.strategy_id;
+                        if ((!out.strategy_name || out.strategy_name === '') && (existing.strategy_name)) out.strategy_name = existing.strategy_name;
+                        if ((!out.account_id || out.account_id === '') && (existing.account_id)) out.account_id = existing.account_id;
+                        return out;
+                    };
                     if (isUnowned) {
-                        const idx = (sym.open_positions || []).findIndex(p => p.symbol === pos.symbol);
+                        const acc = (data.account_id || 'default');
+                        const idx = (sym.open_positions || []).findIndex(p => p.symbol === pos.symbol && ((p.account_id || 'default') === acc));
                         if (idx >= 0) sym.open_positions[idx] = mergeWithExisting(sym.open_positions[idx]);
-                        else sym.open_positions = [...(sym.open_positions || []).filter(p => p.symbol !== pos.symbol), pos];
+                        else sym.open_positions = [...(sym.open_positions || []).filter(p => !(p.symbol === pos.symbol && ((p.account_id || 'default') === acc))), pos];
+                    } else if (isExternalKey) {
+                        const acc = (data.account_id || 'default');
+                        const existingIdx = (sym.open_positions || []).findIndex(p => (p.strategy_id || '').startsWith('external_') && (p.position_side || '') === (pos.position_side || '') && ((p.account_id || 'default') === acc));
+                        if (existingIdx >= 0) sym.open_positions[existingIdx] = mergeWithExisting(sym.open_positions[existingIdx]);
+                        else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
                     } else {
-                        const idx = (sym.open_positions || []).findIndex(p => p.strategy_id === sid);
+                        const stratId = data.strategy_id || stratPart;
+                        const acc = (data.account_id || 'default');
+                        const idx = (sym.open_positions || []).findIndex(p => (p.strategy_id === stratId) && ((p.account_id || 'default') === acc));
                         if (idx >= 0) sym.open_positions[idx] = mergeWithExisting(sym.open_positions[idx]);
                         else { sym.open_positions = sym.open_positions || []; sym.open_positions.push(pos); }
                     }
                 } else {
+                    // Position closed: remove only the position for this account_id + strategy_id so multi-account is correct.
+                    const closeSymbol = (data.symbol || '').trim().toUpperCase();
+                    const closeAcc = (data.account_id || 'default');
+                    const closeStratId = data.strategy_id || stratPart;
+                    const isExternalClose = (stratPart && stratPart.startsWith && stratPart.startsWith('external_'));
+                    const isExternalBoth = stratPart === 'external_BOTH';
                     base.forEach(s => {
-                        if (s.open_positions) {
-                            s.open_positions = s.open_positions.filter(p => {
-                                if (sid.startsWith && sid.startsWith('manual_')) return p.symbol !== data.symbol;
-                                if (data.strategy_id == null) return p.symbol !== data.symbol;
-                                return p.strategy_id !== sid;
-                            });
+                        if (!s.open_positions) return;
+                        if (isExternalClose && closeSymbol) {
+                            if ((s.symbol || '').trim().toUpperCase() === closeSymbol) {
+                                if (isExternalBoth) {
+                                    s.open_positions = s.open_positions.filter(p => !((p.strategy_id || '').startsWith('external_') && ((p.account_id || 'default') === closeAcc)));
+                                } else {
+                                    s.open_positions = s.open_positions.filter(p => !(p.strategy_id === closeStratId && ((p.account_id || 'default') === closeAcc)));
+                                }
+                            }
+                        } else {
+                            s.open_positions = s.open_positions.filter(p => !(p.strategy_id === closeStratId && ((p.account_id || 'default') === closeAcc)));
                         }
                     });
+                    if (typeof window.PositionUpdates !== 'undefined' && typeof window.PositionUpdates.deleteKey === 'function') {
+                        window.PositionUpdates.deleteKey(storeKey);
+                    }
+                    if (isExternalBoth && isExternalClose && closeSymbol) {
+                        const acc = (data.account_id || 'default');
+                        ['external_LONG', 'external_SHORT'].forEach(part => {
+                            const k = acc + '|' + part;
+                            const stored = window.PositionUpdates.get(k);
+                            if (stored && (stored.symbol || '').trim().toUpperCase() === closeSymbol) {
+                                window.PositionUpdates.deleteKey(k);
+                            }
+                        });
+                    }
                 }
             }
             return base;
@@ -1051,7 +1127,7 @@
 
         function displayOverview(pnlData) {
             const content = document.getElementById('overviewContent');
-            
+            if (!content) return;
             if (!pnlData || pnlData.length === 0) {
                 content.innerHTML = '<div class="empty-state"><h3>No trading data available</h3><p>Start trading to see your PnL here</p></div>';
                 return;
@@ -1081,20 +1157,31 @@
 
         function displayPositions(pnlData) {
             const content = document.getElementById('positionsContent');
-            
+            if (!content) return;
             if (!pnlData || !Array.isArray(pnlData)) {
                 content.innerHTML = '<div class="empty-state"><h3>No open positions</h3><p>Your open positions will appear here</p></div>';
                 return;
             }
             
             const allPositions = [];
+            const seenKeys = new Set();
             pnlData.forEach(symbol => {
+                const rowSymbol = (typeof _normSymbol === 'function' ? _normSymbol(symbol.symbol) : (symbol.symbol || '').trim().toUpperCase()) || '';
                 if (symbol.open_positions && Array.isArray(symbol.open_positions)) {
                     symbol.open_positions.forEach(pos => {
-                        // BUG FIX: Ensure symbol is set (use parent symbol if missing)
+                        // Dedupe: each position gets its own card. For external_* use row symbol + entry+size so multiple externals never share one card.
+                        const sid = (pos.strategy_id != null) ? String(pos.strategy_id) : '';
+                        const accId = (pos.account_id != null && String(pos.account_id).trim() !== '') ? String(pos.account_id).trim() : 'default';
+                        const symDisplay = (typeof _normSymbol === 'function' ? _normSymbol(pos.symbol || symbol.symbol) : (pos.symbol || symbol.symbol || '').trim().toUpperCase()) || 'N/A';
+                        const isExternal = sid.startsWith('external_');
+                        const key = isExternal
+                            ? (rowSymbol || symDisplay) + '|' + sid + '|' + (pos.position_side || '') + '|' + accId + '|' + (pos.entry_price ?? '') + '|' + (pos.position_size ?? '')
+                            : symDisplay + '|' + sid + '|' + (pos.position_side || '') + '|' + accId;
+                        if (seenKeys.has(key)) return;
+                        seenKeys.add(key);
                         const positionWithSymbol = {
                             ...pos,
-                            symbol: pos.symbol || symbol.symbol || 'N/A',
+                            symbol: symDisplay,
                             symbolPnL: symbol
                         };
                         allPositions.push(positionWithSymbol);
@@ -1107,8 +1194,30 @@
                 return;
             }
 
-            let html = '<div class="positions-grid">';
+            // Same symbol+side+account: prefer manual over external (User Data Stream can broadcast external before ManualPosition is saved)
+            const bySymbolSide = new Map();
             allPositions.forEach(pos => {
+                const accId = (pos.account_id != null && String(pos.account_id).trim() !== '') ? String(pos.account_id).trim() : 'default';
+                const k = (pos.symbol || '').trim().toUpperCase() + '|' + (pos.position_side || '') + '|' + accId;
+                const existing = bySymbolSide.get(k);
+                const posManual = (pos.strategy_id || '').startsWith('manual_');
+                const existingManual = existing && (existing.strategy_id || '').startsWith('manual_');
+                if (!existing || (posManual && !existingManual)) bySymbolSide.set(k, pos);
+            });
+            const deduped = Array.from(bySymbolSide.values());
+
+            // Sort for consistent order: by symbol, then LONG before SHORT, then by strategy_id
+            deduped.sort((a, b) => {
+                const symCmp = (a.symbol || '').localeCompare(b.symbol || '');
+                if (symCmp !== 0) return symCmp;
+                const sideOrder = { LONG: 0, SHORT: 1 };
+                const sideCmp = (sideOrder[a.position_side] ?? 2) - (sideOrder[b.position_side] ?? 2);
+                if (sideCmp !== 0) return sideCmp;
+                return (a.strategy_id || '').localeCompare(b.strategy_id || '');
+            });
+
+            let html = '<div class="positions-grid">';
+            deduped.forEach(pos => {
                 // BUG FIX: Validate position data before displaying
                 if (!pos.position_side || (pos.position_side !== 'LONG' && pos.position_side !== 'SHORT')) {
                     console.warn('Invalid position side:', pos);
@@ -1132,8 +1241,8 @@
                 const currentPriceDisplay = (currentPrice != null && currentPrice > 0) ? `$${formatPrice(currentPrice)}` : '—';
                 const priceForNotional = (currentPrice != null && currentPrice > 0) ? currentPrice : entryPrice;
                 const sizeUsdt = positionSize * priceForNotional;
-                
-                html += `<div class="position-card ${sideClass}">`;
+                const positionKey = (pos.symbol || '') + '|' + (pos.strategy_id || '') + '|' + (pos.position_side || '') + '|' + entryPrice + '|' + positionSize;
+                html += `<div class="position-card ${sideClass}" data-position-key="${String(positionKey).replace(/"/g, '&quot;')}">`;
                 html += `<div class="position-header">`;
                 html += `<div class="position-symbol">${pos.symbol || 'N/A'}</div>`;
                 html += `<div class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</div>`;
@@ -1155,11 +1264,19 @@
                 if (pos.margin_type) {
                     html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;
                 }
-                if (pos.strategy_name) {
-                    html += `<div class="position-detail-item"><span>Owner:</span><span>${pos.strategy_name}</span></div>`;
-                } else {
-                    html += `<div class="position-detail-item"><span>Owner:</span><span style="color: #999; font-style: italic;">Not matched</span></div>`;
+                // Owner: derive consistently from strategy_id and strategy_name for reliability
+                const sid = pos.strategy_id != null ? String(pos.strategy_id).trim() : '';
+                let ownerLabel = pos.strategy_name || '';
+                if (!ownerLabel) {
+                    if (sid.startsWith('manual_')) ownerLabel = 'Manual Trade';
+                    else if (!sid || sid.startsWith('external_')) ownerLabel = 'External';
+                    else ownerLabel = 'Strategy';
                 }
+                const safeOwner = (ownerLabel + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                html += `<div class="position-detail-item"><span>Owner:</span><span>${safeOwner}</span></div>`;
+                const accountDisplay = (pos.account_id != null && String(pos.account_id).trim() !== '') ? String(pos.account_id).trim() : 'default';
+                const safeAccount = accountDisplay.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                html += `<div class="position-detail-item"><span>Account:</span><span>${safeAccount}</span></div>`;
                 // Show TP/SL info for manual positions
                 if (pos.tp_price) {
                     html += `<div class="position-detail-item"><span>Take Profit:</span><span style="color: #28a745;">$${formatPrice(pos.tp_price)}</span></div>`;
@@ -1169,25 +1286,27 @@
                 }
                 html += `</div>`;
                 
-                // Check if this is a manual position (strategy_id starts with "manual_")
+                // Check if this is a manual position (strategy_id starts with "manual_") or external (external_*)
                 const isManualPosition = pos.strategy_id && String(pos.strategy_id).startsWith('manual_');
+                const isExternalPosition = pos.strategy_id && String(pos.strategy_id).startsWith('external_');
                 const manualPositionId = isManualPosition ? String(pos.strategy_id).replace('manual_', '') : null;
                 
                 if (isManualPosition && manualPositionId) {
-                    // Manual position - use manual trading API
+                    const posAccId = (pos.account_id != null && String(pos.account_id).trim() !== '') ? String(pos.account_id).replace(/'/g, "\\'") : 'default';
                     const closeDisabled = manualCloseInProgress === pos.strategy_id ? 'disabled' : '';
                     const closeLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Close';
                     html += `<div class="position-actions">`;
-                    html += `<button class="position-close-btn" ${closeDisabled} onclick="closeManualPosition('${manualPositionId}')">${closeLabel}</button>`;
+                    html += `<button class="position-close-btn" ${closeDisabled} onclick="closeManualPosition('${manualPositionId}', '${posAccId}')">${closeLabel}</button>`;
                     html += `</div>`;
-                } else if (pos.strategy_id) {
-                    // Strategy position - use existing manual close
+                } else if (pos.strategy_id && !isExternalPosition) {
+                    const posAccId = (pos.account_id != null && String(pos.account_id).trim() !== '') ? String(pos.account_id).replace(/'/g, "\\'") : 'default';
                     const manualCloseDisabled = manualCloseInProgress === pos.strategy_id ? 'disabled' : '';
                     const manualCloseLabel = manualCloseInProgress === pos.strategy_id ? 'Closing...' : 'Close';
                     html += `<div class="position-actions">`;
-                    html += `<button class="position-close-btn" ${manualCloseDisabled} onclick="manualClosePosition('${String(pos.strategy_id).replace(/'/g, "\\'")}', '${String(pos.symbol || '').replace(/'/g, "\\'")}', '${String(pos.position_side || '').replace(/'/g, "\\'")}')">${manualCloseLabel}</button>`;
+                    html += `<button class="position-close-btn" ${manualCloseDisabled} onclick="manualClosePosition('${String(pos.strategy_id).replace(/'/g, "\\'")}', '${String(pos.symbol || '').replace(/'/g, "\\'")}', '${String(pos.position_side || '').replace(/'/g, "\\'")}', '${posAccId}')">${manualCloseLabel}</button>`;
                     html += `</div>`;
                 }
+                // External positions: no close button (opened on Binance externally; close on exchange or app)
                 html += `</div>`;
             });
             html += '</div>';
@@ -1196,12 +1315,13 @@
 
         let manualCloseInProgress = null;
 
-        async function manualClosePosition(strategyId, symbol, positionSide) {
+        async function manualClosePosition(strategyId, symbol, positionSide, accountId) {
             if (!strategyId) return;
             const confirmed = window.confirm(`Manually close ${symbol} ${positionSide} and record exit reason as MANUAL?`);
             if (!confirmed) return;
 
             manualCloseInProgress = strategyId;
+            const acc = (accountId != null && String(accountId).trim() !== '') ? String(accountId).trim() : 'default';
             displayPositions(mergePnlWithWs(lastPnlData || []));
             try {
                 const response = await authFetch(`/api/trades/strategies/${encodeURIComponent(strategyId)}/manual-close`, {
@@ -1221,20 +1341,18 @@
                     throw new Error(data.detail || `Manual close failed (${response.status})`);
                 }
 
-                // CRITICAL: Immediately remove the closed position from local data
-                // Don't wait for REST to update - the position is already closed on Binance
                 if (lastPnlData && Array.isArray(lastPnlData)) {
                     lastPnlData.forEach(symbolData => {
                         if (symbolData.open_positions && Array.isArray(symbolData.open_positions)) {
-                            symbolData.open_positions = symbolData.open_positions.filter(pos => 
-                                !(pos.strategy_id === strategyId && pos.symbol === symbol)
+                            symbolData.open_positions = symbolData.open_positions.filter(pos =>
+                                !(pos.strategy_id === strategyId && (pos.symbol || '').toUpperCase() === (symbol || '').toUpperCase() && ((pos.account_id || 'default') === acc))
                             );
                         }
                     });
                 }
-                // Also clear from WebSocket position store so merged view is correct
-                if (window.positionUpdates) {
-                    delete window.positionUpdates[strategyId];
+                const compositeKey = acc + '|' + strategyId;
+                if (typeof window.PositionUpdates !== 'undefined' && typeof window.PositionUpdates.deleteKey === 'function') {
+                    window.PositionUpdates.deleteKey(compositeKey);
                 }
                 // Refresh display immediately with the closed position removed
                 const merged = mergePnlWithWs(lastPnlData || []);
@@ -1335,7 +1453,7 @@
 
         function displayTrades(trades) {
             const content = document.getElementById('tradesContent');
-            
+            if (!content) return;
             if (!trades || trades.length === 0) {
                 content.innerHTML = '<div class="empty-state"><h3>No trades found</h3><p>Try adjusting your filters</p></div>';
                 return;
@@ -1589,30 +1707,16 @@
                     const select = document.getElementById('mtAccount');
                     select.innerHTML = '';
                     
-                    // Response is an array of account objects
+                    // Response is an array of account objects; show all accounts (live + paper) with clear labels
                     if (accounts && Array.isArray(accounts) && accounts.length > 0) {
-                        // Filter out paper trading accounts if needed
-                        const liveAccounts = accounts.filter(acc => !acc.paper_trading);
-                        
-                        if (liveAccounts.length > 0) {
-                            liveAccounts.forEach(acc => {
-                                const option = document.createElement('option');
-                                option.value = acc.account_id;
-                                const testnetLabel = acc.testnet ? ' [TESTNET]' : '';
-                                option.textContent = `${acc.name || acc.account_id}${testnetLabel}`;
-                                select.appendChild(option);
-                            });
-                        } else {
-                            // If only paper accounts, show all accounts
-                            accounts.forEach(acc => {
-                                const option = document.createElement('option');
-                                option.value = acc.account_id;
-                                const paperLabel = acc.paper_trading ? ' [PAPER]' : '';
-                                const testnetLabel = acc.testnet ? ' [TESTNET]' : '';
-                                option.textContent = `${acc.name || acc.account_id}${paperLabel}${testnetLabel}`;
-                                select.appendChild(option);
-                            });
-                        }
+                        accounts.forEach(acc => {
+                            const option = document.createElement('option');
+                            option.value = acc.account_id;
+                            const paperLabel = acc.paper_trading ? ' [PAPER]' : '';
+                            const testnetLabel = acc.testnet ? ' [TESTNET]' : '';
+                            option.textContent = `${acc.name || acc.account_id}${paperLabel}${testnetLabel}`;
+                            select.appendChild(option);
+                        });
                     } else {
                         select.innerHTML = '<option value="default">default</option>';
                     }
@@ -1735,12 +1839,13 @@
         });
         
         // Close a manual position via the manual trading API
-        async function closeManualPosition(positionId) {
+        async function closeManualPosition(positionId, accountId) {
             if (!positionId) return;
             
             const confirmed = window.confirm('Close this manual position?');
             if (!confirmed) return;
             
+            const acc = (accountId != null && String(accountId).trim() !== '') ? String(accountId).trim() : 'default';
             const strategyIdKey = 'manual_' + positionId;
             manualCloseInProgress = strategyIdKey;
             displayPositions(mergePnlWithWs(lastPnlData || []));
@@ -1754,20 +1859,32 @@
                     })
                 });
                 
-                const data = await response.json();
+                const data = await response.json().catch(() => ({}));
                 
                 if (!response.ok) {
-                    throw new Error(data.detail || 'Failed to close position');
+                    const msg = (data && (data.detail || data.message)) || 'Failed to close position';
+                    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
                 }
                 
-                // Clear from WebSocket position store
-                if (window.positionUpdates) {
-                    delete window.positionUpdates[strategyIdKey];
+                if (lastPnlData && Array.isArray(lastPnlData)) {
+                    lastPnlData.forEach(symbolData => {
+                        if (symbolData.open_positions && Array.isArray(symbolData.open_positions)) {
+                            symbolData.open_positions = symbolData.open_positions.filter(pos =>
+                                pos.strategy_id !== strategyIdKey
+                            );
+                        }
+                    });
                 }
-                
-                alert(`Position closed!\n\nPnL: $${data.realized_pnl.toFixed(2)}\nExit Price: $${data.exit_price.toFixed(2)}`);
-                
-                // Refresh data
+                const compositeKey = acc + '|' + strategyIdKey;
+                if (typeof window.PositionUpdates !== 'undefined' && typeof window.PositionUpdates.deleteKey === 'function') {
+                    window.PositionUpdates.deleteKey(compositeKey);
+                }
+
+                if (data && typeof data.realized_pnl === 'number' && typeof data.exit_price === 'number') {
+                    alert(`Position closed!\n\nPnL: $${data.realized_pnl.toFixed(2)}\nExit Price: $${data.exit_price.toFixed(2)}`);
+                } else {
+                    alert('Position closed!');
+                }
                 loadData();
                 
             } catch (error) {
@@ -1792,6 +1909,72 @@
             return num.toFixed(8).replace(/\.?0+$/, '');
         }
 
+        /**
+         * Test harness: merge REST + WebSocket position data and card list.
+         * Run from console: runPositionMergeTests()
+         * Or open /trades?test=positions to run on load and see results in console.
+         */
+        function runPositionMergeTests() {
+            const norm = (s) => (s != null && s !== '') ? String(s).trim().toUpperCase() : '';
+            const tests = [];
+            const assert = (name, ok, msg) => {
+                tests.push({ name, ok, msg: msg || (ok ? 'OK' : 'FAIL') });
+                if (!ok) console.error('[PositionMergeTest]', name, msg);
+            };
+
+            // Mock REST: two symbols, one position each
+            const restData = [
+                { symbol: 'BTCUSDT', open_positions: [{ symbol: 'BTCUSDT', strategy_id: 'strat-uuid-1', position_side: 'LONG', position_size: 0.01, entry_price: 50000, unrealized_pnl: 10 }], total_pnl: 0, total_realized_pnl: 0, total_unrealized_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 },
+                { symbol: 'ethusdt', open_positions: [{ symbol: 'ETHUSDT', strategy_id: 'external_LONG', position_side: 'LONG', position_size: 0.5, entry_price: 3000, unrealized_pnl: -5 }], total_pnl: 0, total_realized_pnl: 0, total_unrealized_pnl: 0, completed_trades: 0, win_rate: 0, winning_trades: 0, losing_trades: 0, total_trades: 0 }
+            ];
+            const originalGetAll = window.PositionUpdates && window.PositionUpdates.getAll;
+            const mockWs = {
+                'strat-uuid-1': { strategy_id: 'strat-uuid-1', symbol: 'btcusdt', position_side: 'LONG', position_size: 0.01, entry_price: 50000, current_price: 50100, unrealized_pnl: 12 },
+                'external_LONG': { strategy_id: 'external_LONG', symbol: 'ETHUSDT', position_side: 'LONG', position_size: 0.5, entry_price: 3000, current_price: 2990, unrealized_pnl: -5.5 }
+            };
+            if (window.PositionUpdates) {
+                window.PositionUpdates.getAll = function() { return mockWs; };
+            }
+
+            const merged = mergePnlWithWs(restData);
+            const symbolKeys = new Set((merged || []).map(s => norm(s.symbol)));
+            assert('merged is array', Array.isArray(merged), '');
+            assert('no duplicate symbol rows', symbolKeys.size === (merged || []).length, 'symbol rows should be unique by normalized symbol');
+            assert('BTCUSDT row exists', merged.some(s => norm(s.symbol) === 'BTCUSDT'), '');
+            assert('ETHUSDT row exists', merged.some(s => norm(s.symbol) === 'ETHUSDT'), '');
+            const btcRow = merged.find(s => norm(s.symbol) === 'BTCUSDT');
+            const ethRow = merged.find(s => norm(s.symbol) === 'ETHUSDT');
+            assert('BTCUSDT has one position', btcRow && btcRow.open_positions && btcRow.open_positions.length === 1, '');
+            assert('ETHUSDT has one position', ethRow && ethRow.open_positions && ethRow.open_positions.length === 1, '');
+            const btcPos = btcRow && btcRow.open_positions[0];
+            const ethPos = ethRow && ethRow.open_positions[0];
+            assert('WS merged into REST (current_price)', btcPos && btcPos.current_price === 50100, 'strategy position should have WS price');
+            assert('external position kept', ethPos && (ethPos.strategy_id || '').startsWith('external_'), '');
+
+            // Build card list like displayPositions
+            const seenKeys = new Set();
+            const allPositions = [];
+            (merged || []).forEach(symbol => {
+                (symbol.open_positions || []).forEach(pos => {
+                    const sid = (pos.strategy_id != null) ? String(pos.strategy_id) : '';
+                    const symDisplay = norm(pos.symbol || symbol.symbol) || 'N/A';
+                    const key = symDisplay + '|' + sid + '|' + (pos.position_side || '');
+                    if (seenKeys.has(key)) return;
+                    seenKeys.add(key);
+                    allPositions.push({ ...pos, symbol: symDisplay });
+                });
+            });
+            assert('card count equals position count', allPositions.length === 2, 'expected 2 cards, got ' + allPositions.length);
+            assert('cards have normalized symbol', allPositions.every(p => p.symbol === norm(p.symbol)), 'symbols should be uppercase');
+
+            if (window.PositionUpdates && originalGetAll) {
+                window.PositionUpdates.getAll = originalGetAll;
+            }
+            const failed = tests.filter(t => !t.ok);
+            console.log('[PositionMergeTest]', failed.length === 0 ? 'All passed' : failed.length + ' failed', tests);
+            return { passed: failed.length === 0, tests };
+        }
+
         // Load user info
         // loadUserInfo is now in common.js
 
@@ -1799,6 +1982,10 @@
 
         // Initialize on page load
         window.addEventListener('load', async () => {
+            if (window.location.search.indexOf('test=positions') !== -1) {
+                const result = runPositionMergeTests();
+                console.log('Position merge tests:', result.passed ? 'PASSED' : 'FAILED', result);
+            }
             // loadUserInfo is called automatically by common.js
             loadAccounts();
             loadSymbols();

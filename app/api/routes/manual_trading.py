@@ -12,6 +12,7 @@ from app.api.deps import (
     get_client_manager,
     get_notification_service,
     get_position_broadcast_service,
+    get_mark_price_stream_manager,
 )
 from app.core.binance_client_manager import BinanceClientManager
 from app.core.position_broadcast import PositionBroadcastService
@@ -40,6 +41,7 @@ def _get_manual_trading_service(
     client_manager: BinanceClientManager,
     notification_service: Optional[NotificationService],
     broadcast_service: Optional[PositionBroadcastService],
+    mark_price_stream_manager=None,
 ) -> ManualTradingService:
     """Helper to create ManualTradingService instance."""
     return ManualTradingService(
@@ -48,6 +50,7 @@ def _get_manual_trading_service(
         user_id=current_user.id,
         notification_service=notification_service,
         broadcast_service=broadcast_service,
+        mark_price_stream_manager=mark_price_stream_manager,
     )
 
 
@@ -59,6 +62,7 @@ async def open_manual_position(
     client_manager: BinanceClientManager = Depends(get_client_manager),
     notification_service: NotificationService = Depends(get_notification_service),
     broadcast_service: PositionBroadcastService = Depends(get_position_broadcast_service),
+    mark_price_stream_manager=Depends(get_mark_price_stream_manager),
 ) -> ManualOpenResponse:
     """
     Open a manual position with optional TP/SL orders.
@@ -70,8 +74,8 @@ async def open_manual_position(
     """
     try:
         service = _get_manual_trading_service(
-            current_user, db_service, client_manager, 
-            notification_service, broadcast_service
+            current_user, db_service, client_manager,
+            notification_service, broadcast_service, mark_price_stream_manager,
         )
         return await service.open_position(request)
     except ValueError as e:
@@ -92,6 +96,7 @@ async def close_manual_position(
     client_manager: BinanceClientManager = Depends(get_client_manager),
     notification_service: NotificationService = Depends(get_notification_service),
     broadcast_service: PositionBroadcastService = Depends(get_position_broadcast_service),
+    mark_price_stream_manager=Depends(get_mark_price_stream_manager),
 ) -> ManualCloseResponse:
     """
     Close a manual position (full or partial).
@@ -103,7 +108,7 @@ async def close_manual_position(
     try:
         service = _get_manual_trading_service(
             current_user, db_service, client_manager,
-            notification_service, broadcast_service
+            notification_service, broadcast_service, mark_price_stream_manager,
         )
         return await service.close_position(request)
     except ValueError as e:

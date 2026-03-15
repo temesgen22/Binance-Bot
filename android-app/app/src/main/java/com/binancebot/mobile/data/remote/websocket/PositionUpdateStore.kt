@@ -1,22 +1,37 @@
 package com.binancebot.mobile.data.remote.websocket
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * In-memory store of latest position updates per strategy (from WebSocket /ws/positions).
- * ViewModels merge this with API data so the UI shows real-time PnL/price without refetch.
+ * In-memory store of latest position updates per (account, strategy) from WebSocket /ws/positions.
+ * Uses composite key "accountId|strategyId" so the same symbol on multiple accounts (e.g. live + paper)
+ * do not overwrite each other. Matches web app behavior.
  */
 @Singleton
 class PositionUpdateStore @Inject constructor() {
     private val _updates = MutableStateFlow<Map<String, PositionUpdateData>>(emptyMap())
     val updates: StateFlow<Map<String, PositionUpdateData>> = _updates.asStateFlow()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Build composite key: accountId|strategyId (or accountId|manual_$symbol when strategyId blank). */
+    fun compositeKey(accountId: String, strategyId: String, symbol: String): String {
+        val acc = accountId.ifBlank { "default" }
+        val strat = if (strategyId.isBlank()) "manual_$symbol" else strategyId
+        return "$acc|$strat"
+    }
 
     fun apply(update: UpdateMessage.PositionUpdate) {
-        val key = if (update.strategyId.isBlank()) "manual_${update.symbol}" else update.strategyId
+        val stratKey = if (update.strategyId.isBlank()) "manual_${update.symbol}" else update.strategyId
+        val key = compositeKey(update.accountId, update.strategyId, update.symbol)
         val data = PositionUpdateData(
             strategyId = update.strategyId,
             strategyName = update.strategyName,
@@ -34,6 +49,10 @@ class PositionUpdateStore @Inject constructor() {
         )
         if (update.positionSize <= 0) {
             _updates.value = _updates.value + (key to data.copy(positionSize = 0.0))
+            scope.launch {
+                delay(3000)
+                _updates.value = _updates.value - key
+            }
         } else {
             _updates.value = _updates.value + (key to data)
         }
@@ -41,15 +60,11 @@ class PositionUpdateStore @Inject constructor() {
 
     /**
      * Remove a position from the store (e.g., after manual close).
-     * Sets position size to 0 so merged views filter it out.
+     * Use composite key: "${accountId}|${strategyId}" so multi-account is correct.
      */
-    fun removePosition(strategyId: String) {
-        if (strategyId.isBlank()) return
-        val current = _updates.value[strategyId]
-        if (current != null) {
-            // Mark position as closed (size 0) so merge logic excludes it
-            _updates.value = _updates.value + (strategyId to current.copy(positionSize = 0.0))
-        }
+    fun removePosition(compositeKey: String) {
+        if (compositeKey.isBlank()) return
+        _updates.value = _updates.value - compositeKey
     }
 }
 
