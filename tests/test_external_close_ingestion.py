@@ -268,7 +268,8 @@ class TestHandleExternalPositionClose:
         sid = uuid4()
         pid = uuid4()
         mock_trade_svc = MagicMock()
-        mock_trade_svc.save_trade.return_value = MagicMock(id=uuid4())
+        # exit_reason=None so handler does not skip create_completed_trades (skip only when strategy exit_reason like TP/SL)
+        mock_trade_svc.save_trade.return_value = MagicMock(id=uuid4(), exit_reason=None)
         mock_client = MagicMock()
         mock_client.get_account_trades.return_value = [
             {"orderId": 888, "side": "SELL", "qty": 1.0, "time": 1700000000000},
