@@ -713,16 +713,17 @@ class ManualTradingService:
         pct: Optional[float],
         price: Optional[float],
     ) -> Optional[float]:
-        """Calculate take profit price from percentage or absolute price."""
+        """Calculate take profit price from percentage or absolute price.
+        Preserves user decimals (e.g. 0.010580); Binance client rounds to tick size when placing."""
         # Validate absolute price - must be within reasonable range of entry
-        if price and price > entry * 0.5 and price < entry * 2:
-            return round(price, 2)
+        if price is not None and price > entry * 0.5 and price < entry * 2:
+            return float(price)
         # Fall back to percentage calculation
         if not pct:
             return None
         if side == "LONG":
-            return round(entry * (1 + pct), 2)
-        return round(entry * (1 - pct), 2)
+            return round(entry * (1 + pct), 8)
+        return round(entry * (1 - pct), 8)
     
     def _calculate_sl_price(
         self,
@@ -731,16 +732,17 @@ class ManualTradingService:
         pct: Optional[float],
         price: Optional[float],
     ) -> Optional[float]:
-        """Calculate stop loss price from percentage or absolute price."""
+        """Calculate stop loss price from percentage or absolute price.
+        Preserves user decimals (e.g. 0.010580); Binance client rounds to tick size when placing."""
         # Validate absolute price - must be within reasonable range of entry
-        if price and price > entry * 0.5 and price < entry * 2:
-            return round(price, 2)
+        if price is not None and price > entry * 0.5 and price < entry * 2:
+            return float(price)
         # Fall back to percentage calculation
         if not pct:
             return None
         if side == "LONG":
-            return round(entry * (1 - pct), 2)
-        return round(entry * (1 + pct), 2)
+            return round(entry * (1 - pct), 8)
+        return round(entry * (1 + pct), 8)
     
     async def _place_take_profit_order(
         self,

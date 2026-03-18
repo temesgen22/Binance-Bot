@@ -509,6 +509,43 @@ class BinanceClient:
         """
         precision = self.get_quantity_precision(symbol)
         return round(quantity, precision)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_price_tick_size(self, symbol: str) -> float:
+        """Get the price tick size (PRICE_FILTER) for a symbol from Binance.
+        Used to round TP/SL and other prices to valid decimals."""
+        cache_key = f"_price_tick_{symbol}"
+        if getattr(self, "_price_tick_cache", None) is None:
+            self._price_tick_cache = {}
+        if symbol in self._price_tick_cache:
+            return self._price_tick_cache[symbol]
+        rest = self._ensure()
+        try:
+            exchange_info = rest.futures_exchange_info()
+            for s in exchange_info.get("symbols", []):
+                if s["symbol"] == symbol:
+                    for f in s.get("filters", []):
+                        if f.get("filterType") == "PRICE_FILTER":
+                            tick = float(f.get("tickSize", "0.01"))
+                            self._price_tick_cache[symbol] = tick
+                            logger.debug(f"Price tick size for {symbol}: {tick}")
+                            return tick
+            logger.warning(f"PRICE_FILTER not found for {symbol}, defaulting to 0.00001")
+            self._price_tick_cache[symbol] = 0.00001
+            return 0.00001
+        except Exception as exc:
+            logger.warning(f"Error fetching price tick for {symbol}: {exc}, defaulting to 0.00001")
+            self._price_tick_cache[symbol] = 0.00001
+            return 0.00001
+
+    def round_price(self, symbol: str, price: float) -> float:
+        """Round price to the symbol's tick size (Binance PRICE_FILTER). Use for TP/SL and any price sent to the API."""
+        tick = self.get_price_tick_size(symbol)
+        if tick <= 0:
+            return price
+        # Round to nearest tick; then round to 8 decimals to avoid float representation noise
+        n = round(price / tick) * tick
+        return round(n, 8)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_min_notional(self, symbol: str) -> float:
@@ -1426,12 +1463,12 @@ class BinanceClient:
             self._sync_time_with_binance()
         
         rest = self._ensure()
-        
+        stop_price_rounded = self.round_price(symbol, stop_price)
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "STOP_MARKET",
-            "stopPrice": stop_price,
+            "stopPrice": stop_price_rounded,
             "workingType": "MARK_PRICE",  # Trigger based on mark price
             "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
@@ -1458,7 +1495,7 @@ class BinanceClient:
         except KeyError as ke:
             if ke.args and ke.args[0] == "order_type":
                 # Library may expect "order_type" but API returns "type"; recover from open orders
-                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price, "STOP_MARKET")
+                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price_rounded, "STOP_MARKET")
                 if fallback:
                     return fallback
             raise BinanceAPIError(
@@ -1513,12 +1550,12 @@ class BinanceClient:
             self._sync_time_with_binance()
         
         rest = self._ensure()
-        
+        stop_price_rounded = self.round_price(symbol, stop_price)
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "TAKE_PROFIT_MARKET",
-            "stopPrice": stop_price,
+            "stopPrice": stop_price_rounded,
             "workingType": "MARK_PRICE",  # Trigger based on mark price
             "recvWindow": 10000,  # 10 seconds tolerance for time differences
         }
@@ -1544,7 +1581,7 @@ class BinanceClient:
             return response
         except KeyError as ke:
             if ke.args and ke.args[0] == "order_type":
-                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price, "TAKE_PROFIT_MARKET")
+                fallback = self._tp_sl_fallback_from_open_orders(rest, symbol, stop_price_rounded, "TAKE_PROFIT_MARKET")
                 if fallback:
                     return fallback
             raise BinanceAPIError(
@@ -1619,12 +1656,13 @@ class BinanceClient:
         
         ts = int(time.time() * 1000) + self._time_offset_ms
         
+        trigger_price_rounded = self.round_price(symbol, trigger_price)
         params: Dict[str, Any] = {
             "algoType": "CONDITIONAL",  # Required parameter
             "symbol": symbol,
             "side": side,
             "type": order_type,
-            "triggerPrice": str(trigger_price),
+            "triggerPrice": str(trigger_price_rounded),
             "workingType": working_type,
             "timestamp": ts,
             "recvWindow": 10000,

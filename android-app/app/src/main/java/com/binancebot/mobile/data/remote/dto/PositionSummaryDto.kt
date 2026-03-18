@@ -28,6 +28,16 @@ data class PositionSummaryDto(
     @SerializedName("initial_margin")
     val initialMargin: Double? = null,
     @SerializedName("margin_type")
-    val marginType: String? = null
+    val marginType: String? = null,
+    @SerializedName("tp_price")
+    val tpPrice: Double? = null,
+    @SerializedName("sl_price")
+    val slPrice: Double? = null,
+    @SerializedName("tp_order_id")
+    val tpOrderId: Long? = null,
+    @SerializedName("sl_order_id")
+    val slOrderId: Long? = null,
+    @SerializedName("trailing_stop_enabled")
+    val trailingStopEnabled: Boolean = false
 )
 
