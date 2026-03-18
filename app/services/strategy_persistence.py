@@ -599,6 +599,39 @@ class StrategyPersistence:
             initial_margin=getattr(summary, "initial_margin", None),
             margin_type=getattr(summary, "margin_type", None),
         )
+        # Register for mark price immediately when we broadcast an open position (strategy/open path).
+        # This ensures real-time PnL works for paper and live even if update_position_info runs later or fails.
+        if (
+            size > 0
+            and self.user_id
+            and self.mark_price_stream_manager
+            and getattr(summary, "position_instance_id", None) is not None
+        ):
+            try:
+                entry = float(summary.entry_price or 0)
+                side = (summary.position_side or "LONG").upper()
+                if side not in ("LONG", "SHORT"):
+                    side = "LONG"
+                self.mark_price_stream_manager.register_position(
+                    summary.symbol,
+                    summary.id,
+                    self.user_id,
+                    entry,
+                    size,
+                    side,
+                    summary.account_id,
+                    leverage=summary.leverage,
+                    initial_margin=getattr(summary, "initial_margin", None),
+                    strategy_name=summary.name,
+                )
+                await self.mark_price_stream_manager.subscribe(summary.symbol)
+                logger.debug(
+                    f"[{summary.id}] Mark price registered on broadcast: {summary.symbol} (size={size})"
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"[{summary.id}] mark price register/subscribe on broadcast failed: {exc}"
+                )
 
     async def update_position_info(self, summary: StrategySummary) -> None:
         """Update position information and unrealized PnL for a strategy.

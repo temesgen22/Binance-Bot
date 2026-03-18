@@ -68,7 +68,8 @@ object BacktestStrategyDefaults {
             ParamDef.Int("cooldown_candles", "Cooldown Candles", 2, 0, 10),
             ParamDef.Checkbox("enable_ema_cross_exit", "Enable EMA Cross Exits", true),
             ParamDef.Checkbox("trailing_stop_enabled", "Trailing Stop", false),
-            ParamDef.Number("trailing_stop_activation_pct", "Trailing Activation %", 0.0, 0.0, 0.1, 0.001)
+            ParamDef.Number("trailing_stop_activation_pct", "Trailing Activation %", 0.0, 0.0, 0.1, 0.001),
+            ParamDef.Select("sl_trigger_mode", "SL Trigger", "live_price", listOf("live_price", "candle_close"))
         )
         "range_mean_reversion" -> listOf(
             ParamDef.Select("kline_interval", "Kline Interval", "5m", KLINE_INTERVAL_OPTIONS),
@@ -86,7 +87,8 @@ object BacktestStrategyDefaults {
             ParamDef.Number("sl_buffer_pct", "SL Buffer %", 0.002, 0.0, 0.05, 0.0001),
             ParamDef.Int("cooldown_candles", "Cooldown Candles", 2, 0, 10),
             ParamDef.Int("max_range_invalid_candles", "Max Range Invalid Candles", 20, 5, 100),
-            ParamDef.Checkbox("enable_short", "Enable Short Trading", true)
+            ParamDef.Checkbox("enable_short", "Enable Short Trading", true),
+            ParamDef.Select("sl_trigger_mode", "SL Trigger", "live_price", listOf("live_price", "candle_close"))
         )
         else -> emptyList()
     }
@@ -107,7 +109,8 @@ object BacktestStrategyDefaults {
             "cooldown_candles" to 2,
             "enable_ema_cross_exit" to true,
             "trailing_stop_enabled" to false,
-            "trailing_stop_activation_pct" to 0.0
+            "trailing_stop_activation_pct" to 0.0,
+            "sl_trigger_mode" to "live_price"
         )
         "range_mean_reversion" -> mapOf(
             "kline_interval" to "5m",
@@ -125,7 +128,8 @@ object BacktestStrategyDefaults {
             "sl_buffer_pct" to 0.002,
             "cooldown_candles" to 2,
             "max_range_invalid_candles" to 20,
-            "enable_short" to true
+            "enable_short" to true,
+            "sl_trigger_mode" to "live_price"
         )
         else -> emptyMap()
     }

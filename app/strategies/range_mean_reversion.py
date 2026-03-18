@@ -101,6 +101,10 @@ class RangeMeanReversionStrategy(Strategy):
         self.range_valid: bool = False
         self.range_invalid_count: int = 0  # Track consecutive invalid range detections
         self.max_range_invalid_candles: int = int(context.params.get("max_range_invalid_candles", 20))  # Reset range after N invalid candles
+
+        # SL trigger: live_price (any tick) or candle_close (only when candle close is beyond SL)
+        _sl_mode = str(context.params.get("sl_trigger_mode", "live_price")).lower()
+        self.sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
     
     def _exit_signal(
         self,
@@ -128,7 +132,8 @@ class RangeMeanReversionStrategy(Strategy):
         self,
         live_price: float,
         *,
-        allow_tp: bool = True
+        allow_tp: bool = True,
+        candle_close_price: Optional[float] = None
     ) -> Optional[StrategySignal]:
         """
         Check TP/SL using last known range.
@@ -136,6 +141,7 @@ class RangeMeanReversionStrategy(Strategy):
         Args:
             live_price: Current live price
             allow_tp: Whether to allow TP exits (False to block on entry candle)
+            candle_close_price: Close of last closed candle; when sl_trigger_mode is candle_close, SL uses this for the check
         
         Returns:
             StrategySignal if TP/SL hit, None otherwise
@@ -146,6 +152,14 @@ class RangeMeanReversionStrategy(Strategy):
         if not (self.position and self.range_valid and 
                 self.range_high is not None and self.range_low is not None and self.range_mid is not None):
             return None
+
+        # For SL: use candle_close_price only when user chose candle_close and we have it; else always use live_price
+        if self.sl_trigger_mode == "candle_close" and candle_close_price is not None:
+            use_sl_price = candle_close_price
+            sl_exit_price = candle_close_price
+        else:
+            use_sl_price = live_price
+            sl_exit_price = live_price
         
         range_size = self.range_high - self.range_low
         
@@ -155,14 +169,14 @@ class RangeMeanReversionStrategy(Strategy):
             sl = self.range_low - (range_size * self.sl_buffer_pct)
             
             # Check SL first (critical exit - always allowed)
-            if live_price <= sl:
+            if use_sl_price <= sl:
                 logger.info(
                     f"[{self.context.id}] Long SL hit (below range): "
-                    f"{live_price:.8f} <= {sl:.8f}"
+                    f"{use_sl_price:.8f} <= {sl:.8f}"
                 )
-                return self._exit_signal("SELL", live_price, "SL_RANGE_BREAK", 0.85)
+                return self._exit_signal("SELL", sl_exit_price, "SL_RANGE_BREAK", 0.85)
             
-            # Check TP (only if allowed - blocked on entry candle)
+            # Check TP (only if allowed - blocked on entry candle); TP always uses live_price
             if allow_tp:
                 if live_price >= tp2:
                     logger.info(
@@ -184,14 +198,14 @@ class RangeMeanReversionStrategy(Strategy):
             sl = self.range_high + (range_size * self.sl_buffer_pct)
             
             # Check SL first (critical exit - always allowed)
-            if live_price >= sl:
+            if use_sl_price >= sl:
                 logger.info(
                     f"[{self.context.id}] Short SL hit (above range): "
-                    f"{live_price:.8f} >= {sl:.8f}"
+                    f"{use_sl_price:.8f} >= {sl:.8f}"
                 )
-                return self._exit_signal("BUY", live_price, "SL_RANGE_BREAK", 0.85)
+                return self._exit_signal("BUY", sl_exit_price, "SL_RANGE_BREAK", 0.85)
             
-            # Check TP (only if allowed - blocked on entry candle)
+            # Check TP (only if allowed - blocked on entry candle); TP always uses live_price
             if allow_tp:
                 if live_price <= tp2:
                     logger.info(
@@ -413,7 +427,10 @@ class RangeMeanReversionStrategy(Strategy):
                                       self.entry_candle_time == self.last_closed_candle_time)
                     
                     # Check TP/SL using unified helper (consistent with other paths)
-                    exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                    candle_close_price = float(last_closed[4]) if self.sl_trigger_mode == "candle_close" else None
+                    exit_signal = self._check_tp_sl(
+                        live_price, allow_tp=not on_entry_candle, candle_close_price=candle_close_price
+                    )
                     if exit_signal:
                         return exit_signal
                 # Return HOLD after TP/SL check (or if no position)
@@ -441,7 +458,10 @@ class RangeMeanReversionStrategy(Strategy):
                                       self.entry_candle_time == self.last_closed_candle_time)
                     
                     # Check TP/SL using unified helper (consistent with other paths)
-                    exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                    candle_close_price = float(last_closed[4]) if self.sl_trigger_mode == "candle_close" else None
+                    exit_signal = self._check_tp_sl(
+                        live_price, allow_tp=not on_entry_candle, candle_close_price=candle_close_price
+                    )
                     if exit_signal:
                         return exit_signal
                 # Return HOLD after TP/SL check (or if no position)
@@ -468,7 +488,10 @@ class RangeMeanReversionStrategy(Strategy):
                                   self.entry_candle_time == self.last_closed_candle_time)
                 
                 # Check TP/SL using unified helper (consistent with other paths)
-                exit_signal = self._check_tp_sl(live_price, allow_tp=not on_entry_candle)
+                candle_close_price = float(last_closed[4]) if self.sl_trigger_mode == "candle_close" else None
+                exit_signal = self._check_tp_sl(
+                    live_price, allow_tp=not on_entry_candle, candle_close_price=candle_close_price
+                )
                 if exit_signal:
                     return exit_signal
             

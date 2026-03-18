@@ -727,14 +727,15 @@ fun getRelevantParams(strategyType: String, params: Map<String, Any>): Map<Strin
         "ema_fast", "ema_slow", "take_profit_pct", "stop_loss_pct",
         "interval_seconds", "kline_interval", "enable_short",
         "min_ema_separation", "enable_htf_bias", "cooldown_candles",
-        "trailing_stop_enabled", "trailing_stop_activation_pct"
+        "trailing_stop_enabled", "trailing_stop_activation_pct", "sl_trigger_mode"
     )
     
     val rangeMeanReversionParams = listOf(
         "lookback_period", "buy_zone_pct", "sell_zone_pct",
         "ema_fast_period", "ema_slow_period", "max_ema_spread_pct",
         "max_atr_multiplier", "rsi_period", "rsi_oversold",
-        "rsi_overbought", "tp_buffer_pct", "sl_buffer_pct", "kline_interval"
+        "rsi_overbought", "tp_buffer_pct", "sl_buffer_pct", "kline_interval",
+        "sl_trigger_mode"
     )
     
     val relevantKeys = when {

@@ -34,6 +34,9 @@ def extract_range_mean_reversion_params(params: Dict[str, Any]) -> Dict[str, Any
         "rsi_oversold": _num(params.get("rsi_oversold"), 40),
         "rsi_overbought": _num(params.get("rsi_overbought"), 60),
         "max_ema_spread_pct": _num(params.get("max_ema_spread_pct"), 0.005),
+        "sl_trigger_mode": str(params.get("sl_trigger_mode", "live_price")).lower()
+        if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")
+        else "live_price",
     }
 
 
@@ -54,6 +57,9 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         "stop_loss_pct": _num(params.get("stop_loss_pct"), 0.002),
         "trailing_stop_enabled": params.get("trailing_stop_enabled", False) if params.get("trailing_stop_enabled") is not None else False,
         "trailing_stop_activation_pct": _num(params.get("trailing_stop_activation_pct"), 0.0),
+        "sl_trigger_mode": str(params.get("sl_trigger_mode", "live_price")).lower()
+        if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")
+        else "live_price",
     }
 
 

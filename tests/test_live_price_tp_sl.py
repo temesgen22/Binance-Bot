@@ -63,6 +63,9 @@ def mock_client():
     client.get_current_leverage = MagicMock(return_value=5)
     client.place_stop_loss_order = MagicMock(return_value={"orderId": 1001})
     client.place_take_profit_order = MagicMock(return_value={"orderId": 1002})
+    # Algo Order API (preferred when present) - strategy_order_manager uses these for live BinanceClient
+    client.place_algo_take_profit = MagicMock(return_value={"orderId": 1002})
+    client.place_algo_stop_loss = MagicMock(return_value={"orderId": 1001})
     client.cancel_order = MagicMock(return_value={})
     client.get_open_orders = MagicMock(return_value=[])
     return client
@@ -386,22 +389,21 @@ class TestBinanceNativeTPSL:
         # Place TP/SL orders
         await runner.order_manager.place_tp_sl_orders(summary, order_response)
         
-        # Verify TP order was placed
-        mock_client.place_take_profit_order.assert_called_once()
-        tp_call = mock_client.place_take_profit_order.call_args
+        # Verify TP/SL orders placed via Algo Order API (preferred when client has place_algo_*)
+        mock_client.place_algo_take_profit.assert_called_once()
+        tp_call = mock_client.place_algo_take_profit.call_args
         assert tp_call.kwargs["symbol"] == "BTCUSDT"
         assert tp_call.kwargs["side"] == "SELL"
-        assert tp_call.kwargs["stop_price"] == pytest.approx(40200.0, rel=1e-6)  # 40000 * 1.005 (with floating point tolerance)
+        assert tp_call.kwargs["stop_price"] == pytest.approx(40200.0, rel=1e-6)  # 40000 * 1.005
         assert tp_call.kwargs["close_position"] is True
-        
-        # Verify SL order was placed
-        mock_client.place_stop_loss_order.assert_called_once()
-        sl_call = mock_client.place_stop_loss_order.call_args
+
+        mock_client.place_algo_stop_loss.assert_called_once()
+        sl_call = mock_client.place_algo_stop_loss.call_args
         assert sl_call.kwargs["symbol"] == "BTCUSDT"
         assert sl_call.kwargs["side"] == "SELL"
         assert sl_call.kwargs["stop_price"] == 39880.0  # 40000 * 0.997
         assert sl_call.kwargs["close_position"] is True
-        
+
         # Verify order IDs stored in meta
         assert "tp_sl_orders" in summary.meta
         assert summary.meta["tp_sl_orders"]["tp_order_id"] == 1002
@@ -454,14 +456,16 @@ class TestBinanceNativeTPSL:
         
         await runner.order_manager.place_tp_sl_orders(summary, order_response)
         
-        # Verify TP order for SHORT (inverted)
-        tp_call = mock_client.place_take_profit_order.call_args
+        # Verify TP order for SHORT (inverted) via Algo Order API
+        mock_client.place_algo_take_profit.assert_called_once()
+        tp_call = mock_client.place_algo_take_profit.call_args
         assert tp_call.kwargs["stop_price"] == 39800.0  # 40000 * 0.995
         assert tp_call.kwargs["side"] == "BUY"  # Buy to close short
-        
+
         # Verify SL order for SHORT (inverted)
-        sl_call = mock_client.place_stop_loss_order.call_args
-        assert sl_call.kwargs["stop_price"] == pytest.approx(40120.0, rel=1e-6)  # 40000 * 1.003 (with floating point tolerance)
+        mock_client.place_algo_stop_loss.assert_called_once()
+        sl_call = mock_client.place_algo_stop_loss.call_args
+        assert sl_call.kwargs["stop_price"] == pytest.approx(40120.0, rel=1e-6)  # 40000 * 1.003
         assert sl_call.kwargs["side"] == "BUY"  # Buy to close short
     
     @pytest.mark.asyncio

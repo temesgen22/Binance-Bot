@@ -100,22 +100,37 @@ class ReverseScalpingStrategy(Strategy):
         # Dynamic trailing stop (optional)
         self.trailing_stop_enabled = self.parse_bool_param(context.params.get("trailing_stop_enabled"), default=False)
         self.trailing_stop: Optional[TrailingStopManager] = None
+
+        # SL trigger: live_price (any tick) or candle_close (only when candle close is beyond SL)
+        _sl_mode = str(context.params.get("sl_trigger_mode", "live_price")).lower()
+        self.sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
     
-    def _check_tp_sl(self, live_price: float, context: str = "") -> Optional[StrategySignal]:
+    def _check_tp_sl(
+        self, live_price: float, context: str = "", candle_close_price: Optional[float] = None
+    ) -> Optional[StrategySignal]:
         """
         Check take profit and stop loss conditions using live price.
-        
-        This method centralizes TP/SL logic to avoid duplication and ensure consistency.
+        When sl_trigger_mode is candle_close and candle_close_price is provided, SL uses
+        the candle close for the check; TP always uses live_price.
         
         Args:
             live_price: Current market price
             context: Context string for logging (e.g., "older candle", "no new candle", "")
+            candle_close_price: Close of last closed candle; used for SL when sl_trigger_mode is candle_close
         
         Returns:
             StrategySignal if TP/SL is hit, None otherwise
         """
         if self.position is None or self.entry_price is None:
             return None
+
+        # Use candle close for SL only when user chose candle_close; otherwise always use live price
+        if self.sl_trigger_mode == "candle_close" and candle_close_price is not None:
+            use_sl_price = candle_close_price
+            sl_exit_price = candle_close_price
+        else:
+            use_sl_price = live_price
+            sl_exit_price = live_price
         
         # Optional: Block FIXED TP/SL on the entry candle to prevent immediate exits
         # This prevents tight SL from triggering right after entry on the same candle
@@ -147,7 +162,12 @@ class ReverseScalpingStrategy(Strategy):
                         trail_event.tp_price,
                         trail_event.sl_price,
                     )
-                exit_reason = self.trailing_stop.check_exit(live_price)
+                if live_price >= tp_price:
+                    exit_reason = "TP"
+                elif use_sl_price <= sl_price:
+                    exit_reason = "SL"
+                else:
+                    exit_reason = None
                 if exit_reason == "TP":
                     logger.info(
                         f"[{self.context.id}] Long Take profit hit (trailing{context_suffix}): "
@@ -168,7 +188,7 @@ class ReverseScalpingStrategy(Strategy):
                 elif exit_reason == "SL":
                     logger.info(
                         f"[{self.context.id}] Long Stop loss hit (trailing{context_suffix}): "
-                        f"{live_price:.8f} <= {sl_price:.8f}"
+                        f"{use_sl_price:.8f} <= {sl_price:.8f}"
                     )
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
@@ -178,7 +198,7 @@ class ReverseScalpingStrategy(Strategy):
                         action="SELL",
                         symbol=self.context.symbol,
                         confidence=0.85,
-                        price=live_price,
+                        price=sl_exit_price,
                         exit_reason="SL_TRAILING",
                         position_side=current_position
                     )
@@ -203,12 +223,12 @@ class ReverseScalpingStrategy(Strategy):
                         exit_reason="TP",
                         position_side=current_position
                     )
-                if live_price <= sl_price:
+                if use_sl_price <= sl_price:
                     logger.info(
                         f"[{self.context.id}] Long Stop loss hit{context_suffix}: "
-                        f"{live_price:.8f} <= {sl_price:.8f}"
+                        f"{use_sl_price:.8f} <= {sl_price:.8f}"
                     )
-                    logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
+                    logger.warning(f"[{self.context.id}] SIGNAL => SELL at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.cooldown_left = self.cooldown_candles
@@ -216,7 +236,7 @@ class ReverseScalpingStrategy(Strategy):
                         action="SELL",
                         symbol=self.context.symbol,
                         confidence=0.85,
-                        price=live_price,
+                        price=sl_exit_price,
                         exit_reason="SL",
                         position_side=current_position
                     )
@@ -232,7 +252,12 @@ class ReverseScalpingStrategy(Strategy):
                         trail_event.tp_price,
                         trail_event.sl_price,
                     )
-                exit_reason = self.trailing_stop.check_exit(live_price)
+                if live_price <= tp_price:
+                    exit_reason = "TP"
+                elif use_sl_price >= sl_price:
+                    exit_reason = "SL"
+                else:
+                    exit_reason = None
                 if exit_reason == "TP":
                     logger.info(
                         f"[{self.context.id}] Short Take profit hit (trailing{context_suffix}): "
@@ -254,9 +279,9 @@ class ReverseScalpingStrategy(Strategy):
                 elif exit_reason == "SL":
                     logger.info(
                         f"[{self.context.id}] Short Stop loss hit (trailing{context_suffix}): "
-                        f"{live_price:.8f} >= {sl_price:.8f}"
+                        f"{use_sl_price:.8f} >= {sl_price:.8f}"
                     )
-                    logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                    logger.warning(f"[{self.context.id}] SIGNAL => BUY at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
@@ -265,7 +290,7 @@ class ReverseScalpingStrategy(Strategy):
                         action="BUY",  # Cover short
                         symbol=self.context.symbol,
                         confidence=0.85,
-                        price=live_price,
+                        price=sl_exit_price,
                         exit_reason="SL_TRAILING",
                         position_side=current_position
                     )
@@ -290,12 +315,12 @@ class ReverseScalpingStrategy(Strategy):
                         exit_reason="TP",
                         position_side=current_position
                     )
-                if live_price >= sl_price:
+                if use_sl_price >= sl_price:
                     logger.info(
                         f"[{self.context.id}] Short Stop loss hit{context_suffix}: "
-                        f"{live_price:.8f} >= {sl_price:.8f}"
+                        f"{use_sl_price:.8f} >= {sl_price:.8f}"
                     )
-                    logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
+                    logger.warning(f"[{self.context.id}] SIGNAL => BUY at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.cooldown_left = self.cooldown_candles
@@ -303,7 +328,7 @@ class ReverseScalpingStrategy(Strategy):
                         action="BUY",  # Cover short
                         symbol=self.context.symbol,
                         confidence=0.85,
-                        price=live_price,
+                        price=sl_exit_price,
                         exit_reason="SL",
                         position_side=current_position
                     )
@@ -484,7 +509,10 @@ class ReverseScalpingStrategy(Strategy):
                 self.entry_candle_time = None  # Allow TP/SL on older candles
                 try:
                     # Use centralized TP/SL check method
-                    tp_sl_signal = self._check_tp_sl(live_price, context="older candle")
+                    candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
+                    tp_sl_signal = self._check_tp_sl(
+                        live_price, context="older candle", candle_close_price=candle_close_price
+                    )
                     if tp_sl_signal:
                         return tp_sl_signal
                 finally:
@@ -509,7 +537,10 @@ class ReverseScalpingStrategy(Strategy):
                     f"only checking TP/SL if in position."
                 )
                 # Use centralized TP/SL check method
-                tp_sl_signal = self._check_tp_sl(live_price, context="no new candle")
+                candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
+                tp_sl_signal = self._check_tp_sl(
+                    live_price, context="no new candle", candle_close_price=candle_close_price
+                )
                 if tp_sl_signal:
                     return tp_sl_signal
                 
@@ -601,18 +632,20 @@ class ReverseScalpingStrategy(Strategy):
                     )
                 
                 # --- TP / SL for LONG positions ---
-                # ALWAYS check TP/SL using LIVE PRICE when in position
                 if self.position == "LONG" and self.entry_price is not None:
-                    # Use centralized TP/SL check method
-                    tp_sl_signal = self._check_tp_sl(live_price, context="")
+                    candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
+                    tp_sl_signal = self._check_tp_sl(
+                        live_price, context="", candle_close_price=candle_close_price
+                    )
                     if tp_sl_signal:
                         return tp_sl_signal
                 
                 # --- TP / SL for SHORT positions (3) - INVERTED ---
-                # ALWAYS check TP/SL using LIVE PRICE when in position
                 if self.position == "SHORT" and self.entry_price is not None:
-                    # Use centralized TP/SL check method
-                    tp_sl_signal = self._check_tp_sl(live_price, context="")
+                    candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
+                    tp_sl_signal = self._check_tp_sl(
+                        live_price, context="", candle_close_price=candle_close_price
+                    )
                     if tp_sl_signal:
                         return tp_sl_signal
                 

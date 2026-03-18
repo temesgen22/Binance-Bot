@@ -1052,37 +1052,33 @@ async def run_backtest(
                     else:
                         take_profit_pct = float(request.params.get("take_profit_pct", 0.004))
                         stop_loss_pct = float(request.params.get("stop_loss_pct", 0.002))
+                        _sl_mode = str(request.params.get("sl_trigger_mode", "live_price")).lower()
+                        sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
                         
                         if position_side == "LONG":
                             tp_price = entry_price * (1 + take_profit_pct)
                             sl_price = entry_price * (1 - stop_loss_pct)
-                            # Check if TP/SL was hit during the candle using high/low
-                            # TP is hit if high >= tp_price, SL is hit if low <= sl_price
-                            # Priority: SL first (conservative - assume worse outcome if both hit)
-                            # This matches range mean reversion strategy for consistency
-                            if candle_low <= sl_price:
-                                # SL hit during candle - exit at SL price (not close price)
-                                exit_price = sl_price
+                            # SL: use candle close when sl_trigger_mode is candle_close, else intra-candle (candle_low)
+                            sl_triggered = (current_price <= sl_price) if sl_trigger_mode == "candle_close" else (candle_low <= sl_price)
+                            if sl_triggered:
+                                # candle_close: fill at close price (realistic); live_price: fill at SL level
+                                exit_price = current_price if sl_trigger_mode == "candle_close" else sl_price
                                 exit_reason = "SL"
-                                logger.info(f"SL hit during candle: low={candle_low:.8f} <= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
+                                logger.info(f"SL hit during candle ({'close' if sl_trigger_mode == 'candle_close' else 'intra-candle'}): {'close' if sl_trigger_mode == 'candle_close' else f'low={candle_low:.8f}'} <= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
                             elif candle_high >= tp_price:
-                                # TP hit during candle - exit at TP price (not close price)
                                 exit_price = tp_price
                                 exit_reason = "TP"
                                 logger.info(f"TP hit during candle: high={candle_high:.8f} >= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
                         else:  # SHORT
                             tp_price = entry_price * (1 - take_profit_pct)
                             sl_price = entry_price * (1 + stop_loss_pct)
-                            # For SHORT: TP is hit if low <= tp_price, SL is hit if high >= sl_price
-                            # Priority: SL first (conservative - assume worse outcome if both hit)
-                            # This matches range mean reversion strategy for consistency
-                            if candle_high >= sl_price:
-                                # SL hit during candle - exit at SL price
-                                exit_price = sl_price
+                            sl_triggered = (current_price >= sl_price) if sl_trigger_mode == "candle_close" else (candle_high >= sl_price)
+                            if sl_triggered:
+                                # candle_close: fill at close price (realistic); live_price: fill at SL level
+                                exit_price = current_price if sl_trigger_mode == "candle_close" else sl_price
                                 exit_reason = "SL"
-                                logger.info(f"SL hit during candle: high={candle_high:.8f} >= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
+                                logger.info(f"SL hit during candle ({'close' if sl_trigger_mode == 'candle_close' else 'intra-candle'}): {'close' if sl_trigger_mode == 'candle_close' else f'high={candle_high:.8f}'} >= sl={sl_price:.8f}, exiting at {exit_price:.8f}")
                             elif candle_low <= tp_price:
-                                # TP hit during candle - exit at TP price
                                 exit_price = tp_price
                                 exit_reason = "TP"
                                 logger.info(f"TP hit during candle: low={candle_low:.8f} <= tp={tp_price:.8f}, exiting at {exit_price:.8f}")
@@ -1116,6 +1112,8 @@ async def run_backtest(
                         range_size = strategy.range_high - strategy.range_low
                         tp_buffer_pct = float(request.params.get("tp_buffer_pct", 0.001))
                         sl_buffer_pct = float(request.params.get("sl_buffer_pct", 0.002))
+                        _sl_mode = str(request.params.get("sl_trigger_mode", "live_price")).lower()
+                        sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
                         
                         # Check entry candle protection (block TP on entry candle, allow SL)
                         # Entry happens at candle i open, so entry_candle_time is candle i's open time
@@ -1130,13 +1128,13 @@ async def run_backtest(
                             tp2 = strategy.range_high - (range_size * tp_buffer_pct)
                             sl = strategy.range_low - (range_size * sl_buffer_pct)
                             
-                            # Check intra-candle TP/SL using high/low prices
-                            # Priority: TP2 > TP1 > SL
-                            # SL can trigger even on entry candle (critical exit)
-                            if candle_low <= sl:
-                                exit_price = sl
+                            # SL: use candle close when sl_trigger_mode is candle_close, else intra-candle (candle_low)
+                            sl_triggered = (current_price <= sl) if sl_trigger_mode == "candle_close" else (candle_low <= sl)
+                            if sl_triggered:
+                                # candle_close: fill at close price (realistic); live_price: fill at SL level
+                                exit_price = current_price if sl_trigger_mode == "candle_close" else sl
                                 exit_reason = "SL_RANGE_BREAK"
-                                logger.info(f"SL hit during candle (intra-candle check): low={candle_low:.8f} <= sl={sl:.8f}, exiting at {exit_price:.8f}")
+                                logger.info(f"SL hit during candle ({'close' if sl_trigger_mode == 'candle_close' else 'intra-candle'}): {'close' if sl_trigger_mode == 'candle_close' else f'low={candle_low:.8f}'} <= sl={sl:.8f}, exiting at {exit_price:.8f}")
                             elif not on_entry_candle:
                                 # Block TP exits on entry candle
                                 if candle_high >= tp2:
@@ -1152,13 +1150,13 @@ async def run_backtest(
                             tp2 = strategy.range_low + (range_size * tp_buffer_pct)
                             sl = strategy.range_high + (range_size * sl_buffer_pct)
                             
-                            # Check intra-candle TP/SL using high/low prices
-                            # Priority: TP2 > TP1 > SL
-                            # SL can trigger even on entry candle (critical exit)
-                            if candle_high >= sl:
-                                exit_price = sl
+                            # SL: use candle close when sl_trigger_mode is candle_close, else intra-candle (candle_high)
+                            sl_triggered = (current_price >= sl) if sl_trigger_mode == "candle_close" else (candle_high >= sl)
+                            if sl_triggered:
+                                # candle_close: fill at close price (realistic); live_price: fill at SL level
+                                exit_price = current_price if sl_trigger_mode == "candle_close" else sl
                                 exit_reason = "SL_RANGE_BREAK"
-                                logger.info(f"SL hit during candle (intra-candle check): high={candle_high:.8f} >= sl={sl:.8f}, exiting at {exit_price:.8f}")
+                                logger.info(f"SL hit during candle ({'close' if sl_trigger_mode == 'candle_close' else 'intra-candle'}): {'close' if sl_trigger_mode == 'candle_close' else f'high={candle_high:.8f}'} >= sl={sl:.8f}, exiting at {exit_price:.8f}")
                             elif not on_entry_candle:
                                 # Block TP exits on entry candle
                                 if candle_low <= tp2:

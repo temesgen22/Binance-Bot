@@ -67,6 +67,7 @@ fun CreateStrategyScreen(
     var rsiOverbought by remember { mutableStateOf("60.0") }
     var tpBufferPct by remember { mutableStateOf("0.001") }
     var slBufferPct by remember { mutableStateOf("0.002") }
+    var slTriggerMode by remember { mutableStateOf("live_price") }
     
     // Initialize defaults when strategy type changes
     LaunchedEffect(strategyType) {
@@ -151,6 +152,7 @@ fun CreateStrategyScreen(
                     trailingStopEnabled = (perf.params["trailing_stop_enabled"] as? Boolean) ?: false
                     trailingStopActivationPct = (perf.params["trailing_stop_activation_pct"] as? Number)?.toString() ?: "0.0"
                     enableEmaCrossExit = (perf.params["enable_ema_cross_exit"] as? Boolean) ?: true
+                    slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
                 }
                 "range_mean_reversion" -> {
                     lookbackPeriod = (perf.params["lookback_period"] as? Number)?.toString() ?: "150"
@@ -165,6 +167,7 @@ fun CreateStrategyScreen(
                     rsiOverbought = (perf.params["rsi_overbought"] as? Number)?.toString() ?: "60.0"
                     tpBufferPct = (perf.params["tp_buffer_pct"] as? Number)?.toString() ?: "0.001"
                     slBufferPct = (perf.params["sl_buffer_pct"] as? Number)?.toString() ?: "0.002"
+                    slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
                 }
                 else -> {}
             }
@@ -271,6 +274,7 @@ fun CreateStrategyScreen(
                                         trailingStopEnabled = false
                                         trailingStopActivationPct = "0.0"
                                         enableEmaCrossExit = true
+                                        slTriggerMode = "live_price"
                                     }
                                     "range_mean_reversion" -> {
                                         lookbackPeriod = "150"
@@ -288,6 +292,7 @@ fun CreateStrategyScreen(
                                         klineInterval = "5m"
                                         enableShort = true
                                         cooldownCandles = "2"
+                                        slTriggerMode = "live_price"
                                     }
                                 }
                             }
@@ -480,6 +485,22 @@ fun CreateStrategyScreen(
                         )
                         Text("Enable EMA Cross Exit", modifier = Modifier.padding(start = Spacing.Small))
                     }
+                    Spacer(modifier = Modifier.height(Spacing.Small))
+                    Text("SL Trigger", style = MaterialTheme.typography.labelMedium)
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        listOf("live_price" to "Live price", "candle_close" to "Candle close").forEach { (value, label) ->
+                            Row(
+                                modifier = Modifier.padding(end = Spacing.Medium),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = slTriggerMode == value,
+                                    onClick = { slTriggerMode = value }
+                                )
+                                Text(label, modifier = Modifier.padding(start = Spacing.ExtraSmall))
+                            }
+                        }
+                    }
                 }
                 "range_mean_reversion" -> {
                     // Range Mean Reversion Parameters
@@ -591,6 +612,22 @@ fun CreateStrategyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
+                    Spacer(modifier = Modifier.height(Spacing.Small))
+                    Text("SL Trigger", style = MaterialTheme.typography.labelMedium)
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        listOf("live_price" to "Live price", "candle_close" to "Candle close").forEach { (value, label) ->
+                            Row(
+                                modifier = Modifier.padding(end = Spacing.Medium),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = slTriggerMode == value,
+                                    onClick = { slTriggerMode = value }
+                                )
+                                Text(label, modifier = Modifier.padding(start = Spacing.ExtraSmall))
+                            }
+                        }
+                    }
                 }
             }
             
@@ -653,7 +690,8 @@ fun CreateStrategyScreen(
                             rsiOversold = rsiOversold,
                             rsiOverbought = rsiOverbought,
                             tpBufferPct = tpBufferPct,
-                            slBufferPct = slBufferPct
+                            slBufferPct = slBufferPct,
+                            slTriggerMode = slTriggerMode
                         )
                         strategiesViewModel.createStrategy(
                             name = name.trim(),
@@ -712,7 +750,8 @@ fun buildParamsMap(
     rsiOversold: String = "40.0",
     rsiOverbought: String = "60.0",
     tpBufferPct: String = "0.001",
-    slBufferPct: String = "0.002"
+    slBufferPct: String = "0.002",
+    slTriggerMode: String = "live_price"
 ): Map<String, Any> {
     return when (strategyType) {
         "scalping", "reverse_scalping" -> {
@@ -729,7 +768,8 @@ fun buildParamsMap(
                 "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2),
                 "trailing_stop_enabled" to trailingStopEnabled,
                 "trailing_stop_activation_pct" to (trailingStopActivationPct.toDoubleOrNull() ?: 0.0),
-                "enable_ema_cross_exit" to enableEmaCrossExit
+                "enable_ema_cross_exit" to enableEmaCrossExit,
+                "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
             )
         }
         "range_mean_reversion" -> {
@@ -748,7 +788,8 @@ fun buildParamsMap(
                 "sl_buffer_pct" to (slBufferPct.toDoubleOrNull() ?: 0.002),
                 "kline_interval" to klineInterval,
                 "enable_short" to enableShort,
-                "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2)
+                "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2),
+                "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
             )
         }
         else -> emptyMap()

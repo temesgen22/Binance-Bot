@@ -915,7 +915,8 @@
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
                 enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
-                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 }
+                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
+                sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
             },
             reverse_scalping: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
@@ -929,7 +930,8 @@
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
                 enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
-                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 }
+                trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
+                sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
             },
             range_mean_reversion: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '5m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
@@ -947,7 +949,8 @@
                 sl_buffer_pct: { type: 'number', label: 'SL Buffer %', value: 0.002, min: 0, max: 0.05, step: 0.0001 },
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10, help: 'Number of candles to wait after exit before allowing new entry (prevents flip-flop entries)' },
                 max_range_invalid_candles: { type: 'number', label: 'Max Range Invalid Candles', value: 20, min: 5, max: 100, help: 'Number of consecutive invalid range detections before clearing range state' },
-                enable_short: { type: 'checkbox', label: 'Enable Short Trading', value: true }
+                enable_short: { type: 'checkbox', label: 'Enable Short Trading', value: true },
+                sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
             }
         };
 

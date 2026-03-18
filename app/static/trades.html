@@ -1252,7 +1252,7 @@
                 html += `<div class="position-detail-item"><span>Size:</span><span>${positionSize.toFixed(4)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Size (USDT):</span><span>${formatCurrency(sizeUsdt)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${formatPrice(entryPrice)}</span></div>`;
-                html += `<div class="position-detail-item"><span>Current Price:</span><span>${currentPriceDisplay}</span></div>`;
+                html += `<div class="position-detail-item"><span>Mark Price:</span><span>${currentPriceDisplay}</span></div>`;
                 html += `<div class="position-detail-item"><span>Unrealized PnL:</span><span class="${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.liquidation_price != null && pos.liquidation_price > 0) {

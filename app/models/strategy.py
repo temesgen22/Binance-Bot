@@ -50,6 +50,12 @@ class StrategyParams(BaseModel):
     tp_buffer_pct: float = Field(default=0.001, ge=0, le=0.05, description="Take profit buffer percentage from range boundary (0.001 = 0.1%)")
     sl_buffer_pct: float = Field(default=0.002, ge=0, le=0.05, description="Stop loss buffer percentage beyond range boundary (0.002 = 0.2%)")
 
+    # Shared: SL trigger mode (Scalping, Reverse Scalping, Range Mean Reversion)
+    sl_trigger_mode: Literal["live_price", "candle_close"] = Field(
+        default="live_price",
+        description="Stop-loss trigger: 'live_price' = any tick; 'candle_close' = only when candle close is beyond SL (reduces fake breakouts).",
+    )
+
 
 class CreateStrategyRequest(BaseModel):
     name: str
