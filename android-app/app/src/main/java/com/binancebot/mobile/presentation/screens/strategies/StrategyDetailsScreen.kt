@@ -556,7 +556,13 @@ fun StrategyParametersSection(performance: StrategyPerformanceDto) {
             relevantParams.forEach { (key, value) ->
                 MetricRow(
                     label = key.replace("_", " ").replaceFirstChar { it.uppercase() },
-                    value = formatParamValue(value)
+                    value = if (key == "enable_ema_cross_exit") {
+                        ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
+                    } else if (key == "sl_trigger_mode") {
+                        if ((value as? String) == "candle_close") "Candle Close" else "Live Price"
+                    } else {
+                        formatParamValue(value)
+                    }
                 )
             }
         }
@@ -727,7 +733,7 @@ fun getRelevantParams(strategyType: String, params: Map<String, Any>): Map<Strin
         "ema_fast", "ema_slow", "take_profit_pct", "stop_loss_pct",
         "interval_seconds", "kline_interval", "enable_short",
         "min_ema_separation", "enable_htf_bias", "cooldown_candles",
-        "trailing_stop_enabled", "trailing_stop_activation_pct", "sl_trigger_mode"
+        "trailing_stop_enabled", "trailing_stop_activation_pct", "enable_ema_cross_exit", "sl_trigger_mode"
     )
     
     val rangeMeanReversionParams = listOf(

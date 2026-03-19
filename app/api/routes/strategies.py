@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
 from uuid import UUID
 
 from loguru import logger
@@ -10,7 +12,7 @@ from app.api.deps import (
     get_db_session_dependency, get_async_db
 )
 from app.models.order import OrderResponse
-from app.models.strategy import CreateStrategyRequest, StrategySummary, StrategyStats, OverallStats
+from app.models.strategy import CreateStrategyRequest, StrategySummary, StrategyStats, OverallStats, StrategyParams
 from app.models.db_models import User
 from app.services.strategy_runner import StrategyRunner
 from app.services.strategy_service import StrategyService
@@ -30,6 +32,17 @@ from app.core.exceptions import (
 
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+
+
+class UpdateStrategyRequest(BaseModel):
+    """Partial strategy update request (supports hot-swap params)."""
+
+    name: Optional[str] = None
+    symbol: Optional[str] = None
+    leverage: Optional[int] = None
+    risk_per_trade: Optional[float] = None
+    fixed_amount: Optional[float] = None
+    params: Optional[Dict[str, Any]] = Field(default=None)
 
 
 @router.get("/list", response_model=list[StrategySummary])
@@ -117,6 +130,95 @@ async def register_strategy(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to register strategy: {exc}"
+        ) from exc
+
+
+@router.put("/{strategy_id}", response_model=StrategySummary)
+async def update_strategy(
+    strategy_id: str,
+    payload: UpdateStrategyRequest,
+    current_user: User = Depends(get_current_user_async),
+    db: AsyncSession = Depends(get_async_db),
+    runner: StrategyRunner = Depends(get_strategy_runner)
+) -> StrategySummary:
+    """Update strategy fields and/or params.
+
+    - Non-param fields are updated in DB/cache and reflected in runner memory.
+    - Params are merged with existing params and validated via StrategyParams.
+    - If strategy is running and params changed, hot-swap is applied immediately.
+    """
+    try:
+        db_service = await get_database_service_async(db)
+        strategy_service = StrategyService(db, runner.redis_storage)
+
+        # Ensure strategy exists (both string strategy_id and DB UUID are needed)
+        db_strategy = await db_service.async_get_strategy(current_user.id, strategy_id)
+        if not db_strategy:
+            raise StrategyNotFoundError(strategy_id)
+
+        # Start from runner copy if available, otherwise DB copy
+        existing = next((s for s in runner.list_strategies() if s.id == strategy_id), None)
+        if existing is None:
+            existing = strategy_service._db_strategy_to_summary(db_strategy)
+
+        # 1) Update non-params fields
+        non_param_updates: Dict[str, Any] = {}
+        if payload.name is not None:
+            non_param_updates["name"] = payload.name
+        if payload.symbol is not None:
+            non_param_updates["symbol"] = payload.symbol
+        if payload.leverage is not None:
+            non_param_updates["leverage"] = payload.leverage
+        if payload.risk_per_trade is not None:
+            non_param_updates["risk_per_trade"] = payload.risk_per_trade
+        if payload.fixed_amount is not None:
+            non_param_updates["fixed_amount"] = payload.fixed_amount
+
+        updated_summary = existing
+        if non_param_updates:
+            out = strategy_service.update_strategy(current_user.id, strategy_id, **non_param_updates)
+            if out:
+                updated_summary = out
+                # Keep runner memory in sync for active sessions
+                if strategy_id in runner._strategies:
+                    runner._strategies[strategy_id] = out
+
+        # 2) Update params (merge + validate + hot-swap if running)
+        if payload.params is not None:
+            base_params = (
+                updated_summary.params.model_dump()
+                if hasattr(updated_summary.params, "model_dump")
+                else dict(updated_summary.params)
+            )
+            merged_params = {**base_params, **payload.params}
+            # Validate and normalize defaults/types
+            validated_params = StrategyParams(**merged_params).model_dump()
+
+            is_running = False
+            if strategy_id in runner._strategies:
+                status_obj = getattr(runner._strategies[strategy_id], "status", None)
+                status_val = getattr(status_obj, "value", str(status_obj))
+                is_running = str(status_val) == "running"
+
+            if is_running and getattr(db_strategy, "id", None):
+                updated_summary = await runner.update_strategy_params(db_strategy.id, validated_params)
+            else:
+                out = strategy_service.update_strategy(current_user.id, strategy_id, params=validated_params)
+                if out:
+                    updated_summary = out
+                    if strategy_id in runner._strategies:
+                        runner._strategies[strategy_id] = out
+
+        return updated_summary
+    except (StrategyNotFoundError, ValidationError):
+        raise
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Unexpected error updating strategy {strategy_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update strategy: {exc}"
         ) from exc
 
 

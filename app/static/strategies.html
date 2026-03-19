@@ -985,14 +985,16 @@
                     'ema_fast', 'ema_slow', 'take_profit_pct', 'stop_loss_pct',
                     'interval_seconds', 'kline_interval', 'enable_short',
                     'min_ema_separation', 'enable_htf_bias', 'cooldown_candles',
-                    'trailing_stop_enabled', 'trailing_stop_activation_pct'
+                    'trailing_stop_enabled', 'trailing_stop_activation_pct',
+                    'enable_ema_cross_exit', 'sl_trigger_mode'
                 ];
                 
                 const rangeMeanReversionParams = [
                     'lookback_period', 'buy_zone_pct', 'sell_zone_pct',
                     'ema_fast_period', 'ema_slow_period', 'max_ema_spread_pct',
                     'max_atr_multiplier', 'rsi_period', 'rsi_oversold',
-                    'rsi_overbought', 'tp_buffer_pct', 'sl_buffer_pct', 'kline_interval'
+                    'rsi_overbought', 'tp_buffer_pct', 'sl_buffer_pct', 'kline_interval',
+                    'sl_trigger_mode'
                 ];
                 
                 // Determine which parameters to show based on strategy type
@@ -1010,8 +1012,12 @@
                 relevantParams.forEach(key => {
                     if (strategy.params.hasOwnProperty(key)) {
                         const value = strategy.params[key];
-                        // Format boolean values
-                        const displayValue = typeof value === 'boolean' ? value.toString() : value;
+                        // Show a user-friendly label for EMA cross exit state
+                        const displayValue = key === 'enable_ema_cross_exit'
+                            ? (value ? 'Enabled' : 'Disabled')
+                            : key === 'sl_trigger_mode'
+                                ? (value === 'candle_close' ? 'Candle Close' : 'Live Price')
+                                : (typeof value === 'boolean' ? value.toString() : value);
                         html += `<div class="detail-item"><label>${key}:</label><value>${displayValue}</value></div>`;
                     }
                 });
