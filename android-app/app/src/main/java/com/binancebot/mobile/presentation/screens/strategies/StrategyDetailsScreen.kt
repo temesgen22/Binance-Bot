@@ -28,7 +28,23 @@ import com.binancebot.mobile.presentation.viewmodel.StrategyDetailsUiState
 import com.binancebot.mobile.presentation.viewmodel.RiskManagementViewModel
 import com.binancebot.mobile.presentation.viewmodel.StrategiesViewModel
 import com.binancebot.mobile.data.remote.dto.StrategyPerformanceDto
+import com.binancebot.mobile.domain.model.Strategy
 import java.util.Locale
+
+/**
+ * Prefer position fields from strategy performance (includes WebSocket overlay from details VM) over the
+ * strategy API row, which can lag after a position is closed on Binance.
+ */
+private fun Strategy.withPositionOverlayFromPerformance(perf: StrategyPerformanceDto?): Strategy {
+    if (perf == null) return this
+    return copy(
+        positionSide = perf.positionSide,
+        positionSize = perf.positionSize,
+        entryPrice = perf.entryPrice,
+        currentPrice = perf.currentPrice,
+        unrealizedPnL = perf.totalUnrealizedPnl
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -271,8 +287,10 @@ fun StrategyDetailsScreen(
                             }
                         }
 
-                        // Current Position
-                        PositionSection(strategy = strat)
+                        // Current Position — use performance (+ WS overlay) for position fields; strategy row can be stale after close
+                        PositionSection(
+                            strategy = strat.withPositionOverlayFromPerformance(performance)
+                        )
                         
                         // Strategy Configuration
                         ConfigurationSection(strategy = strat)
@@ -558,6 +576,8 @@ fun StrategyParametersSection(performance: StrategyPerformanceDto) {
                     label = key.replace("_", " ").replaceFirstChar { it.uppercase() },
                     value = if (key == "enable_ema_cross_exit") {
                         ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
+                    } else if (key == "use_rsi_filter" || key == "use_atr_filter" || key == "use_volume_filter") {
+                        ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
                     } else if (key == "sl_trigger_mode") {
                         if ((value as? String) == "candle_close") "Candle Close" else "Live Price"
                     } else {
@@ -733,7 +753,11 @@ fun getRelevantParams(strategyType: String, params: Map<String, Any>): Map<Strin
         "ema_fast", "ema_slow", "take_profit_pct", "stop_loss_pct",
         "interval_seconds", "kline_interval", "enable_short",
         "min_ema_separation", "enable_htf_bias", "cooldown_candles",
-        "trailing_stop_enabled", "trailing_stop_activation_pct", "enable_ema_cross_exit", "sl_trigger_mode"
+        "trailing_stop_enabled", "trailing_stop_activation_pct", "enable_ema_cross_exit",
+        "use_rsi_filter", "rsi_period", "rsi_long_min", "rsi_short_max",
+        "use_atr_filter", "atr_period", "atr_min_pct", "atr_max_pct",
+        "use_volume_filter", "volume_ma_period", "volume_multiplier_min",
+        "sl_trigger_mode"
     )
     
     val rangeMeanReversionParams = listOf(

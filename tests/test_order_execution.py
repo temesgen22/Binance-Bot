@@ -673,12 +673,19 @@ class TestOrderExecutionIntegration:
         mock_order_response
     ):
         """Test complete flow for SELL order execution."""
-        # Set up existing position
+        # Set up existing strategy-owned position (close path requires position_instance_id + DB ownership)
         strategy_summary.position_size = 0.001
         strategy_summary.position_side = "LONG"
         strategy_summary.entry_price = 39000.0
+        strategy_summary.position_instance_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         
         mock_order_response.side = "SELL"
+        mock_binance_client.get_current_leverage.return_value = 5
+        mock_binance_client.get_open_position.return_value = {
+            "positionAmt": "0.001",
+            "entryPrice": "39000.0",
+            "unRealizedProfit": "0.0",
+        }
         
         # Mock all dependencies
         with patch.object(risk_manager, 'size_position', return_value=PositionSizingResult(quantity=0.001, notional=40.0)):
@@ -690,6 +697,14 @@ class TestOrderExecutionIntegration:
                 executor=order_executor,
                 max_concurrent=3,
             )
+            mock_db = MagicMock()
+            strategy_uuid = uuid4()
+            mock_db.get_strategy.return_value = MagicMock(id=strategy_uuid)
+            mock_db.get_strategy_owned_quantity.return_value = (0.001, True)
+            runner.order_manager.strategy_service = MagicMock()
+            runner.order_manager.strategy_service.db_service = mock_db
+            runner.order_manager.db_service = mock_db
+            runner.order_manager.user_id = strategy_uuid
             
             # Create SELL signal
             signal = StrategySignal(

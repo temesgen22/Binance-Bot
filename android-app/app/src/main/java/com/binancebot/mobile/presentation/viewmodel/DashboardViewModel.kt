@@ -32,7 +32,7 @@ class DashboardViewModel @Inject constructor(
         positionUpdateStore.updates
     ) { list, updates ->
         list.map { s ->
-            val u = updates[s.id]
+            val u = updates[positionUpdateStore.compositeKey(s.accountId, s.id, s.symbol)]
             if (u != null) s.copy(
                 positionSize = u.positionSize,
                 unrealizedPnL = u.unrealizedPnl,

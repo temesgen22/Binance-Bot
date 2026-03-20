@@ -110,6 +110,22 @@ class Strategy(ABC):
         # Fallback: convert to bool (for other types)
         return bool(value)
 
+    @staticmethod
+    def param_int(params: dict[str, Any], key: str, default: int) -> int:
+        """Read int from params; JSON null / missing uses default (dict.get default is ignored when value is explicitly null)."""
+        v = params.get(key, default)
+        if v is None:
+            return default
+        return int(v)
+
+    @staticmethod
+    def param_float(params: dict[str, Any], key: str, default: float) -> float:
+        """Read float from params; JSON null / missing uses default."""
+        v = params.get(key, default)
+        if v is None:
+            return default
+        return float(v)
+
     @abstractmethod
     async def evaluate(self) -> StrategySignal:
         ...

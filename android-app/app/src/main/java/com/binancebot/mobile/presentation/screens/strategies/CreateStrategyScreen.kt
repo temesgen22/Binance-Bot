@@ -53,6 +53,17 @@ fun CreateStrategyScreen(
     var trailingStopEnabled by remember { mutableStateOf(false) }
     var trailingStopActivationPct by remember { mutableStateOf("0.0") }
     var enableEmaCrossExit by remember { mutableStateOf(true) }
+    var useRsiFilter by remember { mutableStateOf(false) }
+    var rsiPeriodFilter by remember { mutableStateOf("14") }
+    var rsiLongMin by remember { mutableStateOf("50.0") }
+    var rsiShortMax by remember { mutableStateOf("50.0") }
+    var useAtrFilter by remember { mutableStateOf(false) }
+    var atrPeriod by remember { mutableStateOf("14") }
+    var atrMinPct by remember { mutableStateOf("0.0") }
+    var atrMaxPct by remember { mutableStateOf("100.0") }
+    var useVolumeFilter by remember { mutableStateOf(false) }
+    var volumeMaPeriod by remember { mutableStateOf("20") }
+    var volumeMultiplierMin by remember { mutableStateOf("1.0") }
     
     // Range Mean Reversion parameters
     var lookbackPeriod by remember { mutableStateOf("150") }
@@ -152,6 +163,17 @@ fun CreateStrategyScreen(
                     trailingStopEnabled = (perf.params["trailing_stop_enabled"] as? Boolean) ?: false
                     trailingStopActivationPct = (perf.params["trailing_stop_activation_pct"] as? Number)?.toString() ?: "0.0"
                     enableEmaCrossExit = (perf.params["enable_ema_cross_exit"] as? Boolean) ?: true
+                    useRsiFilter = (perf.params["use_rsi_filter"] as? Boolean) ?: false
+                    rsiPeriodFilter = (perf.params["rsi_period"] as? Number)?.toString() ?: "14"
+                    rsiLongMin = (perf.params["rsi_long_min"] as? Number)?.toString() ?: "50.0"
+                    rsiShortMax = (perf.params["rsi_short_max"] as? Number)?.toString() ?: "50.0"
+                    useAtrFilter = (perf.params["use_atr_filter"] as? Boolean) ?: false
+                    atrPeriod = (perf.params["atr_period"] as? Number)?.toString() ?: "14"
+                    atrMinPct = (perf.params["atr_min_pct"] as? Number)?.toString() ?: "0.0"
+                    atrMaxPct = (perf.params["atr_max_pct"] as? Number)?.toString() ?: "100.0"
+                    useVolumeFilter = (perf.params["use_volume_filter"] as? Boolean) ?: false
+                    volumeMaPeriod = (perf.params["volume_ma_period"] as? Number)?.toString() ?: "20"
+                    volumeMultiplierMin = (perf.params["volume_multiplier_min"] as? Number)?.toString() ?: "1.0"
                     slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
                 }
                 "range_mean_reversion" -> {
@@ -274,6 +296,17 @@ fun CreateStrategyScreen(
                                         trailingStopEnabled = false
                                         trailingStopActivationPct = "0.0"
                                         enableEmaCrossExit = true
+                                        useRsiFilter = false
+                                        rsiPeriodFilter = "14"
+                                        rsiLongMin = "50.0"
+                                        rsiShortMax = "50.0"
+                                        useAtrFilter = false
+                                        atrPeriod = "14"
+                                        atrMinPct = "0.0"
+                                        atrMaxPct = "100.0"
+                                        useVolumeFilter = false
+                                        volumeMaPeriod = "20"
+                                        volumeMultiplierMin = "1.0"
                                         slTriggerMode = "live_price"
                                     }
                                     "range_mean_reversion" -> {
@@ -485,6 +518,74 @@ fun CreateStrategyScreen(
                         )
                         Text("Enable EMA Cross Exit", modifier = Modifier.padding(start = Spacing.Small))
                     }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = useRsiFilter, onCheckedChange = { useRsiFilter = it })
+                        Text("Use RSI Filter", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = rsiPeriodFilter,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) rsiPeriodFilter = it },
+                        label = { Text("RSI Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rsiLongMin,
+                        onValueChange = { rsiLongMin = it },
+                        label = { Text("RSI Long Min") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = rsiShortMax,
+                        onValueChange = { rsiShortMax = it },
+                        label = { Text("RSI Short Max") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = useAtrFilter, onCheckedChange = { useAtrFilter = it })
+                        Text("Use ATR Filter", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = atrPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) atrPeriod = it },
+                        label = { Text("ATR Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = atrMinPct,
+                        onValueChange = { atrMinPct = it },
+                        label = { Text("ATR Min %") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = atrMaxPct,
+                        onValueChange = { atrMaxPct = it },
+                        label = { Text("ATR Max %") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = useVolumeFilter, onCheckedChange = { useVolumeFilter = it })
+                        Text("Use Volume Filter", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = volumeMaPeriod,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) volumeMaPeriod = it },
+                        label = { Text("Volume MA Period") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = volumeMultiplierMin,
+                        onValueChange = { volumeMultiplierMin = it },
+                        label = { Text("Volume Multiplier Min") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
                     Spacer(modifier = Modifier.height(Spacing.Small))
                     Text("SL Trigger", style = MaterialTheme.typography.labelMedium)
                     Row(modifier = Modifier.fillMaxWidth()) {
@@ -679,6 +780,17 @@ fun CreateStrategyScreen(
                             trailingStopEnabled = trailingStopEnabled,
                             trailingStopActivationPct = trailingStopActivationPct,
                             enableEmaCrossExit = enableEmaCrossExit,
+                            useRsiFilter = useRsiFilter,
+                            rsiPeriodFilter = rsiPeriodFilter,
+                            rsiLongMin = rsiLongMin,
+                            rsiShortMax = rsiShortMax,
+                            useAtrFilter = useAtrFilter,
+                            atrPeriod = atrPeriod,
+                            atrMinPct = atrMinPct,
+                            atrMaxPct = atrMaxPct,
+                            useVolumeFilter = useVolumeFilter,
+                            volumeMaPeriod = volumeMaPeriod,
+                            volumeMultiplierMin = volumeMultiplierMin,
                             lookbackPeriod = lookbackPeriod,
                             buyZonePct = buyZonePct,
                             sellZonePct = sellZonePct,
@@ -738,6 +850,17 @@ fun buildParamsMap(
     trailingStopEnabled: Boolean = false,
     trailingStopActivationPct: String = "0.0",
     enableEmaCrossExit: Boolean = true,
+    useRsiFilter: Boolean = false,
+    rsiPeriodFilter: String = "14",
+    rsiLongMin: String = "50.0",
+    rsiShortMax: String = "50.0",
+    useAtrFilter: Boolean = false,
+    atrPeriod: String = "14",
+    atrMinPct: String = "0.0",
+    atrMaxPct: String = "100.0",
+    useVolumeFilter: Boolean = false,
+    volumeMaPeriod: String = "20",
+    volumeMultiplierMin: String = "1.0",
     // Range Mean Reversion params
     lookbackPeriod: String = "150",
     buyZonePct: String = "0.2",
@@ -769,6 +892,17 @@ fun buildParamsMap(
                 "trailing_stop_enabled" to trailingStopEnabled,
                 "trailing_stop_activation_pct" to (trailingStopActivationPct.toDoubleOrNull() ?: 0.0),
                 "enable_ema_cross_exit" to enableEmaCrossExit,
+                "use_rsi_filter" to useRsiFilter,
+                "rsi_period" to (rsiPeriodFilter.toIntOrNull() ?: 14),
+                "rsi_long_min" to (rsiLongMin.toDoubleOrNull() ?: 50.0),
+                "rsi_short_max" to (rsiShortMax.toDoubleOrNull() ?: 50.0),
+                "use_atr_filter" to useAtrFilter,
+                "atr_period" to (atrPeriod.toIntOrNull() ?: 14),
+                "atr_min_pct" to (atrMinPct.toDoubleOrNull() ?: 0.0),
+                "atr_max_pct" to (atrMaxPct.toDoubleOrNull() ?: 100.0),
+                "use_volume_filter" to useVolumeFilter,
+                "volume_ma_period" to (volumeMaPeriod.toIntOrNull() ?: 20),
+                "volume_multiplier_min" to (volumeMultiplierMin.toDoubleOrNull() ?: 1.0),
                 "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
             )
         }

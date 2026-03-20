@@ -26,6 +26,14 @@
             return this._updates[strategyId] || null;
         },
 
+        /** Latest update for account + strategy (matches server composite key). */
+        getComposite(accountId, strategyId) {
+            const acc = accountId && String(accountId).trim() !== '' ? String(accountId) : 'default';
+            const sid = strategyId != null && String(strategyId).trim() !== '' ? String(strategyId) : '';
+            const key = acc + '|' + sid;
+            return this._updates[key] || null;
+        },
+
         getAll() {
             return Object.assign({}, this._updates);
         },
@@ -68,7 +76,7 @@
                             const stratPart = (sid != null && sid !== '') ? sid : ('manual_' + (data.symbol || 'unknown'));
                             const accId = data.account_id || 'default';
                             const key = accId + '|' + stratPart;
-                            this._updates[key] = {
+                            const row = {
                                 strategy_id: sid ?? null,
                                 strategy_name: data.strategy_name ?? null,
                                 symbol: data.symbol,
@@ -84,12 +92,18 @@
                                 margin_type: data.margin_type
                             };
                             if (data.position_size <= 0) {
-                                this._updates[key] = { ...this._updates[key], position_size: 0 };
+                                // Flat: keep key so strategy details can show "no position" while REST lags.
+                                this._updates[key] = {
+                                    ...row,
+                                    position_size: 0,
+                                    position_side: null,
+                                    entry_price: null,
+                                    unrealized_pnl: null
+                                };
+                            } else {
+                                this._updates[key] = row;
                             }
                             window.dispatchEvent(new CustomEvent('position-update', { detail: this._updates[key] }));
-                            if (data.position_size <= 0) {
-                                delete this._updates[key];
-                            }
                         }
                     } catch (e) {
                         console.warn('[positions-ws] Parse error', e);

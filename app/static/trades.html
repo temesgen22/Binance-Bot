@@ -1314,6 +1314,10 @@
         }
 
         let manualCloseInProgress = null;
+        function isNoOpenPositionErrorMessage(msg) {
+            const s = String(msg || '').toLowerCase();
+            return s.includes('no open binance position found') || (s.includes('no open position') && s.includes('binance'));
+        }
 
         async function manualClosePosition(strategyId, symbol, positionSide, accountId) {
             if (!strategyId) return;
@@ -1366,7 +1370,31 @@
                 window.alert(`Manual close submitted successfully for ${symbol}. Exit reason recorded as ${data.exit_reason || 'MANUAL'}.`);
             } catch (error) {
                 console.error('Manual close failed:', error);
-                window.alert(`Manual close failed: ${error.message}`);
+                if (isNoOpenPositionErrorMessage(error.message)) {
+                    // Position is stale in UI (already closed externally or not owned anymore): clear it locally and refresh.
+                    if (lastPnlData && Array.isArray(lastPnlData)) {
+                        lastPnlData.forEach(symbolData => {
+                            if (symbolData.open_positions && Array.isArray(symbolData.open_positions)) {
+                                symbolData.open_positions = symbolData.open_positions.filter(pos =>
+                                    !(pos.strategy_id === strategyId && (pos.symbol || '').toUpperCase() === (symbol || '').toUpperCase() && ((pos.account_id || 'default') === acc))
+                                );
+                            }
+                        });
+                    }
+                    const compositeKey = acc + '|' + strategyId;
+                    if (typeof window.PositionUpdates !== 'undefined' && typeof window.PositionUpdates.deleteKey === 'function') {
+                        window.PositionUpdates.deleteKey(compositeKey);
+                    }
+                    const merged = mergePnlWithWs(lastPnlData || []);
+                    displayOverview(merged);
+                    displayPositions(merged);
+                    updateOverallStats(merged);
+                    await loadData();
+                    await loadTrades();
+                    window.alert(`Position was already closed on Binance. Removed stale row for ${symbol}.`);
+                } else {
+                    window.alert(`Manual close failed: ${error.message}`);
+                }
             } finally {
                 manualCloseInProgress = null;
                 const merged = mergePnlWithWs(lastPnlData || []);

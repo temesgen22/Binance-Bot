@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from statistics import fmean
 from typing import Deque, Optional, Literal
 from collections import deque
@@ -11,7 +12,11 @@ from typing import TYPE_CHECKING, Optional
 from app.core.my_binance_client import BinanceClient
 from app.strategies.base import Strategy, StrategyContext, StrategySignal
 from app.strategies.trailing_stop import TrailingStopManager
-from app.strategies.indicators import calculate_ema as _calculate_ema_from_prices_shared
+from app.strategies.indicators import (
+    calculate_atr,
+    calculate_ema as _calculate_ema_from_prices_shared,
+    calculate_rsi,
+)
 
 if TYPE_CHECKING:
     from app.core.websocket_kline_manager import WebSocketKlineManager
@@ -56,22 +61,35 @@ class ReverseScalpingStrategy(Strategy):
         kline_manager: Optional['WebSocketKlineManager'] = None
     ) -> None:
         super().__init__(context, client, kline_manager=kline_manager)
-        self.fast_period = int(context.params.get("ema_fast", 8))
-        self.slow_period = int(context.params.get("ema_slow", 21))
-        self.take_profit_pct = float(context.params.get("take_profit_pct", 0.004))
-        self.stop_loss_pct = float(context.params.get("stop_loss_pct", 0.002))
+        p = context.params
+        self.fast_period = self.param_int(p, "ema_fast", 8)
+        self.slow_period = self.param_int(p, "ema_slow", 21)
+        self.take_profit_pct = self.param_float(p, "take_profit_pct", 0.004)
+        self.stop_loss_pct = self.param_float(p, "stop_loss_pct", 0.002)
         
         # Short trading enabled (default: True)
-        self.enable_short = self.parse_bool_param(context.params.get("enable_short"), default=True)
+        self.enable_short = self.parse_bool_param(p.get("enable_short"), default=True)
         
         # Advanced filters
-        self.min_ema_separation = float(context.params.get("min_ema_separation", 0.0002))  # 0.02% of price
-        self.enable_htf_bias = self.parse_bool_param(context.params.get("enable_htf_bias"), default=True)  # Higher timeframe bias
-        self.cooldown_candles = int(context.params.get("cooldown_candles", 2))  # Candles to wait after exit
-        self.enable_ema_cross_exit = self.parse_bool_param(context.params.get("enable_ema_cross_exit"), default=True)  # Enable EMA cross exits
+        self.min_ema_separation = self.param_float(p, "min_ema_separation", 0.0002)  # 0.02% of price
+        self.enable_htf_bias = self.parse_bool_param(p.get("enable_htf_bias"), default=True)  # Higher timeframe bias
+        self.cooldown_candles = self.param_int(p, "cooldown_candles", 2)  # Candles to wait after exit
+        self.enable_ema_cross_exit = self.parse_bool_param(p.get("enable_ema_cross_exit"), default=True)  # Enable EMA cross exits
+        self.use_rsi_filter = self.parse_bool_param(p.get("use_rsi_filter"), default=False)
+        self.rsi_period_filter = self.param_int(p, "rsi_period", 14)
+        self.rsi_long_min = self.param_float(p, "rsi_long_min", 50.0)
+        self.rsi_short_max = self.param_float(p, "rsi_short_max", 50.0)
+        self.use_atr_filter = self.parse_bool_param(p.get("use_atr_filter"), default=False)
+        self.atr_period_filter = self.param_int(p, "atr_period", 14)
+        self.atr_min_pct = self.param_float(p, "atr_min_pct", 0.0)
+        self.atr_max_pct = self.param_float(p, "atr_max_pct", 100.0)
+        self.use_volume_filter = self.parse_bool_param(p.get("use_volume_filter"), default=False)
+        self.volume_ma_period = self.param_int(p, "volume_ma_period", 20)
+        self.volume_multiplier_min = self.param_float(p, "volume_multiplier_min", 1.0)
         
         # Kline interval (default 1 minute for scalping)
-        self.interval = str(context.params.get("kline_interval", "1m"))
+        _ki = p.get("kline_interval", "1m")
+        self.interval = "1m" if _ki is None else str(_ki)
         # Validate interval format (includes second-based intervals for high-frequency trading)
         valid_intervals = ["1s", "3s", "5s", "10s", "30s",  # Second-based intervals
                           "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
@@ -98,12 +116,86 @@ class ReverseScalpingStrategy(Strategy):
         self.cooldown_left: int = 0  # Candles remaining in cooldown
         
         # Dynamic trailing stop (optional)
-        self.trailing_stop_enabled = self.parse_bool_param(context.params.get("trailing_stop_enabled"), default=False)
+        self.trailing_stop_enabled = self.parse_bool_param(p.get("trailing_stop_enabled"), default=False)
         self.trailing_stop: Optional[TrailingStopManager] = None
 
         # SL trigger: live_price (any tick) or candle_close (only when candle close is beyond SL)
-        _sl_mode = str(context.params.get("sl_trigger_mode", "live_price")).lower()
+        _sl_raw = p.get("sl_trigger_mode", "live_price")
+        _sl_mode = str(_sl_raw if _sl_raw is not None else "live_price").lower()
         self.sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
+
+    def _required_filter_candles(self) -> int:
+        return max(
+            self.slow_period + 2,
+            (self.rsi_period_filter + 1) if self.use_rsi_filter else 0,
+            (self.atr_period_filter + 1) if self.use_atr_filter else 0,
+            (self.volume_ma_period + 1) if self.use_volume_filter else 0,
+        )
+
+    def _passes_entry_filters(
+        self,
+        candidate_side: Literal["LONG", "SHORT"],
+        closed_klines: list[list],
+        closing_prices: list[float],
+        candle_time: int,
+    ) -> bool:
+        if self.use_rsi_filter:
+            rsi_value = calculate_rsi(closing_prices, period=self.rsi_period_filter)
+            if rsi_value is None or not math.isfinite(rsi_value):
+                logger.info(f"[{self.context.id}] Entry blocked by RSI insufficiency: side={candidate_side}, candle={candle_time}")
+                return False
+            if candidate_side == "LONG" and rsi_value < self.rsi_long_min:
+                logger.info(
+                    f"[{self.context.id}] Entry blocked by RSI: side=LONG, value={rsi_value:.4f}, min={self.rsi_long_min:.4f}, candle={candle_time}"
+                )
+                return False
+            if candidate_side == "SHORT" and rsi_value > self.rsi_short_max:
+                logger.info(
+                    f"[{self.context.id}] Entry blocked by RSI: side=SHORT, value={rsi_value:.4f}, max={self.rsi_short_max:.4f}, candle={candle_time}"
+                )
+                return False
+
+        if self.use_atr_filter:
+            atr_value = calculate_atr(closed_klines, period=self.atr_period_filter)
+            close_price = closing_prices[-1] if closing_prices else 0.0
+            if (
+                atr_value is None
+                or not math.isfinite(atr_value)
+                or not math.isfinite(close_price)
+                or close_price <= 0
+            ):
+                logger.info(f"[{self.context.id}] Entry blocked by ATR insufficiency: side={candidate_side}, candle={candle_time}")
+                return False
+            atr_pct = (atr_value / close_price) * 100.0
+            if not math.isfinite(atr_pct) or atr_pct < self.atr_min_pct or atr_pct > self.atr_max_pct:
+                logger.info(
+                    f"[{self.context.id}] Entry blocked by ATR: side={candidate_side}, value={atr_pct:.4f}, range=[{self.atr_min_pct:.4f}, {self.atr_max_pct:.4f}], candle={candle_time}"
+                )
+                return False
+
+        if self.use_volume_filter:
+            # Compare *current* closed candle volume to SMA of the *prior* N volumes only.
+            if len(closed_klines) < self.volume_ma_period + 1:
+                logger.info(f"[{self.context.id}] Entry blocked by Volume insufficiency: side={candidate_side}, candle={candle_time}")
+                return False
+            prior_volumes = [float(k[5]) for k in closed_klines[-(self.volume_ma_period + 1) : -1]]
+            current_volume = float(closed_klines[-1][5])
+            vol_sma = fmean(prior_volumes)
+            if (
+                not math.isfinite(vol_sma)
+                or not math.isfinite(current_volume)
+                or vol_sma <= 0
+            ):
+                logger.info(f"[{self.context.id}] Entry blocked by Volume invalid data: side={candidate_side}, candle={candle_time}")
+                return False
+            volume_ratio = current_volume / vol_sma
+            if not math.isfinite(volume_ratio) or volume_ratio < self.volume_multiplier_min:
+                logger.info(
+                    f"[{self.context.id}] Entry blocked by Volume: side={candidate_side}, value={volume_ratio:.4f}, min={self.volume_multiplier_min:.4f}, candle={candle_time}"
+                )
+                return False
+
+        return True
     
     def _check_tp_sl(
         self, live_price: float, context: str = "", candle_close_price: Optional[float] = None
@@ -378,7 +470,7 @@ class ReverseScalpingStrategy(Strategy):
             
             # Reinitialize trailing stop if enabled and we have entry price
             if self.trailing_stop_enabled and entry_price is not None:
-                activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                activation_pct = self.param_float(self.context.params, "trailing_stop_activation_pct", 0.0)
                 self.trailing_stop = TrailingStopManager(
                     entry_price=entry_price,
                     take_profit_pct=self.take_profit_pct,
@@ -414,7 +506,7 @@ class ReverseScalpingStrategy(Strategy):
             self.entry_price = entry_price
             # Reset trailing stop with new entry price if enabled
             if self.trailing_stop_enabled:
-                activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                activation_pct = self.param_float(self.context.params, "trailing_stop_activation_pct", 0.0)
                 self.trailing_stop = TrailingStopManager(
                     entry_price=entry_price,
                     take_profit_pct=self.take_profit_pct,
@@ -460,7 +552,8 @@ class ReverseScalpingStrategy(Strategy):
                     limit=limit
                 )
             
-            if not klines or len(klines) < self.slow_period + 2:
+            required_candles = self._required_filter_candles()
+            if not klines or len(klines) < required_candles:
                 # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
                 current_price = await asyncio.to_thread(
                     self.client.get_price,
@@ -695,6 +788,13 @@ class ReverseScalpingStrategy(Strategy):
                     # TRULY OPPOSITE: When Scalping enters SHORT on Death Cross, we enter LONG on Death Cross (same signal, opposite position)
                     # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
                     if death_cross and self.position is None:
+                        if not self._passes_entry_filters("LONG", closed_klines, closing_prices, last_closed_time):
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price
+                            )
                         # Higher-timeframe bias check (C) - SAME LOGIC AS SCALPING SHORT ENTRY
                         # ✅ FIX: Add HTF bias check to ensure consistent entry timing with Scalping
                         # When Scalping is blocked from SHORT (5m trend UP), we should also block LONG (same condition)
@@ -792,7 +892,7 @@ class ReverseScalpingStrategy(Strategy):
                         
                         # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
-                            activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                            activation_pct = self.param_float(self.context.params, "trailing_stop_activation_pct", 0.0)
                             self.trailing_stop = TrailingStopManager(
                                 entry_price=candle_price,  # Initial estimate, will sync with real entry after fill
                                 take_profit_pct=self.take_profit_pct,
@@ -857,6 +957,13 @@ class ReverseScalpingStrategy(Strategy):
                     # TRULY OPPOSITE: When Scalping enters LONG on Golden Cross, we enter SHORT on Golden Cross (same signal, opposite position)
                     # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
                     if golden_cross and self.position is None and self.enable_short:
+                        if not self._passes_entry_filters("SHORT", closed_klines, closing_prices, last_closed_time):
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price
+                            )
                         # Higher-timeframe bias check (C)
                         if self.enable_htf_bias and self.interval == "1m":
                             # Check 5m trend - use WebSocket if available
@@ -953,7 +1060,7 @@ class ReverseScalpingStrategy(Strategy):
                         
                         # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
-                            activation_pct = float(self.context.params.get("trailing_stop_activation_pct", 0.0))
+                            activation_pct = self.param_float(self.context.params, "trailing_stop_activation_pct", 0.0)
                             self.trailing_stop = TrailingStopManager(
                                 entry_price=candle_price,  # Initial estimate, will sync with real entry after fill
                                 take_profit_pct=self.take_profit_pct,

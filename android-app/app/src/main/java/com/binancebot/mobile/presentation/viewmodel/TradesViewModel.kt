@@ -297,13 +297,36 @@ class TradesViewModel @Inject constructor(
                 }
                 .onFailure { e ->
                     _manualCloseInProgress.value = null
-                    _manualCloseError.value = e.message ?: "Manual close failed"
+                    val msg = e.message ?: "Manual close failed"
+                    if (isNoOpenBinancePositionError(msg)) {
+                        // Stale UI row: backend says no Binance position exists anymore.
+                        _pnlOverview.value = _pnlOverview.value.map { symbolPnL ->
+                            symbolPnL.copy(
+                                openPositions = symbolPnL.openPositions.filter { pos ->
+                                    !(pos.strategyId == strategyId && (pos.accountId ?: "default") == acc &&
+                                        (symbol == null || pos.symbol == symbol))
+                                }
+                            )
+                        }
+                        val compositeKey = positionUpdateStore.compositeKey(acc, strategyId, symbol ?: "")
+                        positionUpdateStore.removePosition(compositeKey)
+                        loadPnLOverview()
+                        _manualCloseError.value = "Position was already closed on Binance. Removed stale row."
+                    } else {
+                        _manualCloseError.value = msg
+                    }
                 }
         }
     }
 
     fun clearManualCloseError() {
         _manualCloseError.value = null
+    }
+
+    private fun isNoOpenBinancePositionError(message: String): Boolean {
+        val m = message.lowercase()
+        return m.contains("no open binance position found") ||
+            (m.contains("no open position") && m.contains("binance"))
     }
     
     // ========== Manual Trading ==========

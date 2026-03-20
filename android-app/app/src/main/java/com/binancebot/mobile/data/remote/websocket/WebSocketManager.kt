@@ -20,7 +20,8 @@ import javax.inject.Singleton
 class WebSocketManager @Inject constructor(
     private val tokenManager: TokenManager
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scopeJob: Job = SupervisorJob()
+    private var scope: CoroutineScope = CoroutineScope(Dispatchers.IO + scopeJob)
     private var webSocket: WebSocket? = null
     private val client = OkHttpClient()
     private val gson = Gson()
@@ -36,8 +37,15 @@ class WebSocketManager @Inject constructor(
     
     @Volatile
     private var isConnecting = false
+    @Volatile
+    private var reconnectJob: Job? = null
     
     fun connect(url: String) {
+        // Recreate scope if it was cancelled by a previous disconnect().
+        if (!scopeJob.isActive) {
+            scopeJob = SupervisorJob()
+            scope = CoroutineScope(Dispatchers.IO + scopeJob)
+        }
         if (isConnected) {
             AppLogger.d("WebSocketManager", "WebSocket already connected, skipping")
             return
@@ -46,6 +54,9 @@ class WebSocketManager @Inject constructor(
             AppLogger.d("WebSocketManager", "WebSocket connection already in progress, skipping duplicate attempt")
             return
         }
+        // A new manual connect supersedes any pending reconnect loop.
+        reconnectJob?.cancel()
+        reconnectJob = null
         isConnecting = true
         AppLogger.d("WebSocketManager", "Attempting to connect to WebSocket: $url")
         val token = tokenManager.getAccessToken() ?: run {
@@ -194,15 +205,19 @@ class WebSocketManager @Inject constructor(
     }
     
     fun disconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         isConnecting = false
         isConnected = false
+        // Cancel any pending reconnect/emission jobs from the previous session.
         scope.cancel()
     }
     
     private fun reconnect(url: String) {
-        scope.launch {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch {
             var delay = 1000L
             repeat(5) {
                 delay(delay)
@@ -213,6 +228,7 @@ class WebSocketManager @Inject constructor(
                 }
                 delay *= 2 // Exponential backoff
             }
+            reconnectJob = null
         }
     }
     

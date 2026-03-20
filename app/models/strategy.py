@@ -35,6 +35,17 @@ class StrategyParams(BaseModel):
     trailing_stop_enabled: bool = Field(default=False, description="Enable dynamic trailing stop loss (trails TP/SL as price moves favorably)")
     trailing_stop_activation_pct: float = Field(default=0.0, ge=0, le=0.1, description="Trailing uses this % for both: (1) when trailing starts (price must move this % from entry), (2) how often levels update (price must move this % from previous best). e.g. 0.005 = 0.5%. 0 = start immediately and update every tick.")
     enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
+    # Optional EMA entry filters (Scalping + Reverse Scalping)
+    use_rsi_filter: bool = Field(default=False, description="Enable RSI-based entry filtering")
+    rsi_long_min: float = Field(default=50.0, ge=0, le=100, description="LONG entries require RSI >= this threshold when RSI filter is enabled")
+    rsi_short_max: float = Field(default=50.0, ge=0, le=100, description="SHORT entries require RSI <= this threshold when RSI filter is enabled")
+    use_atr_filter: bool = Field(default=False, description="Enable ATR%%-range entry filtering")
+    atr_period: int = Field(default=14, ge=1, le=200, description="ATR period for ATR%% entry filter")
+    atr_min_pct: float = Field(default=0.0, ge=0, le=1000, description="Minimum ATR%% required for entry when ATR filter is enabled")
+    atr_max_pct: float = Field(default=100.0, ge=0, le=1000, description="Maximum ATR%% allowed for entry when ATR filter is enabled")
+    use_volume_filter: bool = Field(default=False, description="Enable volume-ratio entry filtering")
+    volume_ma_period: int = Field(default=20, ge=1, le=500, description="SMA period for closed-candle volume ratio")
+    volume_multiplier_min: float = Field(default=1.0, ge=0, le=1000, description="Minimum volume ratio current/SMA required for entry")
     
     # Range Mean-Reversion Strategy parameters
     lookback_period: int = Field(default=150, ge=50, le=500, description="Number of candles to look back for range detection")
@@ -44,7 +55,9 @@ class StrategyParams(BaseModel):
     ema_slow_period: int = Field(default=50, ge=10, le=200, description="Slow EMA period for trend filter")
     max_ema_spread_pct: float = Field(default=0.005, ge=0, le=0.02, description="Maximum EMA spread percentage for valid range (0.005 = 0.5%)")
     max_atr_multiplier: float = Field(default=2.0, gt=0, le=100, description="Maximum ATR multiplier for range volatility check")
-    rsi_period: int = Field(default=14, ge=5, le=50, description="RSI calculation period")
+    # Shared key: Range MR uses this as RSI period; Scalping/Reverse use it when use_rsi_filter is on.
+    # Bounds must cover EMA filter UI (1–200) and Range MR; unrealistically small values are user responsibility.
+    rsi_period: int = Field(default=14, ge=1, le=200, description="RSI period (range mean-reversion RSI, or EMA filter RSI when use_rsi_filter)")
     rsi_oversold: float = Field(default=40, ge=0, le=50, description="RSI oversold threshold for long entries")
     rsi_overbought: float = Field(default=60, ge=50, le=100, description="RSI overbought threshold for short entries")
     tp_buffer_pct: float = Field(default=0.001, ge=0, le=0.05, description="Take profit buffer percentage from range boundary (0.001 = 0.1%)")
@@ -55,6 +68,14 @@ class StrategyParams(BaseModel):
         default="live_price",
         description="Stop-loss trigger: 'live_price' = any tick; 'candle_close' = only when candle close is beyond SL (reduces fake breakouts).",
     )
+
+    @field_validator("atr_max_pct")
+    @classmethod
+    def validate_atr_bounds(cls, value: float, info) -> float:
+        atr_min = info.data.get("atr_min_pct", 0.0) if info and info.data else 0.0
+        if value < atr_min:
+            raise ValueError("atr_max_pct must be greater than or equal to atr_min_pct")
+        return value
 
 
 class CreateStrategyRequest(BaseModel):

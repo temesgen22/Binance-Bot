@@ -39,14 +39,29 @@ class StrategyDetailsViewModel @Inject constructor(
         _performance,
         positionUpdateStore.updates
     ) { perf, updates ->
-        val u = perf?.let { updates[it.strategyId] }
-        if (perf != null && u != null) perf.copy(
-            positionSize = u.positionSize,
-            totalUnrealizedPnl = u.unrealizedPnl ?: perf.totalUnrealizedPnl,
-            currentPrice = u.currentPrice,
-            entryPrice = u.entryPrice ?: perf.entryPrice,
-            positionSide = u.positionSide ?: perf.positionSide
-        ) else perf
+        // Store keys are accountId|strategyId (see PositionUpdateStore.compositeKey), not raw strategyId
+        val u = perf?.let { p ->
+            updates[positionUpdateStore.compositeKey(p.accountId.orEmpty(), p.strategyId, p.symbol)]
+        }
+        if (perf != null && u != null) {
+            if (u.positionSize <= 0) {
+                perf.copy(
+                    positionSize = 0.0,
+                    positionSide = null,
+                    entryPrice = null,
+                    totalUnrealizedPnl = null,
+                    currentPrice = u.currentPrice ?: perf.currentPrice
+                )
+            } else {
+                perf.copy(
+                    positionSize = u.positionSize,
+                    totalUnrealizedPnl = u.unrealizedPnl ?: perf.totalUnrealizedPnl,
+                    currentPrice = u.currentPrice,
+                    entryPrice = u.entryPrice ?: perf.entryPrice,
+                    positionSide = u.positionSide ?: perf.positionSide
+                )
+            }
+        } else perf
     }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
     
     private val _activity = MutableStateFlow<List<com.binancebot.mobile.data.remote.dto.StrategyActivityDto>>(emptyList())

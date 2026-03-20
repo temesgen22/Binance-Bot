@@ -61,6 +61,7 @@ class TestFCMNotifierUnit:
     
     def test_fcm_notifier_initialization(self):
         """Test FCMNotifier can be instantiated."""
+        pytest.importorskip("firebase_admin", reason="firebase-admin optional; install for FCM tests")
         from app.services.fcm_notifier import FCMNotifier, FIREBASE_AVAILABLE
         
         assert FIREBASE_AVAILABLE, "Firebase not available"
@@ -73,6 +74,7 @@ class TestFCMNotifierUnit:
     
     def test_fcm_notifier_with_mock_credentials(self):
         """Test FCMNotifier initialization with mocked credentials."""
+        pytest.importorskip("firebase_admin", reason="firebase-admin optional; install for FCM tests")
         from app.services.fcm_notifier import FCMNotifier
         
         with patch('app.services.fcm_notifier.firebase_admin') as mock_firebase:
@@ -98,6 +100,7 @@ class TestFCMMessageFormat:
     
     def test_message_creation(self):
         """Test that FCM messages are created correctly."""
+        pytest.importorskip("firebase_admin", reason="firebase-admin optional")
         from firebase_admin import messaging
         
         # Create a test message
@@ -126,6 +129,7 @@ class TestFCMMessageFormat:
     
     def test_batch_message_creation(self):
         """Test creating multiple messages for send_each."""
+        pytest.importorskip("firebase_admin", reason="firebase-admin optional")
         from firebase_admin import messaging
         
         tokens = ["token1", "token2", "token3"]
@@ -429,22 +433,26 @@ def run_quick_validation():
 
 
 def test_firebase_import():
+    pytest.importorskip("firebase_admin", reason="firebase-admin optional")
     import firebase_admin
     from firebase_admin import credentials, messaging
     assert firebase_admin is not None
 
 
 def test_send_each_exists():
+    pytest.importorskip("firebase_admin", reason="firebase-admin optional")
     from firebase_admin import messaging
     assert hasattr(messaging, 'send_each'), "send_each not found"
 
 
 def test_fcm_notifier_import():
+    pytest.importorskip("firebase_admin", reason="firebase-admin optional")
     from app.services.fcm_notifier import FCMNotifier, FIREBASE_AVAILABLE
     assert FIREBASE_AVAILABLE, "Firebase not available"
 
 
 def test_message_creation():
+    pytest.importorskip("firebase_admin", reason="firebase-admin optional")
     from firebase_admin import messaging
     msg = messaging.Message(
         notification=messaging.Notification(title="Test", body="Test"),

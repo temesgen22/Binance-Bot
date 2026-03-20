@@ -7,10 +7,10 @@ import com.binancebot.mobile.data.remote.websocket.WebSocketManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,6 +27,7 @@ class NotificationTrigger @Inject constructor(
     private val preferencesManager: PreferencesManager
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var listenJob: Job? = null
     private var isListening = false
     
     fun startListening() {
@@ -37,7 +38,7 @@ class NotificationTrigger @Inject constructor(
         isListening = true
         AppLogger.d("NotificationTrigger", "Starting to listen for notifications")
         
-        scope.launch {
+        listenJob = scope.launch {
             // Combine preferences with WebSocket updates
             combine(
                 preferencesManager.notificationsEnabled,
@@ -183,6 +184,8 @@ class NotificationTrigger @Inject constructor(
     
     fun stopListening() {
         isListening = false
+        listenJob?.cancel()
+        listenJob = null
     }
     
     private data class NotificationPreferences(

@@ -1,13 +1,8 @@
 package com.binancebot.mobile.data.remote.websocket
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -20,7 +15,6 @@ import javax.inject.Singleton
 class PositionUpdateStore @Inject constructor() {
     private val _updates = MutableStateFlow<Map<String, PositionUpdateData>>(emptyMap())
     val updates: StateFlow<Map<String, PositionUpdateData>> = _updates.asStateFlow()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Build composite key: accountId|strategyId (or accountId|manual_$symbol when strategyId blank). */
     fun compositeKey(accountId: String, strategyId: String, symbol: String): String {
@@ -30,7 +24,6 @@ class PositionUpdateStore @Inject constructor() {
     }
 
     fun apply(update: UpdateMessage.PositionUpdate) {
-        val stratKey = if (update.strategyId.isBlank()) "manual_${update.symbol}" else update.strategyId
         val key = compositeKey(update.accountId, update.strategyId, update.symbol)
         val data = PositionUpdateData(
             strategyId = update.strategyId,
@@ -48,11 +41,15 @@ class PositionUpdateStore @Inject constructor() {
             marginType = update.marginType
         )
         if (update.positionSize <= 0) {
-            _updates.value = _updates.value + (key to data.copy(positionSize = 0.0))
-            scope.launch {
-                delay(3000)
-                _updates.value = _updates.value - key
-            }
+            // Flat: clear side/entry/PnL so UI does not keep showing an open position.
+            // Keep this entry in the map (do not delete after a delay): REST / performance can lag
+            // after Binance closes; removing the overlay caused details/cards to show stale "open" again.
+            _updates.value = _updates.value + (key to data.copy(
+                positionSize = 0.0,
+                positionSide = null,
+                entryPrice = null,
+                unrealizedPnl = null
+            ))
         } else {
             _updates.value = _updates.value + (key to data)
         }

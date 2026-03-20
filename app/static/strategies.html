@@ -704,6 +704,34 @@
         let autoRefreshInterval = null;
         let expandedStrategies = new Set();
         let availableAccounts = {};
+        /** Last /performance payload rows — used to re-render expanded details on WS close (REST can lag). */
+        let lastPerformanceStrategies = [];
+
+        function mergeStrategyWithLivePosition(strategy) {
+            if (!strategy || !window.PositionUpdates || typeof window.PositionUpdates.getComposite !== 'function') {
+                return strategy;
+            }
+            const acc = strategy.account_id || 'default';
+            const live = window.PositionUpdates.getComposite(acc, strategy.strategy_id);
+            if (!live) return strategy;
+            const sz = live.position_size != null ? Number(live.position_size) : null;
+            if (sz != null && sz <= 0) {
+                return Object.assign({}, strategy, {
+                    position_size: 0,
+                    position_side: null,
+                    entry_price: null,
+                    total_unrealized_pnl: null
+                });
+            }
+            return Object.assign({}, strategy, {
+                position_size: live.position_size != null ? live.position_size : strategy.position_size,
+                position_side: (live.position_side != null && String(live.position_side).trim() !== '')
+                    ? live.position_side : strategy.position_side,
+                entry_price: live.entry_price != null ? live.entry_price : strategy.entry_price,
+                current_price: live.current_price != null ? live.current_price : strategy.current_price,
+                total_unrealized_pnl: live.unrealized_pnl != null ? live.unrealized_pnl : strategy.total_unrealized_pnl
+            });
+        }
 
         // Live position updates from WebSocket
         window.addEventListener('position-update', function(e) {
@@ -718,6 +746,15 @@
                 const text = val != null ? (val.toFixed(2) + ' USDT') : 'N/A';
                 cell.textContent = text;
                 cell.className = (val || 0) >= 0 ? 'positive' : 'negative';
+            }
+            // Re-render expanded "Current Position" so it does not stay stale after close
+            const sid = String(d.strategy_id);
+            if (expandedStrategies.has(sid)) {
+                const strategy = lastPerformanceStrategies.find(function(s) { return s && String(s.strategy_id) === sid; });
+                const detailsEl = document.getElementById('details-' + sid);
+                if (strategy && detailsEl) {
+                    detailsEl.innerHTML = generateStrategyDetails(mergeStrategyWithLivePosition(strategy));
+                }
             }
         });
 
@@ -807,10 +844,12 @@
             const content = document.getElementById('strategiesContent');
             
             if (!data.strategies || data.strategies.length === 0) {
+                lastPerformanceStrategies = [];
                 content.innerHTML = '<div class="empty-state"><h3>No strategies found</h3><p>Try adjusting your filters</p></div>';
                 return;
             }
 
+            lastPerformanceStrategies = data.strategies.slice();
             let html = '<table class="strategies-table"><thead><tr>';
             html += '<th style="width: 50px;">Rank</th>';
             html += '<th style="width: 300px;">Strategy Name</th>';
@@ -912,7 +951,7 @@
                 // Details row
                 html += `<tr class="details-row ${isExpanded ? 'expanded' : ''}"><td colspan="15">`;
                 html += `<div class="strategy-details ${isExpanded ? 'show' : ''}" id="details-${strategy.strategy_id}">`;
-                html += generateStrategyDetails(strategy);
+                html += generateStrategyDetails(mergeStrategyWithLivePosition(strategy));
                 html += '</div></td></tr>';
             });
 
@@ -986,7 +1025,11 @@
                     'interval_seconds', 'kline_interval', 'enable_short',
                     'min_ema_separation', 'enable_htf_bias', 'cooldown_candles',
                     'trailing_stop_enabled', 'trailing_stop_activation_pct',
-                    'enable_ema_cross_exit', 'sl_trigger_mode'
+                    'enable_ema_cross_exit',
+                    'use_rsi_filter', 'rsi_period', 'rsi_long_min', 'rsi_short_max',
+                    'use_atr_filter', 'atr_period', 'atr_min_pct', 'atr_max_pct',
+                    'use_volume_filter', 'volume_ma_period', 'volume_multiplier_min',
+                    'sl_trigger_mode'
                 ];
                 
                 const rangeMeanReversionParams = [
@@ -1015,6 +1058,8 @@
                         // Show a user-friendly label for EMA cross exit state
                         const displayValue = key === 'enable_ema_cross_exit'
                             ? (value ? 'Enabled' : 'Disabled')
+                            : (key === 'use_rsi_filter' || key === 'use_atr_filter' || key === 'use_volume_filter')
+                                ? (value ? 'Enabled' : 'Disabled')
                             : key === 'sl_trigger_mode'
                                 ? (value === 'candle_close' ? 'Candle Close' : 'Live Price')
                                 : (typeof value === 'boolean' ? value.toString() : value);

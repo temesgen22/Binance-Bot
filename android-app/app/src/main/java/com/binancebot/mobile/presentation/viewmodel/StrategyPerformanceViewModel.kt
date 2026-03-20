@@ -31,14 +31,26 @@ class StrategyPerformanceViewModel @Inject constructor(
     ) { list, updates ->
         if (list == null) null else list.copy(
             strategies = list.strategies.map { s ->
-                val u = updates[s.strategyId]
-                if (u != null) s.copy(
-                    positionSize = u.positionSize,
-                    totalUnrealizedPnl = u.unrealizedPnl ?: s.totalUnrealizedPnl,
-                    currentPrice = u.currentPrice,
-                    entryPrice = u.entryPrice ?: s.entryPrice,
-                    positionSide = u.positionSide ?: s.positionSide
-                ) else s
+                val u = updates[positionUpdateStore.compositeKey(s.accountId.orEmpty(), s.strategyId, s.symbol)]
+                if (u != null) {
+                    if (u.positionSize <= 0) {
+                        s.copy(
+                            positionSize = 0.0,
+                            positionSide = null,
+                            entryPrice = null,
+                            totalUnrealizedPnl = null,
+                            currentPrice = u.currentPrice ?: s.currentPrice
+                        )
+                    } else {
+                        s.copy(
+                            positionSize = u.positionSize,
+                            totalUnrealizedPnl = u.unrealizedPnl ?: s.totalUnrealizedPnl,
+                            currentPrice = u.currentPrice,
+                            entryPrice = u.entryPrice ?: s.entryPrice,
+                            positionSide = u.positionSide ?: s.positionSide
+                        )
+                    }
+                } else s
             }
         )
     }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
