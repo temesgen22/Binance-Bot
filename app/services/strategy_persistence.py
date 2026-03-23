@@ -787,7 +787,32 @@ class StrategyPersistence:
                             await self.mark_price_stream_manager.subscribe(summary.symbol)
                         except Exception as exc:
                             logger.debug(f"[{summary.id}] mark price register/subscribe failed: {exc}")
+                # Refresh mark-price registry heartbeat even when state didn't change.
+                # This allows stale entry auto-expiry to remove only truly orphaned positions.
+                elif self.user_id and self.mark_price_stream_manager:
+                    try:
+                        self.mark_price_stream_manager.register_position(
+                            summary.symbol,
+                            summary.id,
+                            self.user_id,
+                            new_entry_price,
+                            new_position_size,
+                            new_position_side,
+                            summary.account_id,
+                            leverage=summary.leverage,
+                            initial_margin=getattr(summary, "initial_margin", None),
+                            strategy_name=summary.name,
+                        )
+                    except Exception as exc:
+                        logger.debug(f"[{summary.id}] mark price registry heartbeat refresh failed: {exc}")
             else:
+                # Flat reality on exchange/paper: ensure mark-price registry cannot keep stale entry alive.
+                if self.mark_price_stream_manager:
+                    try:
+                        self.mark_price_stream_manager.unregister_position(summary.symbol, summary.id)
+                        await self.mark_price_stream_manager.maybe_unsubscribe(summary.symbol)
+                    except Exception as exc:
+                        logger.debug(f"[{summary.id}] mark price unregister on flat failed: {exc}")
                 # No open position: use shared clear path (REST and WebSocket)
                 position_was_closed = summary.position_size is not None and summary.position_size != 0
                 if position_was_closed:

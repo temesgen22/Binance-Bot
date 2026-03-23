@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Optional, Callable, List
+from typing import TYPE_CHECKING, Optional, Callable, List, Any
 
 from loguru import logger
 
@@ -90,7 +90,103 @@ class StrategyOrderManager:
         self.db_service: Optional["DatabaseService"] = None
         if strategy_service and hasattr(strategy_service, 'db_service'):
             self.db_service = strategy_service.db_service
-    
+
+    async def _reconcile_stale_position_conflict_with_binance(
+        self,
+        *,
+        opener_summary: StrategySummary,
+        signal: StrategySignal,
+        conflicting_strategy: StrategySummary,
+        account_client: Any,
+        all_user_strategies: Optional[List[StrategySummary]] = None,
+    ) -> bool:
+        """If DB claims another strategy holds size but Binance shows flat, clear stale rows.
+
+        Returns True when the conflict should be ignored (stale state was repaired).
+        Returns False when a real Binance position exists or reconciliation could not run.
+        """
+        symbol = (signal.symbol or "").strip()
+        if not symbol:
+            return False
+        try:
+            binance_pos = await asyncio.to_thread(account_client.get_open_position, symbol)
+        except Exception as exc:
+            logger.warning(
+                f"[{opener_summary.id}] Could not verify Binance position for conflict resolution ({symbol}): {exc}"
+            )
+            return False
+
+        if binance_pos is not None:
+            try:
+                amt = float(binance_pos.get("positionAmt", 0))
+            except (TypeError, ValueError):
+                amt = 0.0
+            if abs(amt) > 1e-12:
+                return False
+
+        to_clear: List[StrategySummary] = []
+        if all_user_strategies:
+            sym_u = symbol.upper()
+            for s in all_user_strategies:
+                if (s.symbol or "").strip().upper() != sym_u:
+                    continue
+                if s.account_id != opener_summary.account_id:
+                    continue
+                ps = s.position_size
+                if ps is not None and float(ps) > 0:
+                    to_clear.append(s)
+        else:
+            to_clear = [conflicting_strategy]
+
+        seen_ids: set[str] = set()
+        unique_clear: List[StrategySummary] = []
+        for s in to_clear:
+            if s.id in seen_ids:
+                continue
+            seen_ids.add(s.id)
+            unique_clear.append(s)
+
+        labels = [f"{s.name}({s.id}, size={s.position_size})" for s in unique_clear]
+        logger.warning(
+            f"[{opener_summary.id}] Binance shows no open position for {symbol} but local DB still had "
+            f"position holder(s): {labels}. Clearing stale position fields (account-level exchange is flat)."
+        )
+
+        clear_kwargs = dict(
+            position_size=0,
+            position_side=None,
+            entry_price=None,
+            unrealized_pnl=0,
+            position_instance_id=None,
+            current_price=None,
+        )
+
+        if self.strategy_service and self.user_id:
+            for s in unique_clear:
+                try:
+                    await asyncio.to_thread(
+                        self.strategy_service.update_strategy,
+                        self.user_id,
+                        s.id,
+                        **clear_kwargs,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        f"[{opener_summary.id}] Failed to clear stale DB position for strategy {s.id}: {exc}"
+                    )
+                    return False
+
+        for s in unique_clear:
+            if s.id in self._strategies:
+                mem = self._strategies[s.id]
+                mem.position_size = 0
+                mem.position_side = None
+                mem.entry_price = None
+                mem.unrealized_pnl = 0
+                mem.position_instance_id = None
+                mem.current_price = None
+        return True
+
     async def execute_order(
         self,
         signal: StrategySignal,
@@ -198,11 +294,11 @@ class StrategyOrderManager:
             
             # Only check for conflicts if we're opening a position
             if is_opening_order:
-                # ✅ LAYER 3: Check database for ALL running strategies, not just in-memory
-                # This is a safety net - should rarely trigger if layers 1-2 work correctly
+                # ✅ LAYER 3: DB + memory — another strategy on same account+symbol must show *real* open size
+                # (running alone was incorrectly treated as conflict; stale DB sizes are reconciled vs Binance)
                 conflicting_strategy = None
+                all_strategies: List[StrategySummary] = []
                 if self.strategy_service and self.user_id:
-                    # Check database for running strategies with same symbol+account
                     try:
                         all_strategies = await self.strategy_service.async_list_strategies(self.user_id)
                     except RuntimeError as list_exc:
@@ -212,74 +308,78 @@ class StrategyOrderManager:
                             )
                         else:
                             raise
+                    sig_sym = signal.symbol.strip().upper()
                     for other_strategy in all_strategies:
-                        # Skip current strategy
                         if other_strategy.id == summary.id:
                             continue
-                        
-                        # Check symbol match (case-insensitive, stripped)
-                        if other_strategy.symbol.strip().upper() != signal.symbol.strip().upper():
+                        if other_strategy.symbol.strip().upper() != sig_sym:
                             continue
-                        
-                        # Check account match
                         if other_strategy.account_id != summary.account_id:
                             continue
-                        
-                        # Check if strategy is running
-                        if other_strategy.status == StrategyState.running:
-                            conflicting_strategy = other_strategy
-                            break
-                
-                # Fallback: Also check in-memory strategies (for backward compatibility)
+                        if other_strategy.status != StrategyState.running:
+                            continue
+                        pos_sz = other_strategy.position_size
+                        if pos_sz is None or float(pos_sz) <= 0:
+                            continue
+                        conflicting_strategy = other_strategy
+                        break
+
+                # Fallback: in-memory strategies (must have open size, same as DB path)
                 if not conflicting_strategy:
                     for strategy_id, other_summary in self._strategies.items():
-                        # Skip current strategy
                         if strategy_id == summary.id:
                             continue
-                        
-                        # Check if other strategy has open position for same symbol
                         if (other_summary.symbol.strip().upper() == signal.symbol.strip().upper() and
                             other_summary.account_id == summary.account_id and
                             other_summary.position_size and
                             float(other_summary.position_size) > 0):
                             conflicting_strategy = other_summary
                             break
-                
+
                 if conflicting_strategy:
-                        error_msg = (
-                            f"Cannot open position for {signal.symbol}: "
-                            f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "
-                            f"already has an open {conflicting_strategy.position_side} position "
-                            f"({conflicting_strategy.position_size} {signal.symbol}). "
-                            f"Binance Futures positions are account-level and cannot be shared between strategies. "
-                            f"Stopping this strategy to prevent position conflicts."
-                        )
-                        
-                        logger.error(f"[{summary.id}] ❌ {error_msg}")
-                        
-                        # Stop the current strategy automatically
-                        if self.strategy_runner:
-                            try:
-                                await self.strategy_runner.stop(summary.id)
-                                logger.info(
-                                    f"[{summary.id}] ✅ Strategy automatically stopped due to position conflict"
-                                )
-                            except Exception as stop_exc:
-                                logger.error(
-                                    f"[{summary.id}] Failed to stop strategy after position conflict: {stop_exc}"
-                                )
-                        
-                        # Raise exception to prevent order execution
-                        raise OrderExecutionError(
-                            error_msg,
-                            symbol=signal.symbol,
-                            details={
-                                "conflicting_strategy_id": conflicting_strategy.id,
-                                "conflicting_strategy_name": conflicting_strategy.name,
-                                "conflicting_position_side": conflicting_strategy.position_side,
-                                "conflicting_position_size": conflicting_strategy.position_size,
-                            }
-                        )
+                    cleared = await self._reconcile_stale_position_conflict_with_binance(
+                        opener_summary=summary,
+                        signal=signal,
+                        conflicting_strategy=conflicting_strategy,
+                        account_client=account_client,
+                        all_user_strategies=all_strategies if all_strategies else None,
+                    )
+                    if cleared:
+                        conflicting_strategy = None
+
+                if conflicting_strategy:
+                    error_msg = (
+                        f"Cannot open position for {signal.symbol}: "
+                        f"Strategy '{conflicting_strategy.name}' ({conflicting_strategy.id}) "
+                        f"already has an open {conflicting_strategy.position_side} position "
+                        f"({conflicting_strategy.position_size} {signal.symbol}). "
+                        f"Binance Futures positions are account-level and cannot be shared between strategies. "
+                        f"Stopping this strategy to prevent position conflicts."
+                    )
+
+                    logger.error(f"[{summary.id}] ❌ {error_msg}")
+
+                    if self.strategy_runner:
+                        try:
+                            await self.strategy_runner.stop(summary.id)
+                            logger.info(
+                                f"[{summary.id}] ✅ Strategy automatically stopped due to position conflict"
+                            )
+                        except Exception as stop_exc:
+                            logger.error(
+                                f"[{summary.id}] Failed to stop strategy after position conflict: {stop_exc}"
+                            )
+
+                    raise OrderExecutionError(
+                        error_msg,
+                        symbol=signal.symbol,
+                        details={
+                            "conflicting_strategy_id": conflicting_strategy.id,
+                            "conflicting_strategy_name": conflicting_strategy.name,
+                            "conflicting_position_side": conflicting_strategy.position_side,
+                            "conflicting_position_size": conflicting_strategy.position_size,
+                        },
+                    )
         except OrderExecutionError:
             # Re-raise OrderExecutionError (position conflict)
             raise

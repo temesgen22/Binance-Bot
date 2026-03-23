@@ -78,6 +78,10 @@ object BacktestStrategyDefaults {
             ParamDef.Checkbox("use_volume_filter", "Use Volume Filter", false),
             ParamDef.Int("volume_ma_period", "Volume MA Period", 20, 1, 500),
             ParamDef.Number("volume_multiplier_min", "Volume Multiplier Min", 1.0, 0.0, 1000.0, 0.1),
+            ParamDef.Checkbox("use_structure_filter", "Use Market Structure Filter (HH/HL vs LH/LL)", false),
+            ParamDef.Int("structure_left_bars", "Structure Pivot Left Bars", 2, 1, 20),
+            ParamDef.Int("structure_right_bars", "Structure Pivot Right Bars", 2, 1, 20),
+            ParamDef.Checkbox("structure_confirm_on_close", "Structure Confirm on Candle Close", true),
             ParamDef.Checkbox("trailing_stop_enabled", "Trailing Stop", false),
             ParamDef.Number("trailing_stop_activation_pct", "Trailing Activation %", 0.0, 0.0, 0.1, 0.001),
             ParamDef.Select("sl_trigger_mode", "SL Trigger", "live_price", listOf("live_price", "candle_close"))
@@ -130,6 +134,10 @@ object BacktestStrategyDefaults {
             "use_volume_filter" to false,
             "volume_ma_period" to 20,
             "volume_multiplier_min" to 1.0,
+            "use_structure_filter" to false,
+            "structure_left_bars" to 2,
+            "structure_right_bars" to 2,
+            "structure_confirm_on_close" to true,
             "trailing_stop_enabled" to false,
             "trailing_stop_activation_pct" to 0.0,
             "sl_trigger_mode" to "live_price"

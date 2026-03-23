@@ -12,6 +12,24 @@ def _num(value: Any, default: Any, cast: type = float):
     return cast(value)
 
 
+def _bool_param(value: Any, default: bool) -> bool:
+    """Parse bool like Strategy.parse_bool_param — bool('false') must not be True."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        v = value.lower().strip()
+        if v in ("true", "1", "yes", "on", "enabled"):
+            return True
+        if v in ("false", "0", "no", "off", "disabled", ""):
+            return False
+        return default
+    return bool(value)
+
+
 def extract_range_mean_reversion_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract and normalize parameters for range mean reversion strategy.
@@ -55,18 +73,23 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         "ema_slow": _num(params.get("ema_slow"), 21, int),
         "take_profit_pct": _num(params.get("take_profit_pct"), 0.004),
         "stop_loss_pct": _num(params.get("stop_loss_pct"), 0.002),
-        "use_rsi_filter": bool(params.get("use_rsi_filter", False)),
+        # Use same semantics as Strategy.parse_bool_param (bool("false") must be False, not True)
+        "use_rsi_filter": _bool_param(params.get("use_rsi_filter"), False),
         "rsi_period": _num(params.get("rsi_period"), 14, int),
         "rsi_long_min": _num(params.get("rsi_long_min"), 50.0),
         "rsi_short_max": _num(params.get("rsi_short_max"), 50.0),
-        "use_atr_filter": bool(params.get("use_atr_filter", False)),
+        "use_atr_filter": _bool_param(params.get("use_atr_filter"), False),
         "atr_period": _num(params.get("atr_period"), 14, int),
         "atr_min_pct": _num(params.get("atr_min_pct"), 0.0),
         "atr_max_pct": _num(params.get("atr_max_pct"), 100.0),
-        "use_volume_filter": bool(params.get("use_volume_filter", False)),
+        "use_volume_filter": _bool_param(params.get("use_volume_filter"), False),
         "volume_ma_period": _num(params.get("volume_ma_period"), 20, int),
         "volume_multiplier_min": _num(params.get("volume_multiplier_min"), 1.0),
-        "trailing_stop_enabled": params.get("trailing_stop_enabled", False) if params.get("trailing_stop_enabled") is not None else False,
+        "use_structure_filter": _bool_param(params.get("use_structure_filter"), False),
+        "structure_left_bars": _num(params.get("structure_left_bars"), 2, int),
+        "structure_right_bars": _num(params.get("structure_right_bars"), 2, int),
+        "structure_confirm_on_close": _bool_param(params.get("structure_confirm_on_close"), True),
+        "trailing_stop_enabled": _bool_param(params.get("trailing_stop_enabled"), False),
         "trailing_stop_activation_pct": _num(params.get("trailing_stop_activation_pct"), 0.0),
         "sl_trigger_mode": str(params.get("sl_trigger_mode", "live_price")).lower()
         if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")

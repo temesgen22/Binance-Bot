@@ -17,6 +17,10 @@ from app.strategies.indicators import (
     calculate_ema as _calculate_ema_from_prices_shared,
     calculate_rsi,
 )
+from app.strategies.structure_filters import (
+    passes_market_structure_filter,
+    required_closed_candles_for_structure,
+)
 
 if TYPE_CHECKING:
     from app.core.websocket_kline_manager import WebSocketKlineManager
@@ -87,7 +91,13 @@ class EmaScalpingStrategy(Strategy):
         self.use_volume_filter = self.parse_bool_param(p.get("use_volume_filter"), default=False)
         self.volume_ma_period = self.param_int(p, "volume_ma_period", 20)
         self.volume_multiplier_min = self.param_float(p, "volume_multiplier_min", 1.0)
-        
+        self.use_structure_filter = self.parse_bool_param(p.get("use_structure_filter"), default=False)
+        self.structure_left_bars = self.param_int(p, "structure_left_bars", 2)
+        self.structure_right_bars = self.param_int(p, "structure_right_bars", 2)
+        self.structure_confirm_on_close = self.parse_bool_param(
+            p.get("structure_confirm_on_close"), default=True
+        )
+
         # Kline interval (default 1 minute for scalping)
         _ki = p.get("kline_interval", "1m")
         self.interval = "1m" if _ki is None else str(_ki)
@@ -131,6 +141,9 @@ class EmaScalpingStrategy(Strategy):
             (self.rsi_period_filter + 1) if self.use_rsi_filter else 0,
             (self.atr_period_filter + 1) if self.use_atr_filter else 0,
             (self.volume_ma_period + 1) if self.use_volume_filter else 0,
+            required_closed_candles_for_structure(self.structure_left_bars, self.structure_right_bars)
+            if self.use_structure_filter
+            else 0,
         )
 
     def _passes_entry_filters(
@@ -195,6 +208,20 @@ class EmaScalpingStrategy(Strategy):
             if not math.isfinite(volume_ratio) or volume_ratio < self.volume_multiplier_min:
                 logger.info(
                     f"[{self.context.id}] Entry blocked by Volume: side={candidate_side}, value={volume_ratio:.4f}, min={self.volume_multiplier_min:.4f}, candle={candle_time}"
+                )
+                return False
+
+        if self.use_structure_filter:
+            ok, reason = passes_market_structure_filter(
+                candidate_side,
+                closed_klines,
+                self.structure_left_bars,
+                self.structure_right_bars,
+                self.structure_confirm_on_close,
+            )
+            if not ok:
+                logger.info(
+                    f"[{self.context.id}] Entry blocked by Structure: side={candidate_side}, reason={reason}, candle={candle_time}"
                 )
                 return False
 

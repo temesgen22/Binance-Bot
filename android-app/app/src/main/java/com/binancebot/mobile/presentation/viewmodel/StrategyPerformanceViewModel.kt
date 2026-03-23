@@ -38,7 +38,7 @@ class StrategyPerformanceViewModel @Inject constructor(
                             positionSize = 0.0,
                             positionSide = null,
                             entryPrice = null,
-                            totalUnrealizedPnl = null,
+                            totalUnrealizedPnl = 0.0,
                             currentPrice = u.currentPrice ?: s.currentPrice
                         )
                     } else {

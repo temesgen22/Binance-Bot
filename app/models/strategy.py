@@ -46,7 +46,18 @@ class StrategyParams(BaseModel):
     use_volume_filter: bool = Field(default=False, description="Enable volume-ratio entry filtering")
     volume_ma_period: int = Field(default=20, ge=1, le=500, description="SMA period for closed-candle volume ratio")
     volume_multiplier_min: float = Field(default=1.0, ge=0, le=1000, description="Minimum volume ratio current/SMA required for entry")
-    
+    # Optional market-structure entry filter (HH/HL for LONG, LH/LL for SHORT; Scalping + Reverse Scalping)
+    use_structure_filter: bool = Field(
+        default=False,
+        description="Enable swing-based market structure filter (higher highs/lows for LONG, lower highs/lows for SHORT)",
+    )
+    structure_left_bars: int = Field(default=2, ge=1, le=20, description="Pivot strength: bars to the left of a swing")
+    structure_right_bars: int = Field(default=2, ge=1, le=20, description="Pivot strength: bars to the right of a swing")
+    structure_confirm_on_close: bool = Field(
+        default=True,
+        description="If True, LONG requires close >= previous swing high (h_prev); SHORT requires close <= last swing low unless that pivot is on the signal bar",
+    )
+
     # Range Mean-Reversion Strategy parameters
     lookback_period: int = Field(default=150, ge=50, le=500, description="Number of candles to look back for range detection")
     buy_zone_pct: float = Field(default=0.2, gt=0, lt=0.5, description="Buy zone as percentage of range (0.2 = bottom 20%)")

@@ -364,6 +364,10 @@
                     { name: 'use_volume_filter', type: 'checkbox', label: 'Use Volume Filter', default: false },
                     { name: 'volume_ma_period', type: 'number', label: 'Volume MA Period', default: 20, min: 1, max: 500 },
                     { name: 'volume_multiplier_min', type: 'number', label: 'Volume Multiplier Min', default: 1.0, min: 0, max: 1000, step: 0.1 },
+                    { name: 'use_structure_filter', type: 'checkbox', label: 'Use Market Structure Filter (HH/HL vs LH/LL)', default: false, description: 'LONG requires higher highs + higher lows; SHORT requires lower highs + lower lows (swing pivots on candle highs/lows)' },
+                    { name: 'structure_left_bars', type: 'number', label: 'Structure Pivot Left Bars', default: 2, min: 1, max: 20 },
+                    { name: 'structure_right_bars', type: 'number', label: 'Structure Pivot Right Bars', default: 2, min: 1, max: 20 },
+                    { name: 'structure_confirm_on_close', type: 'checkbox', label: 'Structure Confirm on Candle Close', default: true, description: 'LONG: close >= previous swing high (h_prev); SHORT: close <= last swing low if that pivot is not on the signal bar' },
                     { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
                     { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 },
                     { name: 'sl_trigger_mode', type: 'select', label: 'SL Trigger', default: 'live_price', options: ['live_price', 'candle_close'], description: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
@@ -393,6 +397,10 @@
                     { name: 'use_volume_filter', type: 'checkbox', label: 'Use Volume Filter', default: false },
                     { name: 'volume_ma_period', type: 'number', label: 'Volume MA Period', default: 20, min: 1, max: 500 },
                     { name: 'volume_multiplier_min', type: 'number', label: 'Volume Multiplier Min', default: 1.0, min: 0, max: 1000, step: 0.1 },
+                    { name: 'use_structure_filter', type: 'checkbox', label: 'Use Market Structure Filter (HH/HL vs LH/LL)', default: false, description: 'LONG requires higher highs + higher lows; SHORT requires lower highs + lower lows (swing pivots on candle highs/lows)' },
+                    { name: 'structure_left_bars', type: 'number', label: 'Structure Pivot Left Bars', default: 2, min: 1, max: 20 },
+                    { name: 'structure_right_bars', type: 'number', label: 'Structure Pivot Right Bars', default: 2, min: 1, max: 20 },
+                    { name: 'structure_confirm_on_close', type: 'checkbox', label: 'Structure Confirm on Candle Close', default: true, description: 'LONG: close >= previous swing high (h_prev); SHORT: close <= last swing low if that pivot is not on the signal bar' },
                     { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
                     { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 },
                     { name: 'sl_trigger_mode', type: 'select', label: 'SL Trigger', default: 'live_price', options: ['live_price', 'candle_close'], description: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }

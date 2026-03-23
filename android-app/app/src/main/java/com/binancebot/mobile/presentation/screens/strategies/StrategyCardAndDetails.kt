@@ -425,7 +425,7 @@ fun StrategyDetailsView(
                         key.replace("_", " ").replaceFirstChar { it.uppercase() },
                         if (key == "enable_ema_cross_exit") {
                             ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
-                        } else if (key == "use_rsi_filter" || key == "use_atr_filter" || key == "use_volume_filter") {
+                        } else if (key == "use_rsi_filter" || key == "use_atr_filter" || key == "use_volume_filter" || key == "use_structure_filter" || key == "structure_confirm_on_close") {
                             ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
                         } else if (key == "sl_trigger_mode") {
                             if ((value as? String) == "candle_close") "Candle Close" else "Live Price"
@@ -490,6 +490,7 @@ fun getRelevantParamsForStrategy(strategyType: String, params: Map<String, Any>)
         "use_rsi_filter", "rsi_period", "rsi_long_min", "rsi_short_max",
         "use_atr_filter", "atr_period", "atr_min_pct", "atr_max_pct",
         "use_volume_filter", "volume_ma_period", "volume_multiplier_min",
+        "use_structure_filter", "structure_left_bars", "structure_right_bars", "structure_confirm_on_close",
         "sl_trigger_mode"
     )
     

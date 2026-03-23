@@ -64,6 +64,10 @@ fun CreateStrategyScreen(
     var useVolumeFilter by remember { mutableStateOf(false) }
     var volumeMaPeriod by remember { mutableStateOf("20") }
     var volumeMultiplierMin by remember { mutableStateOf("1.0") }
+    var useStructureFilter by remember { mutableStateOf(false) }
+    var structureLeftBars by remember { mutableStateOf("2") }
+    var structureRightBars by remember { mutableStateOf("2") }
+    var structureConfirmOnClose by remember { mutableStateOf(true) }
     
     // Range Mean Reversion parameters
     var lookbackPeriod by remember { mutableStateOf("150") }
@@ -174,6 +178,10 @@ fun CreateStrategyScreen(
                     useVolumeFilter = (perf.params["use_volume_filter"] as? Boolean) ?: false
                     volumeMaPeriod = (perf.params["volume_ma_period"] as? Number)?.toString() ?: "20"
                     volumeMultiplierMin = (perf.params["volume_multiplier_min"] as? Number)?.toString() ?: "1.0"
+                    useStructureFilter = (perf.params["use_structure_filter"] as? Boolean) ?: false
+                    structureLeftBars = (perf.params["structure_left_bars"] as? Number)?.toString() ?: "2"
+                    structureRightBars = (perf.params["structure_right_bars"] as? Number)?.toString() ?: "2"
+                    structureConfirmOnClose = (perf.params["structure_confirm_on_close"] as? Boolean) ?: true
                     slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
                 }
                 "range_mean_reversion" -> {
@@ -307,6 +315,10 @@ fun CreateStrategyScreen(
                                         useVolumeFilter = false
                                         volumeMaPeriod = "20"
                                         volumeMultiplierMin = "1.0"
+                                        useStructureFilter = false
+                                        structureLeftBars = "2"
+                                        structureRightBars = "2"
+                                        structureConfirmOnClose = true
                                         slTriggerMode = "live_price"
                                     }
                                     "range_mean_reversion" -> {
@@ -586,6 +598,28 @@ fun CreateStrategyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = useStructureFilter, onCheckedChange = { useStructureFilter = it })
+                        Text("Use Market Structure Filter (HH/HL vs LH/LL)", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = structureLeftBars,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) structureLeftBars = it },
+                        label = { Text("Structure Pivot Left Bars") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = structureRightBars,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) structureRightBars = it },
+                        label = { Text("Structure Pivot Right Bars") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = structureConfirmOnClose, onCheckedChange = { structureConfirmOnClose = it })
+                        Text("Structure confirm on candle close", modifier = Modifier.padding(start = Spacing.Small))
+                    }
                     Spacer(modifier = Modifier.height(Spacing.Small))
                     Text("SL Trigger", style = MaterialTheme.typography.labelMedium)
                     Row(modifier = Modifier.fillMaxWidth()) {
@@ -791,6 +825,10 @@ fun CreateStrategyScreen(
                             useVolumeFilter = useVolumeFilter,
                             volumeMaPeriod = volumeMaPeriod,
                             volumeMultiplierMin = volumeMultiplierMin,
+                            useStructureFilter = useStructureFilter,
+                            structureLeftBars = structureLeftBars,
+                            structureRightBars = structureRightBars,
+                            structureConfirmOnClose = structureConfirmOnClose,
                             lookbackPeriod = lookbackPeriod,
                             buyZonePct = buyZonePct,
                             sellZonePct = sellZonePct,
@@ -861,6 +899,10 @@ fun buildParamsMap(
     useVolumeFilter: Boolean = false,
     volumeMaPeriod: String = "20",
     volumeMultiplierMin: String = "1.0",
+    useStructureFilter: Boolean = false,
+    structureLeftBars: String = "2",
+    structureRightBars: String = "2",
+    structureConfirmOnClose: Boolean = true,
     // Range Mean Reversion params
     lookbackPeriod: String = "150",
     buyZonePct: String = "0.2",
@@ -903,6 +945,10 @@ fun buildParamsMap(
                 "use_volume_filter" to useVolumeFilter,
                 "volume_ma_period" to (volumeMaPeriod.toIntOrNull() ?: 20),
                 "volume_multiplier_min" to (volumeMultiplierMin.toDoubleOrNull() ?: 1.0),
+                "use_structure_filter" to useStructureFilter,
+                "structure_left_bars" to (structureLeftBars.toIntOrNull() ?: 2),
+                "structure_right_bars" to (structureRightBars.toIntOrNull() ?: 2),
+                "structure_confirm_on_close" to structureConfirmOnClose,
                 "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
             )
         }

@@ -1029,6 +1029,7 @@
                     'use_rsi_filter', 'rsi_period', 'rsi_long_min', 'rsi_short_max',
                     'use_atr_filter', 'atr_period', 'atr_min_pct', 'atr_max_pct',
                     'use_volume_filter', 'volume_ma_period', 'volume_multiplier_min',
+                    'use_structure_filter', 'structure_left_bars', 'structure_right_bars', 'structure_confirm_on_close',
                     'sl_trigger_mode'
                 ];
                 
@@ -1058,7 +1059,7 @@
                         // Show a user-friendly label for EMA cross exit state
                         const displayValue = key === 'enable_ema_cross_exit'
                             ? (value ? 'Enabled' : 'Disabled')
-                            : (key === 'use_rsi_filter' || key === 'use_atr_filter' || key === 'use_volume_filter')
+                            : (key === 'use_rsi_filter' || key === 'use_atr_filter' || key === 'use_volume_filter' || key === 'use_structure_filter' || key === 'structure_confirm_on_close')
                                 ? (value ? 'Enabled' : 'Disabled')
                             : key === 'sl_trigger_mode'
                                 ? (value === 'candle_close' ? 'Candle Close' : 'Live Price')

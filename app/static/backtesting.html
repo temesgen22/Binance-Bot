@@ -925,6 +925,10 @@
                 use_volume_filter: { type: 'checkbox', label: 'Use Volume Filter', value: false },
                 volume_ma_period: { type: 'number', label: 'Volume MA Period', value: 20, min: 1, max: 500 },
                 volume_multiplier_min: { type: 'number', label: 'Volume Multiplier Min', value: 1.0, min: 0, max: 1000, step: 0.1 },
+                use_structure_filter: { type: 'checkbox', label: 'Use Market Structure Filter (HH/HL vs LH/LL)', value: false },
+                structure_left_bars: { type: 'number', label: 'Structure Pivot Left Bars', value: 2, min: 1, max: 20 },
+                structure_right_bars: { type: 'number', label: 'Structure Pivot Right Bars', value: 2, min: 1, max: 20 },
+                structure_confirm_on_close: { type: 'checkbox', label: 'Structure Confirm on Candle Close', value: true },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
                 trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
                 sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
@@ -951,6 +955,10 @@
                 use_volume_filter: { type: 'checkbox', label: 'Use Volume Filter', value: false },
                 volume_ma_period: { type: 'number', label: 'Volume MA Period', value: 20, min: 1, max: 500 },
                 volume_multiplier_min: { type: 'number', label: 'Volume Multiplier Min', value: 1.0, min: 0, max: 1000, step: 0.1 },
+                use_structure_filter: { type: 'checkbox', label: 'Use Market Structure Filter (HH/HL vs LH/LL)', value: false },
+                structure_left_bars: { type: 'number', label: 'Structure Pivot Left Bars', value: 2, min: 1, max: 20 },
+                structure_right_bars: { type: 'number', label: 'Structure Pivot Right Bars', value: 2, min: 1, max: 20 },
+                structure_confirm_on_close: { type: 'checkbox', label: 'Structure Confirm on Candle Close', value: true },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
                 trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
                 sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
