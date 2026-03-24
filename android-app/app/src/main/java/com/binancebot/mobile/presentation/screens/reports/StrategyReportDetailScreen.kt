@@ -420,7 +420,7 @@ private fun FullTradesTable(trades: List<TradeReportDto>) {
                             cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.feePaid))
                             cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.fundingFee))
                             cell(ColWidthNarrow, FormatUtils.formatCurrency(trade.pnlUsd))
-                            cell(ColWidthNarrow, FormatUtils.formatPercentage(trade.pnlPct))
+                            cell(ColWidthNarrow, FormatUtils.formatPercentageAdaptive(trade.pnlPct))
                             cell(ColWidthWide, trade.exitReason ?: "—")
                             cell(ColWidthNarrow, trade.initialMargin?.let { FormatUtils.formatCurrency(it) } ?: "—")
                             cell(ColWidthNarrow, trade.marginType ?: "—")

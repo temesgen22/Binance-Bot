@@ -129,7 +129,7 @@ fun EnhancedStrategyCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 MetricColumn("Total PnL", FormatUtils.formatCurrency(performance.totalPnl), performance.totalPnl >= 0)
-                MetricColumn("Win Rate", "${String.format("%.2f", performance.winRate)}%")
+                MetricColumn("Win Rate", FormatUtils.formatPercentageAdaptive(performance.winRate))
                 MetricColumn("Trades", "${performance.completedTrades}/${performance.totalTrades}")
             }
             

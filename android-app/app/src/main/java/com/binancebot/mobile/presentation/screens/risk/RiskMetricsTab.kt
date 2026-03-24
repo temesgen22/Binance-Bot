@@ -156,13 +156,13 @@ fun PortfolioMetricsTab(
                                 MetricRow("Total Exposure", FormatUtils.formatCurrency(it))
                             }
                             metrics.totalExposurePct?.let {
-                                MetricRow("Exposure %", "${String.format("%.2f", it * 100)}%")
+                                MetricRow("Exposure %", FormatUtils.formatPercentageAdaptive(it))
                             }
                             metrics.maxDrawdownPct?.let {
-                                MetricRow("Max Drawdown", "${String.format("%.2f", it * 100)}%")
+                                MetricRow("Max Drawdown", FormatUtils.formatPercentageAdaptive(it))
                             }
                             metrics.currentDrawdownPct?.let {
-                                MetricRow("Current Drawdown", "${String.format("%.2f", it * 100)}%")
+                                MetricRow("Current Drawdown", FormatUtils.formatPercentageAdaptive(it))
                             }
                             metrics.dailyPnLUsdt?.let {
                                 MetricRow("Daily PnL", FormatUtils.formatCurrency(it))

@@ -110,9 +110,15 @@ class BinanceClient:
         self._last_time_sync: Optional[float] = None
         self._time_sync_interval: float = 300.0  # Resync every 5 minutes if needed
         
-        # Public market data client (no authentication required for market data)
-        # This is more secure and faster than using authenticated API for klines/prices
-        self._public_client = PublicMarketDataClient(testnet=testnet)
+        # Public market data client (no authentication required for market data).
+        # Use MAINNET market data for both mainnet and testnet accounts so indicators
+        # (EMA/RSI/ATR/structure) run on the more stable, liquid feed.
+        self._public_client = PublicMarketDataClient(testnet=False)
+        if testnet:
+            logger.info(
+                "Testnet trading account configured; using mainnet market data feed "
+                "for price/klines."
+            )
         
         # Circuit breaker for Binance API calls
         # Protects against cascading failures when Binance API is down

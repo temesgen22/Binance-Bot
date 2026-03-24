@@ -47,8 +47,6 @@ class MarkPriceStreamManager:
         self._rest_fallback_tasks: Dict[str, asyncio.Task] = {}
         self._rest_fallback_interval = 15
         self._rest_fallback_logged: set = set()  # keys we've logged "using REST fallback" for
-        # Drop stale registry entries that are not refreshed by strategy state sync.
-        self._entry_stale_seconds = 180
 
     def register_position(
         self,
@@ -148,25 +146,6 @@ class MarkPriceStreamManager:
                     "Position may not be registered yet or was unregistered. Enable mark price after position opens."
                 )
                 return
-            now = time.time()
-            stale_strategy_ids = [
-                e.get("strategy_id")
-                for e in entries
-                if (now - float(e.get("last_seen_at", 0.0))) > self._entry_stale_seconds
-            ]
-            if stale_strategy_ids:
-                for sid in stale_strategy_ids:
-                    if sid:
-                        self.unregister_position(symbol_key, sid)
-                # Reload entries after stale cleanup.
-                entries = list(self._registry.get(symbol_key, []))
-                if not entries:
-                    await self.maybe_unsubscribe(symbol_key)
-                    logger.warning(
-                        f"[MarkPrice] Removed stale registry entries for {symbol_key}; "
-                        "no active positions remain, unsubscribed stream."
-                    )
-                    return
             _tick_count[0] += 1
             log_every_ticks = 30  # log every ~30s when stream is 1s
             for entry in entries:

@@ -22,6 +22,15 @@ object FormatUtils {
     fun formatPercentage(value: Double, decimals: Int = 2): String {
         return String.format(Locale.getDefault(), "%.${decimals}f%%", value * 100)
     }
+
+    /**
+     * Format percentage from values that may be either decimal (0-1) or already-percent (0-100).
+     * Keeps UI resilient while backend payloads are mixed across endpoints.
+     */
+    fun formatPercentageAdaptive(value: Double, decimals: Int = 2): String {
+        val percentage = if (kotlin.math.abs(value) > 1.0) value else value * 100
+        return String.format(Locale.getDefault(), "%.${decimals}f%%", percentage)
+    }
     
     fun formatNumber(value: Double, decimals: Int = 2): String {
         return String.format(Locale.getDefault(), "%.${decimals}f", value)

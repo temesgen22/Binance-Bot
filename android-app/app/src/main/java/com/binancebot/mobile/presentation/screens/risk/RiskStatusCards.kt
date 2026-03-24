@@ -142,8 +142,8 @@ fun ProgressBarsCard(
                 if (limit != null) {
                     ProgressBarItem(
                         label = "Drawdown",
-                        current = current * 100,
-                        limit = limit * 100,
+                        current = if (kotlin.math.abs(current) > 1.0) current else current * 100,
+                        limit = if (kotlin.math.abs(limit) > 1.0) limit else limit * 100,
                         unit = "%",
                         isNegative = false
                     )
@@ -254,8 +254,8 @@ fun MetricsGridCard(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.Medium)) {
                     RiskMetricCard(
                         label = "Max Drawdown",
-                        value = status.maxDrawdownPct?.let { "${String.format("%.2f", it * 100)}%" }
-                            ?: portfolioMetrics?.maxDrawdownPct?.let { "${String.format("%.2f", it * 100)}%" } ?: "N/A",
+                        value = status.maxDrawdownPct?.let { FormatUtils.formatPercentageAdaptive(it) }
+                            ?: portfolioMetrics?.maxDrawdownPct?.let { FormatUtils.formatPercentageAdaptive(it) } ?: "N/A",
                         modifier = Modifier.weight(1f)
                     )
                     RiskMetricCard(

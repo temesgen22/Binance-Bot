@@ -189,7 +189,7 @@ fun StrategyComparisonScreen(
                                 
                                 // Metrics Rows
                                 ComparisonMetricRow("Total PnL", selectedStrategies.map { FormatUtils.formatCurrency(it.totalPnl) })
-                                ComparisonMetricRow("Win Rate", selectedStrategies.map { String.format("%.1f%%", it.winRate * 100) })
+                                ComparisonMetricRow("Win Rate", selectedStrategies.map { FormatUtils.formatPercentageAdaptive(it.winRate, 1) })
                                 ComparisonMetricRow("Total Trades", selectedStrategies.map { it.totalTrades.toString() })
                                 ComparisonMetricRow("Completed Trades", selectedStrategies.map { it.completedTrades.toString() })
                                 ComparisonMetricRow("Winning Trades", selectedStrategies.map { it.winningTrades.toString() })

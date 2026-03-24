@@ -288,7 +288,7 @@ fun PerformanceRankingCard(
                 ) {
                     StatusBadge(status = performance.status)
                     Text(
-                        text = "Win: ${String.format("%.1f%%", performance.winRate * 100)}",
+                        text = "Win: ${FormatUtils.formatPercentageAdaptive(performance.winRate, 1)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

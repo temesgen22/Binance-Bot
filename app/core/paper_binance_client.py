@@ -447,13 +447,13 @@ class PaperBinanceClient:
         if not position:
             return None
         
-        # Calculate unrealized PnL based on current price (with leverage)
+        # Calculate unrealized PnL (USDT), aligned with Binance semantics.
+        # PnL itself is not multiplied by leverage.
         current_price = self.get_price(symbol)
-        leverage = position.leverage
         if position.side == "LONG":
-            unrealized_pnl = (current_price - position.entry_price) * position.size * leverage
+            unrealized_pnl = (current_price - position.entry_price) * position.size
         else:  # SHORT
-            unrealized_pnl = (position.entry_price - current_price) * position.size * leverage
+            unrealized_pnl = (position.entry_price - current_price) * position.size
         
         position.unrealized_pnl = unrealized_pnl
         
@@ -613,7 +613,7 @@ class PaperBinanceClient:
         """Update virtual position after order execution.
         
         Returns:
-            Realized PnL if position was closed, 0.0 otherwise (with leverage applied)
+            Realized PnL if position was closed, 0.0 otherwise.
         """
         position = self.positions.get(symbol)
         pnl = 0.0
@@ -623,13 +623,13 @@ class PaperBinanceClient:
             if position and position.side == "SHORT":
                 # Closing short position
                 if quantity >= position.size:
-                    # Fully closed - use position's leverage (from when it was opened)
-                    pnl = (position.entry_price - price) * position.size * position.leverage
+                    # Fully closed
+                    pnl = (position.entry_price - price) * position.size
                     del self.positions[symbol]
                     logger.debug(f"Closed SHORT position for {symbol}, PnL: ${pnl:.2f} (leverage: {position.leverage}x)")
                 else:
                     # Partially closed
-                    pnl = (position.entry_price - price) * quantity * position.leverage
+                    pnl = (position.entry_price - price) * quantity
                     position.size -= quantity
                     logger.debug(f"Partially closed SHORT position for {symbol}, PnL: ${pnl:.2f} (leverage: {position.leverage}x)")
             else:
@@ -661,13 +661,13 @@ class PaperBinanceClient:
             if position and position.side == "LONG":
                 # Closing long position
                 if quantity >= position.size:
-                    # Fully closed - use position's leverage
-                    pnl = (price - position.entry_price) * position.size * position.leverage
+                    # Fully closed
+                    pnl = (price - position.entry_price) * position.size
                     del self.positions[symbol]
                     logger.debug(f"Closed LONG position for {symbol}, PnL: ${pnl:.2f} (leverage: {position.leverage}x)")
                 else:
                     # Partially closed
-                    pnl = (price - position.entry_price) * quantity * position.leverage
+                    pnl = (price - position.entry_price) * quantity
                     position.size -= quantity
                     logger.debug(f"Partially closed LONG position for {symbol}, PnL: ${pnl:.2f} (leverage: {position.leverage}x)")
             else:
