@@ -145,6 +145,31 @@ class EmaScalpingStrategy(Strategy):
         _sl_mode = str(_sl_raw if _sl_raw is not None else "live_price").lower()
         self.sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
 
+        _em = p.get("entry_mode", "cross_only")
+        self.entry_mode: Literal["cross_only", "cross_or_trend"] = (
+            _em if _em in ("cross_only", "cross_or_trend") else "cross_only"
+        )
+        self.trend_entry_max_candles_after_cross = max(0, self.param_int(p, "trend_entry_max_candles_after_cross", 0))
+        self.trend_entry_unlimited_after_cross = self.parse_bool_param(
+            p.get("trend_entry_unlimited_after_cross"), default=False
+        )
+        self.trend_entry_max_per_regime = max(1, self.param_int(p, "trend_entry_max_per_regime", 1))
+        self.trend_entry_require_ema_separation = self.parse_bool_param(
+            p.get("trend_entry_require_ema_separation"), default=True
+        )
+        self._entry_regime: Literal["none", "long", "short"] = "none"
+        self._regime_armed_at: Optional[int] = None
+        self._trend_entries_used: int = 0
+        # True if last open was trend follow-up (regime + count persist after exit until opposite cross)
+        self._opened_entry_via_trend: bool = False
+
+    def _note_position_closed_flat(self) -> None:
+        """When position goes flat: preserve regime after a trend entry exit; else clear regime."""
+        if self._opened_entry_via_trend:
+            self._opened_entry_via_trend = False
+        else:
+            self._clear_trend_regime()
+
     def _required_filter_candles(self) -> int:
         return max(
             self.slow_period + 2,
@@ -240,6 +265,106 @@ class EmaScalpingStrategy(Strategy):
     def _reset_giveback_state(self) -> None:
         self.peak_unrealized_pnl = None
 
+    def _clear_trend_regime(self) -> None:
+        """Clear trend follow-up regime (arming bar in §4 plan; reset on opposite cross or cross entry)."""
+        self._entry_regime = "none"
+        self._regime_armed_at = None
+        self._trend_entries_used = 0
+
+    @staticmethod
+    def _bars_after_regime_arm(closed_klines: list[list], armed_at: Optional[int]) -> int:
+        """Number of closed candles from arming candle to last closed (0 = arming bar is last closed)."""
+        if armed_at is None:
+            return 0
+        for i, k in enumerate(closed_klines):
+            if int(k[6]) == armed_at:
+                return len(closed_klines) - 1 - i
+        return 0
+
+    def _arm_scalping_regime_on_cross_flat(
+        self, golden_cross: bool, death_cross: bool, last_closed_time: int
+    ) -> None:
+        """Arm regime on cross detection while flat; independent of filters."""
+        if self.position is not None:
+            return
+        if golden_cross:
+            self._entry_regime = "long"
+            self._regime_armed_at = last_closed_time
+            self._trend_entries_used = 0
+        elif death_cross:
+            self._entry_regime = "short"
+            self._regime_armed_at = last_closed_time
+            self._trend_entries_used = 0
+
+    def _trend_followup_window_ok_scalping(self, closed_klines: list[list]) -> bool:
+        if self.entry_mode != "cross_or_trend":
+            return False
+        if self.trend_entry_max_candles_after_cross == 0 and not self.trend_entry_unlimited_after_cross:
+            return False
+        if self._regime_armed_at is None:
+            return False
+        bars_after = self._bars_after_regime_arm(closed_klines, self._regime_armed_at)
+        if bars_after < 1:
+            return False
+        if self.trend_entry_unlimited_after_cross:
+            return True
+        return bars_after <= self.trend_entry_max_candles_after_cross
+
+    def _trend_separation_ok_scalping(self, ema_separation_pct: float) -> bool:
+        if not self.trend_entry_require_ema_separation:
+            return True
+        return ema_separation_pct >= self.min_ema_separation
+
+    async def _htf_bias_blocks_short_entry_scalping(self, live_price: float) -> bool:
+        """True = block SHORT entry (same logic as death-cross SHORT path)."""
+        if not (self.enable_htf_bias and self.interval == "1m"):
+            return False
+        if self.kline_manager:
+            try:
+                htf_klines = await self.kline_manager.get_klines(
+                    symbol=self.context.symbol,
+                    interval="5m",
+                    limit=self.slow_period + 5,
+                )
+            except Exception as e:
+                logger.warning(f"WebSocket HTF klines failed, falling back to REST API: {e}")
+                htf_klines = await asyncio.to_thread(
+                    self.client.get_klines,
+                    symbol=self.context.symbol,
+                    interval="5m",
+                    limit=self.slow_period + 5,
+                )
+        else:
+            htf_klines = await asyncio.to_thread(
+                self.client.get_klines,
+                symbol=self.context.symbol,
+                interval="5m",
+                limit=self.slow_period + 5,
+            )
+        if not htf_klines or len(htf_klines) < self.slow_period + 1:
+            logger.warning(
+                f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient 5m data "
+                f"(got {len(htf_klines) if htf_klines else 0} klines, need {self.slow_period + 1})"
+            )
+            return True
+        htf_closes = [float(k[4]) for k in htf_klines[:-1]]
+        if len(htf_closes) >= self.slow_period:
+            htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
+            htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
+            if htf_fast_ema >= htf_slow_ema:
+                logger.debug(
+                    f"[{self.context.id}] Short blocked: 5m trend is up "
+                    f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
+                )
+                return True
+        else:
+            logger.warning(
+                f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient closed 5m candles "
+                f"(got {len(htf_closes)} closed, need {self.slow_period})"
+            )
+            return True
+        return False
+
     def _maybe_pnl_giveback_exit(
         self,
         live_price: float,
@@ -293,6 +418,7 @@ class EmaScalpingStrategy(Strategy):
             f"[{self.context.id}] PnL giveback stop{context_suffix}: peak={peak:.4f} current={unrealized_pnl:.4f} "
             f"({reason})"
         )
+        self._note_position_closed_flat()
         self.position, self.entry_price, self.entry_candle_time = None, None, None
         self.trailing_stop = None
         self._reset_giveback_state()
@@ -375,6 +501,7 @@ class EmaScalpingStrategy(Strategy):
                         f"{live_price:.8f} >= {tp_price:.8f}"
                     )
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
                     self._reset_giveback_state()
@@ -393,6 +520,7 @@ class EmaScalpingStrategy(Strategy):
                         f"{use_sl_price:.8f} <= {sl_price:.8f}"
                     )
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
                     self._reset_giveback_state()
@@ -416,6 +544,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
@@ -434,6 +563,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => SELL at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
@@ -471,6 +601,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
                     self._reset_giveback_state()
@@ -490,6 +621,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
                     self._reset_giveback_state()
@@ -513,6 +645,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
@@ -531,6 +664,7 @@ class EmaScalpingStrategy(Strategy):
                     )
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
+                    self._note_position_closed_flat()
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
@@ -568,6 +702,8 @@ class EmaScalpingStrategy(Strategy):
                 f"strategy thinks position={self.position} but Binance says flat. "
                 f"Syncing strategy to Binance reality (position closed)."
             )
+            self._clear_trend_regime()
+            self._opened_entry_via_trend = False
             self.position = None
             self.entry_price = None
             self.entry_candle_time = None
@@ -890,16 +1026,17 @@ class EmaScalpingStrategy(Strategy):
                 # For exits, we want to allow closing even if EMAs are close
                 # Use candle_price for EMA calculations (stable reference)
                 ema_separation_pct = abs(fast_ema - slow_ema) / candle_price if candle_price > 0 else 0
-                should_check_separation = self.position is None  # Only check for new entries
-                
-                if should_check_separation and ema_separation_pct < self.min_ema_separation:
-                    # EMA separation filter is normal behavior - use DEBUG for backtests, INFO for live
+                # cross_only: global separation gate (same as legacy). cross_or_trend: separation checked per cross/trend path.
+                if (
+                    self.position is None
+                    and self.entry_mode == "cross_only"
+                    and ema_separation_pct < self.min_ema_separation
+                ):
                     log_level = logger.debug if self.context.id == "backtest" else logger.info
                     log_level(
                         f"[{self.context.id}] HOLD: EMA separation too small ({ema_separation_pct:.6f} < {self.min_ema_separation}) | "
                         f"Price: {live_price:.8f} | Fast EMA: {fast_ema:.8f} | Slow EMA: {slow_ema:.8f} | Position: {self.position}"
                     )
-                    # Early return: state will be updated in finally block
                     return StrategySignal(
                         action="HOLD",
                         symbol=self.context.symbol,
@@ -914,7 +1051,11 @@ class EmaScalpingStrategy(Strategy):
                 if prev_fast is not None and prev_slow is not None:
                     golden_cross = (prev_fast <= prev_slow) and (fast_ema > slow_ema)
                     death_cross = (prev_fast >= prev_slow) and (fast_ema < slow_ema)
-                    
+                    if self.position is None:
+                        self._arm_scalping_regime_on_cross_flat(
+                            golden_cross, death_cross, last_closed_time
+                        )
+
                     # BUG FIX: Log crossover detection for debugging
                     if golden_cross or death_cross:
                         # Crossover detection - use DEBUG for backtests, INFO for live
@@ -929,6 +1070,13 @@ class EmaScalpingStrategy(Strategy):
                     
                     # --- LONG Entry: Golden Cross (when flat) ---
                     if golden_cross and self.position is None:
+                        if ema_separation_pct < self.min_ema_separation:
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price,
+                            )
                         if not self._passes_entry_filters("LONG", closed_klines, closing_prices, last_closed_time):
                             return StrategySignal(
                                 action="HOLD",
@@ -950,6 +1098,8 @@ class EmaScalpingStrategy(Strategy):
                             f"(candle close, live={live_price:.8f}) pos={self.position} "
                             f"candle_time={last_closed_time}"
                         )
+                        self._clear_trend_regime()
+                        self._opened_entry_via_trend = False
                         self.position = "LONG"
                         self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         self.entry_candle_time = last_closed_time  # Track entry candle to prevent EMA exits on same candle
@@ -1004,6 +1154,7 @@ class EmaScalpingStrategy(Strategy):
                             f"pos={self.position} candle_time={last_closed_time}"
                         )
                         current_position = self.position
+                        self._note_position_closed_flat()
                         self.position, self.entry_price, self.entry_candle_time = None, None, None
                         self.trailing_stop = None  # Reset trailing stop
                         self._reset_giveback_state()
@@ -1022,6 +1173,13 @@ class EmaScalpingStrategy(Strategy):
                     # don't enter SHORT in the same candle (cooldown prevents this, but add explicit check)
                     # --- SHORT Entry: Death Cross (1) - when flat and short enabled ---
                     if death_cross and self.position is None and self.enable_short:
+                        if ema_separation_pct < self.min_ema_separation:
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price,
+                            )
                         if not self._passes_entry_filters("SHORT", closed_klines, closing_prices, last_closed_time):
                             return StrategySignal(
                                 action="HOLD",
@@ -1029,78 +1187,14 @@ class EmaScalpingStrategy(Strategy):
                                 confidence=0.1,
                                 price=live_price
                             )
-                        # Higher-timeframe bias check (C)
-                        if self.enable_htf_bias and self.interval == "1m":
-                            # Check 5m trend - use WebSocket if available
-                            if self.kline_manager:
-                                try:
-                                    htf_klines = await self.kline_manager.get_klines(
-                                        symbol=self.context.symbol,
-                                        interval="5m",  # HTF interval
-                                        limit=self.slow_period + 5
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"WebSocket HTF klines failed, falling back to REST API: {e}")
-                                    htf_klines = await asyncio.to_thread(
-                                        self.client.get_klines,
-                                        symbol=self.context.symbol,
-                                        interval="5m",
-                                        limit=self.slow_period + 5
-                                    )
-                            else:
-                                # Fallback to REST API
-                                htf_klines = await asyncio.to_thread(
-                                    self.client.get_klines,
-                                    symbol=self.context.symbol,
-                                    interval="5m",
-                                    limit=self.slow_period + 5
-                                )
-                            # BUG FIX: Fail-closed behavior - block short if HTF data unavailable when bias is enabled
-                            # This prevents unwanted shorts when HTF trend check cannot be performed
-                            if not htf_klines or len(htf_klines) < self.slow_period + 1:
-                                logger.warning(
-                                    f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient 5m data "
-                                    f"(got {len(htf_klines) if htf_klines else 0} klines, need {self.slow_period + 1})"
-                                )
-                                # Early return: state will be updated in finally block
-                                return StrategySignal(
-                                    action="HOLD",
-                                    symbol=self.context.symbol,
-                                    confidence=0.1,
-                                    price=live_price
-                                )
-                            
-                            htf_closes = [float(k[4]) for k in htf_klines[:-1]]  # Exclude forming candle
-                            if len(htf_closes) >= self.slow_period:
-                                htf_fast_ema = self._calculate_ema_from_prices(htf_closes, self.fast_period)
-                                htf_slow_ema = self._calculate_ema_from_prices(htf_closes, self.slow_period)
-                                
-                                # Only short if 5m trend is down
-                                if htf_fast_ema >= htf_slow_ema:
-                                    logger.debug(
-                                        f"[{self.context.id}] Short blocked: 5m trend is up "
-                                        f"(5m fast={htf_fast_ema:.8f} >= slow={htf_slow_ema:.8f})"
-                                    )
-                                    # Early return: state will be updated in finally block
-                                    return StrategySignal(
-                                        action="HOLD",
-                                        symbol=self.context.symbol,
-                                        confidence=0.1,
-                                        price=live_price
-                                    )
-                            else:
-                                # Insufficient closed candles for HTF EMA calculation
-                                logger.warning(
-                                    f"[{self.context.id}] Short blocked: HTF bias enabled but insufficient closed 5m candles "
-                                    f"(got {len(htf_closes)} closed, need {self.slow_period})"
-                                )
-                                return StrategySignal(
-                                    action="HOLD",
-                                    symbol=self.context.symbol,
-                                    confidence=0.1,
-                                    price=live_price
-                                )
-                        
+                        if await self._htf_bias_blocks_short_entry_scalping(live_price):
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price,
+                            )
+
                         # Crossover detection - use DEBUG for backtests, INFO for live
                         log_level = logger.debug if self.context.id == "backtest" else logger.info
                         log_level(
@@ -1115,6 +1209,8 @@ class EmaScalpingStrategy(Strategy):
                             f"(candle close, live={live_price:.8f}) pos={self.position} "
                             f"candle_time={last_closed_time}"
                         )
+                        self._clear_trend_regime()
+                        self._opened_entry_via_trend = False
                         self.position = "SHORT"
                         self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         self.entry_candle_time = last_closed_time  # Track entry candle to prevent EMA exits on same candle
@@ -1165,6 +1261,7 @@ class EmaScalpingStrategy(Strategy):
                         )
                         logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
                         current_position = self.position
+                        self._note_position_closed_flat()
                         self.position, self.entry_price, self.entry_candle_time = None, None, None
                         self.trailing_stop = None  # Reset trailing stop
                         self._reset_giveback_state()
@@ -1178,6 +1275,102 @@ class EmaScalpingStrategy(Strategy):
                             exit_reason="EMA_GOLDEN_CROSS",
                             position_side=current_position
                         )
+
+                    # --- Trend follow-up entries (flat; not same bar as that side's cross) ---
+                    if self.entry_mode == "cross_or_trend" and self.position is None:
+                        if (
+                            not golden_cross
+                            and self._entry_regime == "long"
+                            and fast_ema > slow_ema
+                            and self._trend_followup_window_ok_scalping(closed_klines)
+                            and self._trend_entries_used < self.trend_entry_max_per_regime
+                            and self._trend_separation_ok_scalping(ema_separation_pct)
+                        ):
+                            if self._passes_entry_filters("LONG", closed_klines, closing_prices, last_closed_time):
+                                log_level = logger.debug if self.context.id == "backtest" else logger.info
+                                log_level(
+                                    f"[{self.context.id}] [ENTRY_TREND_FOLLOWUP] LONG | "
+                                    f"time={last_closed_time} fast={fast_ema:.8f} slow={slow_ema:.8f}"
+                                )
+                                logger.warning(
+                                    f"[{self.context.id}] SIGNAL => BUY (LONG trend follow-up) at {candle_price:.8f} "
+                                    f"(candle close, live={live_price:.8f}) candle_time={last_closed_time}"
+                                )
+                                self._trend_entries_used += 1
+                                self._opened_entry_via_trend = True
+                                self.position = "LONG"
+                                self.entry_price = candle_price
+                                self.entry_candle_time = last_closed_time
+                                self._reset_giveback_state()
+                                if self.trailing_stop_enabled:
+                                    activation_pct = self.param_float(
+                                        self.context.params, "trailing_stop_activation_pct", 0.0
+                                    )
+                                    self.trailing_stop = TrailingStopManager(
+                                        entry_price=candle_price,
+                                        take_profit_pct=self.take_profit_pct,
+                                        stop_loss_pct=self.stop_loss_pct,
+                                        position_type="LONG",
+                                        enabled=True,
+                                        activation_pct=activation_pct,
+                                        trail_step_pct=activation_pct,
+                                    )
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.72,
+                                    price=candle_price,
+                                    exit_reason=None,
+                                    position_side="LONG",
+                                )
+                        if (
+                            self.enable_short
+                            and not death_cross
+                            and self._entry_regime == "short"
+                            and fast_ema < slow_ema
+                            and self._trend_followup_window_ok_scalping(closed_klines)
+                            and self._trend_entries_used < self.trend_entry_max_per_regime
+                            and self._trend_separation_ok_scalping(ema_separation_pct)
+                        ):
+                            if self._passes_entry_filters(
+                                "SHORT", closed_klines, closing_prices, last_closed_time
+                            ) and not await self._htf_bias_blocks_short_entry_scalping(live_price):
+                                log_level = logger.debug if self.context.id == "backtest" else logger.info
+                                log_level(
+                                    f"[{self.context.id}] [ENTRY_TREND_FOLLOWUP] SHORT | "
+                                    f"time={last_closed_time} fast={fast_ema:.8f} slow={slow_ema:.8f}"
+                                )
+                                logger.warning(
+                                    f"[{self.context.id}] SIGNAL => SELL (SHORT trend follow-up) at {candle_price:.8f} "
+                                    f"(candle close, live={live_price:.8f}) candle_time={last_closed_time}"
+                                )
+                                self._trend_entries_used += 1
+                                self._opened_entry_via_trend = True
+                                self.position = "SHORT"
+                                self.entry_price = candle_price
+                                self.entry_candle_time = last_closed_time
+                                self._reset_giveback_state()
+                                if self.trailing_stop_enabled:
+                                    activation_pct = self.param_float(
+                                        self.context.params, "trailing_stop_activation_pct", 0.0
+                                    )
+                                    self.trailing_stop = TrailingStopManager(
+                                        entry_price=candle_price,
+                                        take_profit_pct=self.take_profit_pct,
+                                        stop_loss_pct=self.stop_loss_pct,
+                                        position_type="SHORT",
+                                        enabled=True,
+                                        activation_pct=activation_pct,
+                                        trail_step_pct=activation_pct,
+                                    )
+                                return StrategySignal(
+                                    action="SELL",
+                                    symbol=self.context.symbol,
+                                    confidence=0.72,
+                                    price=candle_price,
+                                    exit_reason=None,
+                                    position_side="SHORT",
+                                )
                 
                 # Normal HOLD path (when no crossover or prev values not set)
                 if prev_fast is None or prev_slow is None:

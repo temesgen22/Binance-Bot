@@ -51,6 +51,31 @@ class StrategyParams(BaseModel):
         description="Only arm giveback after peak unrealized PnL has reached at least this many USDT.",
     )
     enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
+    # EMA scalping / reverse scalping: optional entry after cross while trend-aligned (see docs/EMA_SCALPING_TREND_ENTRY_AFTER_CROSS_PLAN.md)
+    entry_mode: Literal["cross_only", "cross_or_trend"] = Field(
+        default="cross_only",
+        description="cross_only: enter only on golden/death cross. cross_or_trend: also allow entries on later candles while regime is armed and fast/slow stay aligned (filters apply).",
+    )
+    trend_entry_max_candles_after_cross: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description="0 disables trend follow-up. When >0, allow at most this many closed candles after the arming cross (bars_after >= 1). Ignored if trend_entry_unlimited_after_cross is true.",
+    )
+    trend_entry_unlimited_after_cross: bool = Field(
+        default=False,
+        description="If true, no max-candle window (still enforces trend_entry_max_per_regime and cooldown).",
+    )
+    trend_entry_max_per_regime: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Max trend follow-up entries per armed regime while flat (cross entries are separate).",
+    )
+    trend_entry_require_ema_separation: bool = Field(
+        default=True,
+        description="If true, trend follow-up entries must satisfy min_ema_separation like cross entries.",
+    )
     # Optional EMA entry filters (Scalping + Reverse Scalping)
     use_rsi_filter: bool = Field(default=False, description="Enable RSI-based entry filtering")
     rsi_long_min: float = Field(default=50.0, ge=0, le=100, description="LONG entries require RSI >= this threshold when RSI filter is enabled")

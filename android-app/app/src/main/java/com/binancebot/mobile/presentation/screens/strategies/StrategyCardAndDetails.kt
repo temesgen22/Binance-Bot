@@ -429,6 +429,13 @@ fun StrategyDetailsView(
                             ((value as? Boolean) == true).let { if (it) "Enabled" else "Disabled" }
                         } else if (key == "sl_trigger_mode") {
                             if ((value as? String) == "candle_close") "Candle Close" else "Live Price"
+                        } else if (key == "entry_mode") {
+                            when (value as? String) {
+                                "cross_or_trend" -> "Cross or trend"
+                                else -> "Cross only"
+                            }
+                        } else if (key == "trend_entry_unlimited_after_cross" || key == "trend_entry_require_ema_separation") {
+                            ((value as? Boolean) == true).let { if (it) "Yes" else "No" }
                         } else {
                             formatParamValueForDisplay(value)
                         }
@@ -486,6 +493,8 @@ fun getRelevantParamsForStrategy(strategyType: String, params: Map<String, Any>)
         "ema_fast", "ema_slow", "take_profit_pct", "stop_loss_pct",
         "interval_seconds", "kline_interval", "enable_short",
         "min_ema_separation", "enable_htf_bias", "cooldown_candles",
+        "entry_mode", "trend_entry_max_candles_after_cross", "trend_entry_unlimited_after_cross",
+        "trend_entry_max_per_regime", "trend_entry_require_ema_separation",
         "trailing_stop_enabled", "trailing_stop_activation_pct",
         "pnl_giveback_enabled", "pnl_giveback_from_peak_usdt", "pnl_giveback_min_peak_usdt",
         "enable_ema_cross_exit",

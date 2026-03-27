@@ -86,6 +86,11 @@ fun CreateStrategyScreen(
     var tpBufferPct by remember { mutableStateOf("0.001") }
     var slBufferPct by remember { mutableStateOf("0.002") }
     var slTriggerMode by remember { mutableStateOf("live_price") }
+    var entryMode by remember { mutableStateOf("cross_only") }
+    var trendEntryMaxCandlesAfterCross by remember { mutableStateOf("0") }
+    var trendEntryUnlimitedAfterCross by remember { mutableStateOf(false) }
+    var trendEntryMaxPerRegime by remember { mutableStateOf("1") }
+    var trendEntryRequireEmaSeparation by remember { mutableStateOf(true) }
     
     // Initialize defaults when strategy type changes
     LaunchedEffect(strategyType) {
@@ -103,6 +108,8 @@ fun CreateStrategyScreen(
                 if (trailingStopActivationPct.isEmpty()) trailingStopActivationPct = "0.0"
                 if (pnlGivebackFromPeakUsdt.isEmpty()) pnlGivebackFromPeakUsdt = "5.0"
                 if (pnlGivebackMinPeakUsdt.isEmpty()) pnlGivebackMinPeakUsdt = "0.0"
+                if (trendEntryMaxCandlesAfterCross.isEmpty()) trendEntryMaxCandlesAfterCross = "0"
+                if (trendEntryMaxPerRegime.isEmpty()) trendEntryMaxPerRegime = "1"
             }
             "range_mean_reversion" -> {
                 // Use current values or defaults
@@ -191,6 +198,15 @@ fun CreateStrategyScreen(
                     structureRightBars = (perf.params["structure_right_bars"] as? Number)?.toString() ?: "2"
                     structureConfirmOnClose = (perf.params["structure_confirm_on_close"] as? Boolean) ?: true
                     slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
+                    entryMode = (perf.params["entry_mode"] as? String)?.takeIf { it in listOf("cross_only", "cross_or_trend") } ?: "cross_only"
+                    trendEntryMaxCandlesAfterCross =
+                        (perf.params["trend_entry_max_candles_after_cross"] as? Number)?.toString() ?: "0"
+                    trendEntryUnlimitedAfterCross =
+                        (perf.params["trend_entry_unlimited_after_cross"] as? Boolean) ?: false
+                    trendEntryMaxPerRegime =
+                        (perf.params["trend_entry_max_per_regime"] as? Number)?.toString() ?: "1"
+                    trendEntryRequireEmaSeparation =
+                        (perf.params["trend_entry_require_ema_separation"] as? Boolean) ?: true
                 }
                 "range_mean_reversion" -> {
                     lookbackPeriod = (perf.params["lookback_period"] as? Number)?.toString() ?: "150"
@@ -331,6 +347,11 @@ fun CreateStrategyScreen(
                                         structureRightBars = "2"
                                         structureConfirmOnClose = true
                                         slTriggerMode = "live_price"
+                                        entryMode = "cross_only"
+                                        trendEntryMaxCandlesAfterCross = "0"
+                                        trendEntryUnlimitedAfterCross = false
+                                        trendEntryMaxPerRegime = "1"
+                                        trendEntryRequireEmaSeparation = true
                                     }
                                     "range_mean_reversion" -> {
                                         lookbackPeriod = "150"
@@ -512,6 +533,60 @@ fun CreateStrategyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
+                    Text("Entry timing (trend after cross)", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "Cross only = entries on EMA cross bars. Cross or trend = optional follow-up when aligned after a cross.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        listOf("cross_only" to "Cross only", "cross_or_trend" to "Cross or trend").forEach { (value, label) ->
+                            Row(
+                                modifier = Modifier.padding(end = Spacing.Medium),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = entryMode == value,
+                                    onClick = { entryMode = value }
+                                )
+                                Text(label, modifier = Modifier.padding(start = Spacing.ExtraSmall))
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = trendEntryMaxCandlesAfterCross,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) trendEntryMaxCandlesAfterCross = it },
+                        label = { Text("Trend: max candles after cross (0 = off unless unlimited)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = trendEntryUnlimitedAfterCross,
+                            onCheckedChange = { trendEntryUnlimitedAfterCross = it }
+                        )
+                        Text("Trend: unlimited window after cross", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    OutlinedTextField(
+                        value = trendEntryMaxPerRegime,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) trendEntryMaxPerRegime = it },
+                        label = { Text("Trend: max entries per regime") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = trendEntryRequireEmaSeparation,
+                            onCheckedChange = { trendEntryRequireEmaSeparation = it }
+                        )
+                        Text("Trend: require min EMA separation", modifier = Modifier.padding(start = Spacing.Small))
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -869,6 +944,11 @@ fun CreateStrategyScreen(
                             structureLeftBars = structureLeftBars,
                             structureRightBars = structureRightBars,
                             structureConfirmOnClose = structureConfirmOnClose,
+                            entryMode = entryMode,
+                            trendEntryMaxCandlesAfterCross = trendEntryMaxCandlesAfterCross,
+                            trendEntryUnlimitedAfterCross = trendEntryUnlimitedAfterCross,
+                            trendEntryMaxPerRegime = trendEntryMaxPerRegime,
+                            trendEntryRequireEmaSeparation = trendEntryRequireEmaSeparation,
                             lookbackPeriod = lookbackPeriod,
                             buyZonePct = buyZonePct,
                             sellZonePct = sellZonePct,
@@ -946,6 +1026,11 @@ fun buildParamsMap(
     structureLeftBars: String = "2",
     structureRightBars: String = "2",
     structureConfirmOnClose: Boolean = true,
+    entryMode: String = "cross_only",
+    trendEntryMaxCandlesAfterCross: String = "0",
+    trendEntryUnlimitedAfterCross: Boolean = false,
+    trendEntryMaxPerRegime: String = "1",
+    trendEntryRequireEmaSeparation: Boolean = true,
     // Range Mean Reversion params
     lookbackPeriod: String = "150",
     buyZonePct: String = "0.2",
@@ -995,7 +1080,12 @@ fun buildParamsMap(
                 "structure_left_bars" to (structureLeftBars.toIntOrNull() ?: 2),
                 "structure_right_bars" to (structureRightBars.toIntOrNull() ?: 2),
                 "structure_confirm_on_close" to structureConfirmOnClose,
-                "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
+                "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price"),
+                "entry_mode" to (if (entryMode in listOf("cross_only", "cross_or_trend")) entryMode else "cross_only"),
+                "trend_entry_max_candles_after_cross" to (trendEntryMaxCandlesAfterCross.toIntOrNull() ?: 0).coerceAtLeast(0),
+                "trend_entry_unlimited_after_cross" to trendEntryUnlimitedAfterCross,
+                "trend_entry_max_per_regime" to maxOf(1, trendEntryMaxPerRegime.toIntOrNull() ?: 1),
+                "trend_entry_require_ema_separation" to trendEntryRequireEmaSeparation
             )
         }
         "range_mean_reversion" -> {
