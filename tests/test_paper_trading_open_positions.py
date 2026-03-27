@@ -94,6 +94,7 @@ class TestPositionDataNormalization:
             client=mock_client,
             client_manager=mock_client_manager,
             db_service=mock_db_service,
+            mark_price_manager=None,
         )
 
         assert result is not None
@@ -153,6 +154,7 @@ class TestPaperClientAcceptedInGetSymbolPnl:
             client=mock_client,
             client_manager=mock_client_manager,
             db_service=mock_db_service,
+            mark_price_manager=None,
         )
 
         assert result is not None
@@ -259,6 +261,7 @@ class TestGetPnlOverviewAccountIdAndMerge:
                     client=mock_client,
                     client_manager=mock_client_manager,
                     db_service=mock_db_service,
+                    mark_price_manager=None,
                 )
 
         # Should not have filtered out the strategy: account_id filter is case-insensitive

@@ -267,6 +267,7 @@ private fun com.binancebot.mobile.data.remote.dto.PositionSummaryDto.toDomain():
         currentPrice = currentPrice,
         positionSide = positionSide,
         unrealizedPnL = unrealizedPnL,
+        maxUnrealizedPnL = maxUnrealizedPnL,
         leverage = leverage,
         strategyId = strategyId,
         strategyName = strategyName,

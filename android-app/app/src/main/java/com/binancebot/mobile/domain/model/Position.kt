@@ -7,6 +7,8 @@ data class Position(
     val currentPrice: Double,
     val positionSide: String, // "LONG" or "SHORT"
     val unrealizedPnL: Double,
+    /** Peak open unrealized PnL (USDT) from mark-price stream when available */
+    val maxUnrealizedPnL: Double? = null,
     val leverage: Int,
     val strategyId: String? = null,
     val strategyName: String? = null,

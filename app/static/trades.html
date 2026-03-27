@@ -1004,7 +1004,11 @@
                     leverage: data.leverage,
                     liquidation_price: data.liquidation_price,
                     initial_margin: data.initial_margin,
-                    margin_type: data.margin_type
+                    margin_type: data.margin_type,
+                    // Only set when WS includes a number; omitting avoids wiping REST peak on merge ({...existing,...pos})
+                    ...(typeof data.max_unrealized_pnl === 'number' && !Number.isNaN(data.max_unrealized_pnl)
+                        ? { max_unrealized_pnl: data.max_unrealized_pnl }
+                        : {})
                 };
                 if (data.position_size > 0 && pos.symbol) {
                     let sym = base.find(m => _normSymbol(m.symbol) === pos.symbol);
@@ -1254,6 +1258,10 @@
                 html += `<div class="position-detail-item"><span>Entry Price:</span><span>$${formatPrice(entryPrice)}</span></div>`;
                 html += `<div class="position-detail-item"><span>Mark Price:</span><span>${currentPriceDisplay}</span></div>`;
                 html += `<div class="position-detail-item"><span>Unrealized PnL:</span><span class="${pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(pnl)}</span></div>`;
+                if (pos.max_unrealized_pnl != null && pos.max_unrealized_pnl !== undefined && !Number.isNaN(Number(pos.max_unrealized_pnl))) {
+                    const peak = Number(pos.max_unrealized_pnl);
+                    html += `<div class="position-detail-item"><span>Max unrealized PnL:</span><span class="${peak >= 0 ? 'positive' : 'negative'}">${formatCurrency(peak)}</span></div>`;
+                }
                 html += `<div class="position-detail-item"><span>Leverage:</span><span>${leverage}x</span></div>`;
                 if (pos.liquidation_price != null && pos.liquidation_price > 0) {
                     html += `<div class="position-detail-item"><span>Liquidation Price:</span><span>$${formatPrice(pos.liquidation_price)}</span></div>`;

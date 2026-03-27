@@ -91,6 +91,9 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         "structure_confirm_on_close": _bool_param(params.get("structure_confirm_on_close"), True),
         "trailing_stop_enabled": _bool_param(params.get("trailing_stop_enabled"), False),
         "trailing_stop_activation_pct": _num(params.get("trailing_stop_activation_pct"), 0.0),
+        "pnl_giveback_enabled": _bool_param(params.get("pnl_giveback_enabled"), False),
+        "pnl_giveback_from_peak_usdt": _num(params.get("pnl_giveback_from_peak_usdt"), 5.0),
+        "pnl_giveback_min_peak_usdt": _num(params.get("pnl_giveback_min_peak_usdt"), 0.0),
         "sl_trigger_mode": str(params.get("sl_trigger_mode", "live_price")).lower()
         if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")
         else "live_price",

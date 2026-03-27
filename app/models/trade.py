@@ -52,6 +52,10 @@ class PositionSummary(BaseModel):
     current_price: float
     position_side: Literal["LONG", "SHORT"]
     unrealized_pnl: float
+    max_unrealized_pnl: Optional[float] = Field(
+        default=None,
+        description="Peak open unrealized PnL (USDT) while this position is tracked by the mark-price stream",
+    )
     leverage: int
     strategy_id: Optional[str] = None
     strategy_name: Optional[str] = None

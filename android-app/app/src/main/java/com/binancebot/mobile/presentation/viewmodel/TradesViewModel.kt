@@ -146,7 +146,8 @@ class TradesViewModel @Inject constructor(
                     // Overlay WS price/pnl only; keep strategyId/strategyName from REST so owner (Manual Trade / External / strategy) is correct
                     base.copy(
                         currentPrice = ws.currentPrice,
-                        unrealizedPnL = ws.unrealizedPnL
+                        unrealizedPnL = ws.unrealizedPnL,
+                        maxUnrealizedPnL = ws.maxUnrealizedPnL ?: base.maxUnrealizedPnL
                     )
                 } else {
                     base
@@ -440,6 +441,7 @@ private fun PositionUpdateData.toPosition(): Position = Position(
     currentPrice = currentPrice ?: 0.0,
     positionSide = positionSide ?: "LONG",
     unrealizedPnL = unrealizedPnl ?: 0.0,
+    maxUnrealizedPnL = maxUnrealizedPnl,
     leverage = leverage ?: 1,
     strategyId = strategyId.takeIf { it.isNotBlank() },
     strategyName = strategyName,

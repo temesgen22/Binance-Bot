@@ -16,6 +16,7 @@ from loguru import logger
 
 from app.core.mark_price_connection import MarkPriceConnection
 from app.core.position_broadcast import PositionBroadcastService
+from app.strategies.pnl_giveback import update_peak_unrealized
 
 
 def _compute_unrealized_pnl(
@@ -42,7 +43,7 @@ class MarkPriceStreamManager:
         self._testnet = testnet
         self._connections: Dict[str, MarkPriceConnection] = {}
         self._subscription_counts: Dict[str, int] = {}
-        self._registry: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of {strategy_id, user_id, entry_price, position_size, position_side, account_id}
+        self._registry: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of position dicts (max_unrealized_pnl updated each tick)
         self._lock = asyncio.Lock()
         self._rest_fallback_tasks: Dict[str, asyncio.Task] = {}
         self._rest_fallback_interval = 15
@@ -60,13 +61,18 @@ class MarkPriceStreamManager:
         leverage: Optional[int] = None,
         initial_margin: Optional[float] = None,
         strategy_name: Optional[str] = None,
+        position_instance_id: Optional[UUID] = None,
     ) -> None:
         """Record an open position for this symbol (called when position opens)."""
         key = symbol.upper()
         if key not in self._registry:
             self._registry[key] = []
+        new_pid = str(position_instance_id) if position_instance_id is not None else None
         for entry in self._registry[key]:
             if entry["strategy_id"] == strategy_id:
+                old_pid = entry.get("position_instance_id")
+                if new_pid != old_pid:
+                    entry["max_unrealized_pnl"] = None
                 entry.update(
                     entry_price=entry_price,
                     position_size=position_size,
@@ -75,6 +81,7 @@ class MarkPriceStreamManager:
                     leverage=leverage,
                     initial_margin=initial_margin,
                     strategy_name=strategy_name,
+                    position_instance_id=new_pid,
                     last_seen_at=time.time(),
                 )
                 return
@@ -89,9 +96,19 @@ class MarkPriceStreamManager:
                 "leverage": leverage,
                 "initial_margin": initial_margin,
                 "strategy_name": strategy_name,
+                "position_instance_id": new_pid,
+                "max_unrealized_pnl": None,
                 "last_seen_at": time.time(),
             }
         )
+
+    def get_max_unrealized_pnl(self, symbol: str, strategy_id: str) -> Optional[float]:
+        """Peak open unrealized PnL (USDT) for this registry entry, if any."""
+        key = symbol.upper()
+        for entry in self._registry.get(key, []):
+            if entry.get("strategy_id") == strategy_id:
+                return entry.get("max_unrealized_pnl")
+        return None
 
     def unregister_position(self, symbol: str, strategy_id: str) -> None:
         """Remove a position from the registry (called when position closes)."""
@@ -157,6 +174,11 @@ class MarkPriceStreamManager:
                         entry["position_size"],
                         position_side,
                     )
+                    entry["max_unrealized_pnl"] = update_peak_unrealized(
+                        entry.get("max_unrealized_pnl"),
+                        unrealized_pnl,
+                    )
+                    max_u = entry["max_unrealized_pnl"]
                     await self._broadcast.broadcast_position_update(
                         entry["user_id"],
                         entry["strategy_id"],
@@ -170,6 +192,7 @@ class MarkPriceStreamManager:
                         leverage=entry.get("leverage"),
                         initial_margin=entry.get("initial_margin"),
                         strategy_name=entry.get("strategy_name"),
+                        max_unrealized_pnl=max_u,
                     )
                 except Exception as e:
                     logger.warning(

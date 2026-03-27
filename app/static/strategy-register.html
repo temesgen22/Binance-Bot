@@ -370,6 +370,9 @@
                     { name: 'structure_confirm_on_close', type: 'checkbox', label: 'Structure Confirm on Candle Close', default: true, description: 'LONG: close >= previous swing high (h_prev); SHORT: close <= last swing low if that pivot is not on the signal bar' },
                     { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
                     { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 },
+                    { name: 'pnl_giveback_enabled', type: 'checkbox', label: 'PnL Giveback Stop (USDT from peak)', default: false, description: 'Close when unrealized PnL falls by the amount below from the best unrealized since open (after min peak).' },
+                    { name: 'pnl_giveback_from_peak_usdt', type: 'number', label: 'Giveback from Peak (USDT)', default: 5.0, min: 0, max: 1000000, step: 0.5 },
+                    { name: 'pnl_giveback_min_peak_usdt', type: 'number', label: 'Min Peak Unrealized (USDT)', default: 0.0, min: 0, max: 1000000, step: 0.5, description: 'Rule only applies after peak unrealized reached at least this much.' },
                     { name: 'sl_trigger_mode', type: 'select', label: 'SL Trigger', default: 'live_price', options: ['live_price', 'candle_close'], description: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
                 ]
             },
@@ -403,6 +406,9 @@
                     { name: 'structure_confirm_on_close', type: 'checkbox', label: 'Structure Confirm on Candle Close', default: true, description: 'LONG: close >= previous swing high (h_prev); SHORT: close <= last swing low if that pivot is not on the signal bar' },
                     { name: 'trailing_stop_enabled', type: 'checkbox', label: 'Trailing Stop', default: false },
                     { name: 'trailing_stop_activation_pct', type: 'number', label: 'Trailing Activation %', default: 0.0, min: 0, max: 0.1, step: 0.001 },
+                    { name: 'pnl_giveback_enabled', type: 'checkbox', label: 'PnL Giveback Stop (USDT from peak)', default: false, description: 'Close when unrealized PnL falls by the amount below from the best unrealized since open (after min peak).' },
+                    { name: 'pnl_giveback_from_peak_usdt', type: 'number', label: 'Giveback from Peak (USDT)', default: 5.0, min: 0, max: 1000000, step: 0.5 },
+                    { name: 'pnl_giveback_min_peak_usdt', type: 'number', label: 'Min Peak Unrealized (USDT)', default: 0.0, min: 0, max: 1000000, step: 0.5, description: 'Rule only applies after peak unrealized reached at least this much.' },
                     { name: 'sl_trigger_mode', type: 'select', label: 'SL Trigger', default: 'live_price', options: ['live_price', 'candle_close'], description: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
                 ]
             },

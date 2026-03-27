@@ -526,6 +526,7 @@ class StrategyPersistence:
                     leverage=getattr(summary, "leverage", None),
                     initial_margin=getattr(summary, "initial_margin", None),
                     strategy_name=summary.name,
+                    position_instance_id=getattr(summary, "position_instance_id", None),
                 )
                 await self.mark_price_stream_manager.subscribe(summary.symbol)
             except Exception as exc:
@@ -623,6 +624,7 @@ class StrategyPersistence:
                     leverage=summary.leverage,
                     initial_margin=getattr(summary, "initial_margin", None),
                     strategy_name=summary.name,
+                    position_instance_id=getattr(summary, "position_instance_id", None),
                 )
                 await self.mark_price_stream_manager.subscribe(summary.symbol)
                 logger.debug(
@@ -783,6 +785,7 @@ class StrategyPersistence:
                                 leverage=summary.leverage,
                                 initial_margin=getattr(summary, "initial_margin", None),
                                 strategy_name=summary.name,
+                                position_instance_id=getattr(summary, "position_instance_id", None),
                             )
                             await self.mark_price_stream_manager.subscribe(summary.symbol)
                         except Exception as exc:
@@ -802,6 +805,7 @@ class StrategyPersistence:
                             leverage=summary.leverage,
                             initial_margin=getattr(summary, "initial_margin", None),
                             strategy_name=summary.name,
+                            position_instance_id=getattr(summary, "position_instance_id", None),
                         )
                     except Exception as exc:
                         logger.debug(f"[{summary.id}] mark price registry heartbeat refresh failed: {exc}")

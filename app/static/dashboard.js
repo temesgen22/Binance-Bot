@@ -2433,11 +2433,11 @@ function renderParameterComparison(data) {
     const paramGroups = {
         'Basic': ['strategy_type', 'symbol', 'leverage', 'risk_per_trade', 'fixed_amount'],
         'EMA': ['ema_fast', 'ema_slow', 'min_ema_separation'],
-        'Risk': ['take_profit_pct', 'stop_loss_pct', 'trailing_stop_enabled', 'trailing_stop_activation_pct'],
+        'Risk': ['take_profit_pct', 'stop_loss_pct', 'trailing_stop_enabled', 'trailing_stop_activation_pct', 'pnl_giveback_enabled', 'pnl_giveback_from_peak_usdt', 'pnl_giveback_min_peak_usdt'],
         'Trading': ['kline_interval', 'enable_short', 'enable_htf_bias', 'cooldown_candles', 'enable_ema_cross_exit'],
         'Other': Array.from(allParams).filter(p => !['strategy_type', 'symbol', 'leverage', 'risk_per_trade', 'fixed_amount', 
             'ema_fast', 'ema_slow', 'min_ema_separation', 'take_profit_pct', 'stop_loss_pct', 
-            'trailing_stop_enabled', 'trailing_stop_activation_pct', 'kline_interval', 'enable_short', 
+            'trailing_stop_enabled', 'trailing_stop_activation_pct', 'pnl_giveback_enabled', 'pnl_giveback_from_peak_usdt', 'pnl_giveback_min_peak_usdt', 'kline_interval', 'enable_short', 
             'enable_htf_bias', 'cooldown_candles', 'enable_ema_cross_exit'].includes(p))
     };
     

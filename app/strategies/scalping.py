@@ -21,6 +21,10 @@ from app.strategies.structure_filters import (
     passes_market_structure_filter,
     required_closed_candles_for_structure,
 )
+from app.strategies.pnl_giveback import (
+    giveback_should_trigger,
+    update_peak_unrealized,
+)
 
 if TYPE_CHECKING:
     from app.core.websocket_kline_manager import WebSocketKlineManager
@@ -130,6 +134,12 @@ class EmaScalpingStrategy(Strategy):
         self.trailing_stop_enabled = self.parse_bool_param(p.get("trailing_stop_enabled"), default=False)
         self.trailing_stop: Optional[TrailingStopManager] = None
 
+        # Open PnL giveback stop (optional): close after unrealized falls X USDT from peak
+        self.pnl_giveback_enabled = self.parse_bool_param(p.get("pnl_giveback_enabled"), default=False)
+        self.pnl_giveback_from_peak_usdt = max(0.0, self.param_float(p, "pnl_giveback_from_peak_usdt", 5.0))
+        self.pnl_giveback_min_peak_usdt = max(0.0, self.param_float(p, "pnl_giveback_min_peak_usdt", 0.0))
+        self.peak_unrealized_pnl: Optional[float] = None
+
         # SL trigger: live_price (any tick) or candle_close (only when candle close is beyond SL)
         _sl_raw = p.get("sl_trigger_mode", "live_price")
         _sl_mode = str(_sl_raw if _sl_raw is not None else "live_price").lower()
@@ -227,8 +237,74 @@ class EmaScalpingStrategy(Strategy):
 
         return True
     
+    def _reset_giveback_state(self) -> None:
+        self.peak_unrealized_pnl = None
+
+    def _maybe_pnl_giveback_exit(
+        self,
+        live_price: float,
+        unrealized_pnl: Optional[float],
+        context_suffix: str,
+    ) -> Optional[StrategySignal]:
+        """After TP/SL checks pass, optionally exit on peak-to-current unrealized drawdown (USDT)."""
+        if not self.pnl_giveback_enabled or self.position is None or self.entry_price is None:
+            return None
+        if self.position not in ("LONG", "SHORT"):
+            return None
+        if unrealized_pnl is None:
+            return None
+        if not math.isfinite(unrealized_pnl):
+            return None
+        self.peak_unrealized_pnl = update_peak_unrealized(self.peak_unrealized_pnl, unrealized_pnl)
+        peak = self.peak_unrealized_pnl
+        ok, reason = giveback_should_trigger(
+            peak_unrealized=peak,
+            current_unrealized=unrealized_pnl,
+            min_peak_usdt=self.pnl_giveback_min_peak_usdt,
+            giveback_usdt=self.pnl_giveback_from_peak_usdt,
+        )
+        if not ok:
+            return None
+        current_position = self.position
+        if current_position == "LONG":
+            exit_sig = StrategySignal(
+                action="SELL",
+                symbol=self.context.symbol,
+                confidence=0.85,
+                price=live_price,
+                exit_reason="PNL_GIVEBACK",
+                position_side=current_position,
+            )
+        elif current_position == "SHORT":
+            exit_sig = StrategySignal(
+                action="BUY",
+                symbol=self.context.symbol,
+                confidence=0.85,
+                price=live_price,
+                exit_reason="PNL_GIVEBACK",
+                position_side=current_position,
+            )
+        else:
+            logger.error(
+                f"[{self.context.id}] PnL giveback: invalid position_side={current_position!r}; not closing"
+            )
+            return None
+        logger.info(
+            f"[{self.context.id}] PnL giveback stop{context_suffix}: peak={peak:.4f} current={unrealized_pnl:.4f} "
+            f"({reason})"
+        )
+        self.position, self.entry_price, self.entry_candle_time = None, None, None
+        self.trailing_stop = None
+        self._reset_giveback_state()
+        self.cooldown_left = self.cooldown_candles
+        return exit_sig
+
     def _check_tp_sl(
-        self, live_price: float, context: str = "", candle_close_price: Optional[float] = None
+        self,
+        live_price: float,
+        context: str = "",
+        candle_close_price: Optional[float] = None,
+        unrealized_pnl: Optional[float] = None,
     ) -> Optional[StrategySignal]:
         """
         Check take profit and stop loss conditions using live price.
@@ -301,6 +377,7 @@ class EmaScalpingStrategy(Strategy):
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="SELL",
@@ -318,6 +395,7 @@ class EmaScalpingStrategy(Strategy):
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="SELL",
@@ -339,6 +417,7 @@ class EmaScalpingStrategy(Strategy):
                     logger.warning(f"[{self.context.id}] SIGNAL => SELL at {live_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="SELL",
@@ -356,6 +435,7 @@ class EmaScalpingStrategy(Strategy):
                     logger.warning(f"[{self.context.id}] SIGNAL => SELL at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="SELL",
@@ -393,6 +473,7 @@ class EmaScalpingStrategy(Strategy):
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="BUY",  # Cover short
@@ -411,6 +492,7 @@ class EmaScalpingStrategy(Strategy):
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
                     self.trailing_stop = None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="BUY",  # Cover short
@@ -432,6 +514,7 @@ class EmaScalpingStrategy(Strategy):
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {live_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="BUY",  # Cover short
@@ -449,6 +532,7 @@ class EmaScalpingStrategy(Strategy):
                     logger.warning(f"[{self.context.id}] SIGNAL => BUY at {sl_exit_price:.8f} pos={self.position}")
                     current_position = self.position
                     self.position, self.entry_price, self.entry_candle_time = None, None, None
+                    self._reset_giveback_state()
                     self.cooldown_left = self.cooldown_candles
                     return StrategySignal(
                         action="BUY",  # Cover short
@@ -459,7 +543,7 @@ class EmaScalpingStrategy(Strategy):
                         position_side=current_position
                     )
         
-        return None
+        return self._maybe_pnl_giveback_exit(live_price, unrealized_pnl, context_suffix)
     
     def sync_position_state(
         self,
@@ -488,6 +572,7 @@ class EmaScalpingStrategy(Strategy):
             self.entry_price = None
             self.entry_candle_time = None
             self.trailing_stop = None
+            self._reset_giveback_state()
             # Reset cooldown since position was closed externally
             self.cooldown_left = self.cooldown_candles
         
@@ -501,6 +586,7 @@ class EmaScalpingStrategy(Strategy):
             )
             self.position = position_side
             self.entry_price = entry_price
+            self._reset_giveback_state()
             
             # Reinitialize trailing stop if enabled and we have entry price
             if self.trailing_stop_enabled and entry_price is not None:
@@ -530,6 +616,7 @@ class EmaScalpingStrategy(Strategy):
             self.entry_candle_time = None  # Unknown when syncing from Binance
             # Reset trailing stop - will be reinitialized if needed
             self.trailing_stop = None
+            self._reset_giveback_state()
         
         # If entry price changed (position size changed), update it
         elif position_side is not None and entry_price is not None and self.entry_price != entry_price:
@@ -538,6 +625,7 @@ class EmaScalpingStrategy(Strategy):
                 f"Updating strategy state."
             )
             self.entry_price = entry_price
+            self._reset_giveback_state()
             # Reset trailing stop with new entry price if enabled
             if self.trailing_stop_enabled:
                 activation_pct = self.param_float(self.context.params, "trailing_stop_activation_pct", 0.0)
@@ -615,6 +703,15 @@ class EmaScalpingStrategy(Strategy):
                 self.context.symbol
             )
             
+            unrealized_snapshot: Optional[float] = None
+            if self.position and self.pnl_giveback_enabled:
+                try:
+                    pos = await asyncio.to_thread(self.client.get_open_position, self.context.symbol)
+                    if pos:
+                        unrealized_snapshot = float(pos.get("unRealizedProfit") or 0)
+                except Exception as exc:
+                    logger.debug(f"[{self.context.id}] get_open_position for PnL giveback: {exc}")
+            
             # BUG FIX 1: Enforce monotonic candle time - prevent processing older candles
             # This prevents time from going backwards and causing contradictory signals
             # Initialize flag to track if a new candle was actually processed
@@ -637,7 +734,10 @@ class EmaScalpingStrategy(Strategy):
                     # Use centralized TP/SL check method
                     candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
                     tp_sl_signal = self._check_tp_sl(
-                        live_price, context="older candle", candle_close_price=candle_close_price
+                        live_price,
+                        context="older candle",
+                        candle_close_price=candle_close_price,
+                        unrealized_pnl=unrealized_snapshot,
                     )
                     if tp_sl_signal:
                         return tp_sl_signal
@@ -665,7 +765,10 @@ class EmaScalpingStrategy(Strategy):
                 # Use centralized TP/SL check method
                 candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
                 tp_sl_signal = self._check_tp_sl(
-                    live_price, context="no new candle", candle_close_price=candle_close_price
+                    live_price,
+                    context="no new candle",
+                    candle_close_price=candle_close_price,
+                    unrealized_pnl=unrealized_snapshot,
                 )
                 if tp_sl_signal:
                     return tp_sl_signal
@@ -762,7 +865,10 @@ class EmaScalpingStrategy(Strategy):
                 if self.position == "LONG" and self.entry_price is not None:
                     candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
                     tp_sl_signal = self._check_tp_sl(
-                        live_price, context="", candle_close_price=candle_close_price
+                        live_price,
+                        context="",
+                        candle_close_price=candle_close_price,
+                        unrealized_pnl=unrealized_snapshot,
                     )
                     if tp_sl_signal:
                         return tp_sl_signal
@@ -771,7 +877,10 @@ class EmaScalpingStrategy(Strategy):
                 if self.position == "SHORT" and self.entry_price is not None:
                     candle_close_price = last_close_price if self.sl_trigger_mode == "candle_close" else None
                     tp_sl_signal = self._check_tp_sl(
-                        live_price, context="", candle_close_price=candle_close_price
+                        live_price,
+                        context="",
+                        candle_close_price=candle_close_price,
+                        unrealized_pnl=unrealized_snapshot,
                     )
                     if tp_sl_signal:
                         return tp_sl_signal
@@ -844,6 +953,7 @@ class EmaScalpingStrategy(Strategy):
                         self.position = "LONG"
                         self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         self.entry_candle_time = last_closed_time  # Track entry candle to prevent EMA exits on same candle
+                        self._reset_giveback_state()
                         
                         # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
@@ -896,6 +1006,7 @@ class EmaScalpingStrategy(Strategy):
                         current_position = self.position
                         self.position, self.entry_price, self.entry_candle_time = None, None, None
                         self.trailing_stop = None  # Reset trailing stop
+                        self._reset_giveback_state()
                         self.cooldown_left = self.cooldown_candles
                         # State will be updated in finally block
                         return StrategySignal(
@@ -1007,6 +1118,7 @@ class EmaScalpingStrategy(Strategy):
                         self.position = "SHORT"
                         self.entry_price = candle_price  # Use candle close price (will be updated with actual fill price)
                         self.entry_candle_time = last_closed_time  # Track entry candle to prevent EMA exits on same candle
+                        self._reset_giveback_state()
                         
                         # Initialize trailing stop if enabled (will be updated with actual entry after fill)
                         if self.trailing_stop_enabled:
@@ -1055,6 +1167,7 @@ class EmaScalpingStrategy(Strategy):
                         current_position = self.position
                         self.position, self.entry_price, self.entry_candle_time = None, None, None
                         self.trailing_stop = None  # Reset trailing stop
+                        self._reset_giveback_state()
                         self.cooldown_left = self.cooldown_candles
                         # State will be updated in finally block
                         return StrategySignal(

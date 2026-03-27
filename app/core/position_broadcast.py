@@ -88,6 +88,7 @@ class PositionBroadcastService:
         initial_margin: Optional[float] = None,
         margin_type: Optional[str] = None,
         strategy_name: Optional[str] = None,
+        max_unrealized_pnl: Optional[float] = None,
     ) -> None:
         """Broadcast a position update to all client WebSockets for this user (Binance-like fields).
         When strategy_id is None (position not owned by any strategy, e.g. manual), clients show 'Not matched'.
@@ -117,4 +118,6 @@ class PositionBroadcastService:
         payload["initial_margin"] = initial_margin if initial_margin is not None else 0.0
         if margin_type is not None:
             payload["margin_type"] = margin_type
+        if max_unrealized_pnl is not None:
+            payload["max_unrealized_pnl"] = max_unrealized_pnl
         await self._manager.broadcast_to_user(user_id, payload)

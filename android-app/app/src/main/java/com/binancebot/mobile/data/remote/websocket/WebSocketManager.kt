@@ -114,6 +114,7 @@ class WebSocketManager @Inject constructor(
                                 val liquidationPrice = try { jsonObject.get("liquidation_price")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
                                 val initialMargin = try { jsonObject.get("initial_margin")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
                                 val marginType = try { jsonObject.get("margin_type")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
+                                val maxUnrealizedPnl = try { jsonObject.get("max_unrealized_pnl")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
                                 UpdateMessage.PositionUpdate(
                                     strategyId = strategyId,
                                     strategyName = strategyName,
@@ -127,7 +128,8 @@ class WebSocketManager @Inject constructor(
                                     leverage = leverage,
                                     liquidationPrice = liquidationPrice,
                                     initialMargin = initialMargin,
-                                    marginType = marginType
+                                    marginType = marginType,
+                                    maxUnrealizedPnl = maxUnrealizedPnl
                                 )
                             }
                             "strategy_update" -> {
@@ -275,7 +277,8 @@ sealed class UpdateMessage {
         val leverage: Int? = null,
         val liquidationPrice: Double? = null,
         val initialMargin: Double? = null,
-        val marginType: String? = null
+        val marginType: String? = null,
+        val maxUnrealizedPnl: Double? = null
     ) : UpdateMessage()
     data class Error(val message: String) : UpdateMessage()
 }

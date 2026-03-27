@@ -76,6 +76,7 @@
                             const stratPart = (sid != null && sid !== '') ? sid : ('manual_' + (data.symbol || 'unknown'));
                             const accId = data.account_id || 'default';
                             const key = accId + '|' + stratPart;
+                            const prev = this._updates[key];
                             const row = {
                                 strategy_id: sid ?? null,
                                 strategy_name: data.strategy_name ?? null,
@@ -91,6 +92,12 @@
                                 initial_margin: data.initial_margin,
                                 margin_type: data.margin_type
                             };
+                            // Mark-price stream sends max_unrealized_pnl; other broadcasts may omit — keep last peak
+                            if (typeof data.max_unrealized_pnl === 'number' && !Number.isNaN(data.max_unrealized_pnl)) {
+                                row.max_unrealized_pnl = data.max_unrealized_pnl;
+                            } else if (prev && typeof prev.max_unrealized_pnl === 'number' && !Number.isNaN(prev.max_unrealized_pnl)) {
+                                row.max_unrealized_pnl = prev.max_unrealized_pnl;
+                            }
                             if (data.position_size <= 0) {
                                 // Flat: keep key so strategy details can show "no position" while REST lags.
                                 this._updates[key] = {

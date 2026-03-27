@@ -52,6 +52,9 @@ fun CreateStrategyScreen(
     var cooldownCandles by remember { mutableStateOf("2") }
     var trailingStopEnabled by remember { mutableStateOf(false) }
     var trailingStopActivationPct by remember { mutableStateOf("0.0") }
+    var pnlGivebackEnabled by remember { mutableStateOf(false) }
+    var pnlGivebackFromPeakUsdt by remember { mutableStateOf("5.0") }
+    var pnlGivebackMinPeakUsdt by remember { mutableStateOf("0.0") }
     var enableEmaCrossExit by remember { mutableStateOf(true) }
     var useRsiFilter by remember { mutableStateOf(false) }
     var rsiPeriodFilter by remember { mutableStateOf("14") }
@@ -98,6 +101,8 @@ fun CreateStrategyScreen(
                 if (minEmaSeparation.isEmpty()) minEmaSeparation = "0.0002"
                 if (cooldownCandles.isEmpty()) cooldownCandles = "2"
                 if (trailingStopActivationPct.isEmpty()) trailingStopActivationPct = "0.0"
+                if (pnlGivebackFromPeakUsdt.isEmpty()) pnlGivebackFromPeakUsdt = "5.0"
+                if (pnlGivebackMinPeakUsdt.isEmpty()) pnlGivebackMinPeakUsdt = "0.0"
             }
             "range_mean_reversion" -> {
                 // Use current values or defaults
@@ -166,6 +171,9 @@ fun CreateStrategyScreen(
                     enableHtfBias = (perf.params["enable_htf_bias"] as? Boolean) ?: true
                     trailingStopEnabled = (perf.params["trailing_stop_enabled"] as? Boolean) ?: false
                     trailingStopActivationPct = (perf.params["trailing_stop_activation_pct"] as? Number)?.toString() ?: "0.0"
+                    pnlGivebackEnabled = (perf.params["pnl_giveback_enabled"] as? Boolean) ?: false
+                    pnlGivebackFromPeakUsdt = (perf.params["pnl_giveback_from_peak_usdt"] as? Number)?.toString() ?: "5.0"
+                    pnlGivebackMinPeakUsdt = (perf.params["pnl_giveback_min_peak_usdt"] as? Number)?.toString() ?: "0.0"
                     enableEmaCrossExit = (perf.params["enable_ema_cross_exit"] as? Boolean) ?: true
                     useRsiFilter = (perf.params["use_rsi_filter"] as? Boolean) ?: false
                     rsiPeriodFilter = (perf.params["rsi_period"] as? Number)?.toString() ?: "14"
@@ -303,6 +311,9 @@ fun CreateStrategyScreen(
                                         cooldownCandles = "2"
                                         trailingStopEnabled = false
                                         trailingStopActivationPct = "0.0"
+                                        pnlGivebackEnabled = false
+                                        pnlGivebackFromPeakUsdt = "5.0"
+                                        pnlGivebackMinPeakUsdt = "0.0"
                                         enableEmaCrossExit = true
                                         useRsiFilter = false
                                         rsiPeriodFilter = "14"
@@ -516,6 +527,32 @@ fun CreateStrategyScreen(
                             value = trailingStopActivationPct,
                             onValueChange = { trailingStopActivationPct = it },
                             label = { Text("Trailing Stop Activation %") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = pnlGivebackEnabled,
+                            onCheckedChange = { pnlGivebackEnabled = it }
+                        )
+                        Text("PnL Giveback Stop (USDT from peak)", modifier = Modifier.padding(start = Spacing.Small))
+                    }
+                    if (pnlGivebackEnabled) {
+                        OutlinedTextField(
+                            value = pnlGivebackFromPeakUsdt,
+                            onValueChange = { pnlGivebackFromPeakUsdt = it },
+                            label = { Text("Giveback from Peak (USDT)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = pnlGivebackMinPeakUsdt,
+                            onValueChange = { pnlGivebackMinPeakUsdt = it },
+                            label = { Text("Min Peak Unrealized (USDT)") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
@@ -813,6 +850,9 @@ fun CreateStrategyScreen(
                             cooldownCandles = cooldownCandles,
                             trailingStopEnabled = trailingStopEnabled,
                             trailingStopActivationPct = trailingStopActivationPct,
+                            pnlGivebackEnabled = pnlGivebackEnabled,
+                            pnlGivebackFromPeakUsdt = pnlGivebackFromPeakUsdt,
+                            pnlGivebackMinPeakUsdt = pnlGivebackMinPeakUsdt,
                             enableEmaCrossExit = enableEmaCrossExit,
                             useRsiFilter = useRsiFilter,
                             rsiPeriodFilter = rsiPeriodFilter,
@@ -887,6 +927,9 @@ fun buildParamsMap(
     cooldownCandles: String = "2",
     trailingStopEnabled: Boolean = false,
     trailingStopActivationPct: String = "0.0",
+    pnlGivebackEnabled: Boolean = false,
+    pnlGivebackFromPeakUsdt: String = "5.0",
+    pnlGivebackMinPeakUsdt: String = "0.0",
     enableEmaCrossExit: Boolean = true,
     useRsiFilter: Boolean = false,
     rsiPeriodFilter: String = "14",
@@ -933,6 +976,9 @@ fun buildParamsMap(
                 "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2),
                 "trailing_stop_enabled" to trailingStopEnabled,
                 "trailing_stop_activation_pct" to (trailingStopActivationPct.toDoubleOrNull() ?: 0.0),
+                "pnl_giveback_enabled" to pnlGivebackEnabled,
+                "pnl_giveback_from_peak_usdt" to (pnlGivebackFromPeakUsdt.toDoubleOrNull() ?: 5.0),
+                "pnl_giveback_min_peak_usdt" to (pnlGivebackMinPeakUsdt.toDoubleOrNull() ?: 0.0),
                 "enable_ema_cross_exit" to enableEmaCrossExit,
                 "use_rsi_filter" to useRsiFilter,
                 "rsi_period" to (rsiPeriodFilter.toIntOrNull() ?: 14),

@@ -931,6 +931,9 @@
                 structure_confirm_on_close: { type: 'checkbox', label: 'Structure Confirm on Candle Close', value: true },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
                 trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
+                pnl_giveback_enabled: { type: 'checkbox', label: 'PnL Giveback Stop', value: false, help: 'Close when unrealized PnL falls by X USDT from peak since open (after min peak).' },
+                pnl_giveback_from_peak_usdt: { type: 'number', label: 'Giveback from Peak (USDT)', value: 5.0, min: 0, max: 1000000, step: 0.5 },
+                pnl_giveback_min_peak_usdt: { type: 'number', label: 'Min Peak Unrealized (USDT)', value: 0.0, min: 0, max: 1000000, step: 0.5 },
                 sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
             },
             reverse_scalping: {
@@ -961,6 +964,9 @@
                 structure_confirm_on_close: { type: 'checkbox', label: 'Structure Confirm on Candle Close', value: true },
                 trailing_stop_enabled: { type: 'checkbox', label: 'Trailing Stop', value: false },
                 trailing_stop_activation_pct: { type: 'number', label: 'Trailing Activation %', value: 0.0, min: 0, max: 0.1, step: 0.001 },
+                pnl_giveback_enabled: { type: 'checkbox', label: 'PnL Giveback Stop', value: false, help: 'Close when unrealized PnL falls by X USDT from peak since open (after min peak).' },
+                pnl_giveback_from_peak_usdt: { type: 'number', label: 'Giveback from Peak (USDT)', value: 5.0, min: 0, max: 1000000, step: 0.5 },
+                pnl_giveback_min_peak_usdt: { type: 'number', label: 'Min Peak Unrealized (USDT)', value: 0.0, min: 0, max: 1000000, step: 0.5 },
                 sl_trigger_mode: { type: 'select', label: 'SL Trigger', value: 'live_price', options: ['live_price', 'candle_close'], help: 'Live price = any tick; Candle close = only when candle close is beyond SL (reduces fake breakouts)' }
             },
             range_mean_reversion: {

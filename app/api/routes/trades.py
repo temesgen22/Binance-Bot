@@ -16,6 +16,7 @@ from app.api.deps import (
     get_current_user, get_current_user_async,
     get_database_service, get_database_service_async,
     get_account_service,
+    get_mark_price_stream_manager,
 )
 from app.core.binance_client_manager import BinanceClientManager
 from app.models.trade import (
@@ -35,6 +36,7 @@ from app.core.my_binance_client import BinanceClient
 from app.core.exceptions import StrategyNotFoundError
 from app.core.redis_storage import RedisStorage
 from app.core.config import get_settings
+from app.core.mark_price_stream_manager import MarkPriceStreamManager
 
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
@@ -518,6 +520,7 @@ def get_symbol_pnl(
     client: BinanceClient = Depends(get_binance_client),
     client_manager: BinanceClientManager = Depends(get_client_manager),
     db_service: DatabaseService = Depends(get_database_service),
+    mark_price_manager: Optional[MarkPriceStreamManager] = Depends(get_mark_price_stream_manager),
 ) -> SymbolPnL:
     """Get profit and loss summary for a specific symbol."""
     symbol = symbol.upper()
@@ -882,6 +885,9 @@ def get_symbol_pnl(
                     out_strategy_id = f"external_{position_side}"
                     out_strategy_name = "External"
                     out_account_id = account_id_for_client
+                max_peak: Optional[float] = None
+                if mark_price_manager and out_strategy_id:
+                    max_peak = mark_price_manager.get_max_unrealized_pnl(symbol, out_strategy_id)
                 open_positions.append(PositionSummary(
                     symbol=symbol,
                     position_size=binance_position_size,
@@ -889,6 +895,7 @@ def get_symbol_pnl(
                     current_price=position_data["markPrice"],
                     position_side=position_side,
                     unrealized_pnl=position_data["unRealizedProfit"],
+                    max_unrealized_pnl=max_peak,
                     leverage=display_leverage,
                     strategy_id=out_strategy_id,
                     strategy_name=out_strategy_name,
@@ -1039,6 +1046,7 @@ def get_pnl_overview(
                 client=client,
                 client_manager=client_manager,
                 db_service=db_service,
+                mark_price_manager=getattr(runner, "mark_price_stream_manager", None),
             )
             if sym not in pnl_by_symbol:
                 pnl_by_symbol[sym] = []

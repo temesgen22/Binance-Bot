@@ -110,6 +110,7 @@ class MockBinanceClient:
         self.klines = klines
         self.current_index = current_index
         self.balance = initial_balance  # Track balance for futures_account_balance()
+        self._mock_open: Optional[dict] = None
     
     def get_price(self, symbol: str) -> float:
         """Get current price from historical klines."""
@@ -150,6 +151,45 @@ class MockBinanceClient:
     def update_balance(self, new_balance: float) -> None:
         """Update the tracked balance (called after each trade)."""
         self.balance = new_balance
+
+    def set_mock_open_position(
+        self, symbol: str, position_side: str, quantity: float, entry_price: float
+    ) -> None:
+        """Mirror exchange open position so strategy.get_open_position() can compute unrealized PnL (e.g. PnL giveback)."""
+        self._mock_open = {
+            "symbol": symbol.upper(),
+            "side": position_side,
+            "quantity": quantity,
+            "entry_price": entry_price,
+        }
+
+    def clear_mock_open_position(self) -> None:
+        self._mock_open = None
+
+    def get_open_position(self, symbol: str) -> Optional[dict]:
+        """Binance-shaped dict with unRealizedProfit for open position, or None if flat."""
+        if not getattr(self, "_mock_open", None):
+            return None
+        m = self._mock_open
+        if m["symbol"] != symbol.upper():
+            return None
+        mark = float(self.get_price(symbol))
+        qty = float(m["quantity"])
+        entry = float(m["entry_price"])
+        side = m["side"]
+        if side == "LONG":
+            upnl = (mark - entry) * qty
+            amt = qty
+        else:
+            upnl = (entry - mark) * qty
+            amt = -qty
+        return {
+            "symbol": symbol.upper(),
+            "positionAmt": str(amt),
+            "entryPrice": str(entry),
+            "unRealizedProfit": str(upnl),
+            "markPrice": str(mark),
+        }
 
 
 def _calculate_backtest_statistics(
@@ -1240,6 +1280,7 @@ async def run_backtest(
                 strategy_position = None
                 strategy_entry_price = None
                 current_trade = None
+                mock_client.clear_mock_open_position()
                 
                 # CRITICAL: Mark that position was just closed in this iteration
                 # This prevents immediate re-entry in the same candle, ensuring cooldown is respected
@@ -1361,6 +1402,11 @@ async def run_backtest(
                     
                     logger.debug(f"Synced strategy state: position={position_side} @ {real_entry_price:.8f} after opening trade")
                 
+                if request.strategy_type in ("scalping", "reverse_scalping"):
+                    mock_client.set_mock_open_position(
+                        request.symbol, position_side, sizing.quantity, real_entry_price
+                    )
+                
                 # Add to trades list
                 trades.append(current_trade)
                 
@@ -1437,6 +1483,7 @@ async def run_backtest(
             strategy_position = None
             strategy_entry_price = None
             current_trade = None
+            mock_client.clear_mock_open_position()
     
     # Add final trade to list if it exists and is still open
     if current_trade and current_trade.is_open and current_trade not in trades:

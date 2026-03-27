@@ -34,6 +34,22 @@ class StrategyParams(BaseModel):
     cooldown_candles: int = Field(default=2, ge=0, le=10, description="Candles to wait after exit before new entry")
     trailing_stop_enabled: bool = Field(default=False, description="Enable dynamic trailing stop loss (trails TP/SL as price moves favorably)")
     trailing_stop_activation_pct: float = Field(default=0.0, ge=0, le=0.1, description="Trailing uses this % for both: (1) when trailing starts (price must move this % from entry), (2) how often levels update (price must move this % from previous best). e.g. 0.005 = 0.5%. 0 = start immediately and update every tick.")
+    pnl_giveback_enabled: bool = Field(
+        default=False,
+        description="Close the position when unrealized PnL falls by a fixed USDT amount from the peak since open (after optional min peak is reached).",
+    )
+    pnl_giveback_from_peak_usdt: float = Field(
+        default=5.0,
+        ge=0,
+        le=1_000_000,
+        description="Close when (peak unrealized PnL - current unrealized PnL) reaches this many USDT.",
+    )
+    pnl_giveback_min_peak_usdt: float = Field(
+        default=0.0,
+        ge=0,
+        le=1_000_000,
+        description="Only arm giveback after peak unrealized PnL has reached at least this many USDT.",
+    )
     enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
     # Optional EMA entry filters (Scalping + Reverse Scalping)
     use_rsi_filter: bool = Field(default=False, description="Enable RSI-based entry filtering")

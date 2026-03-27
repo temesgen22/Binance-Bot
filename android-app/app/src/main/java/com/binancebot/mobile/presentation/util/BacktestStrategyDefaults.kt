@@ -84,6 +84,9 @@ object BacktestStrategyDefaults {
             ParamDef.Checkbox("structure_confirm_on_close", "Structure Confirm on Candle Close", true),
             ParamDef.Checkbox("trailing_stop_enabled", "Trailing Stop", false),
             ParamDef.Number("trailing_stop_activation_pct", "Trailing Activation %", 0.0, 0.0, 0.1, 0.001),
+            ParamDef.Checkbox("pnl_giveback_enabled", "PnL Giveback Stop", false),
+            ParamDef.Number("pnl_giveback_from_peak_usdt", "Giveback from Peak (USDT)", 5.0, 0.0, 1_000_000.0, 0.5),
+            ParamDef.Number("pnl_giveback_min_peak_usdt", "Min Peak Unrealized (USDT)", 0.0, 0.0, 1_000_000.0, 0.5),
             ParamDef.Select("sl_trigger_mode", "SL Trigger", "live_price", listOf("live_price", "candle_close"))
         )
         "range_mean_reversion" -> listOf(
@@ -140,6 +143,9 @@ object BacktestStrategyDefaults {
             "structure_confirm_on_close" to true,
             "trailing_stop_enabled" to false,
             "trailing_stop_activation_pct" to 0.0,
+            "pnl_giveback_enabled" to false,
+            "pnl_giveback_from_peak_usdt" to 5.0,
+            "pnl_giveback_min_peak_usdt" to 0.0,
             "sl_trigger_mode" to "live_price"
         )
         "range_mean_reversion" -> mapOf(

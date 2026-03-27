@@ -351,6 +351,7 @@ class ManualTradingService:
                     leverage=position.leverage,
                     initial_margin=float(entry_price * executed_qty / position.leverage) if position.leverage else None,
                     strategy_name="Manual Trade",
+                    position_instance_id=position.id,
                 )
                 await self.mark_price_stream_manager.subscribe(position.symbol)
             except Exception as exc:

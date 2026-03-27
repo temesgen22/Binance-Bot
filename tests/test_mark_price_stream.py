@@ -351,6 +351,47 @@ class TestMarkPriceOnTickBroadcast:
         mock_broadcast.broadcast_position_update.assert_not_called()
 
 
+class TestMaxUnrealizedPnl:
+    """Peak open unrealized PnL tracked per registry entry and passed to broadcast."""
+
+    @pytest.mark.asyncio
+    async def test_tick_updates_peak_and_broadcast_includes_max(self):
+        mock_broadcast = AsyncMock()
+        manager = MarkPriceStreamManager(mock_broadcast, testnet=True)
+        user_id = uuid4()
+        sid = str(uuid4())
+        manager.register_position("BTCUSDT", sid, user_id, 50000.0, 0.01, "LONG", "default")
+        handler = manager._on_mark_price_factory("BTCUSDT")
+        await handler("BTCUSDT", {"mark_price": 49900.0})
+        await handler("BTCUSDT", {"mark_price": 50200.0})
+        assert manager.get_max_unrealized_pnl("BTCUSDT", sid) == pytest.approx(2.0)
+        assert mock_broadcast.broadcast_position_update.await_count == 2
+        last_call = mock_broadcast.broadcast_position_update.await_args_list[-1]
+        assert last_call.kwargs.get("max_unrealized_pnl") == pytest.approx(2.0)
+
+    def test_position_instance_change_resets_peak(self):
+        mock_broadcast = AsyncMock()
+        manager = MarkPriceStreamManager(mock_broadcast, testnet=True)
+        user_id = uuid4()
+        sid = str(uuid4())
+        pid1 = uuid4()
+        pid2 = uuid4()
+        manager.register_position(
+            "BTCUSDT", sid, user_id, 50000.0, 0.01, "LONG", "default",
+            position_instance_id=pid1,
+        )
+        for e in manager._registry["BTCUSDT"]:
+            if e["strategy_id"] == sid:
+                e["max_unrealized_pnl"] = 99.0
+        manager.register_position(
+            "BTCUSDT", sid, user_id, 50000.0, 0.01, "LONG", "default",
+            position_instance_id=pid2,
+        )
+        for e in manager._registry["BTCUSDT"]:
+            if e["strategy_id"] == sid:
+                assert e.get("max_unrealized_pnl") is None
+
+
 # --- stop_all cleans connections and fallback tasks ---
 
 

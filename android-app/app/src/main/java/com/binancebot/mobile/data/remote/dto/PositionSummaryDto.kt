@@ -15,6 +15,8 @@ data class PositionSummaryDto(
     val positionSide: String, // "LONG" or "SHORT"
     @SerializedName("unrealized_pnl")
     val unrealizedPnL: Double,
+    @SerializedName("max_unrealized_pnl")
+    val maxUnrealizedPnL: Double? = null,
     @SerializedName("leverage")
     val leverage: Int,
     @SerializedName("strategy_id")

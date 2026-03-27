@@ -489,6 +489,7 @@ class StrategyRunner:
                         leverage=None,
                         initial_margin=None,
                         strategy_name=reg_name,
+                        position_instance_id=None,
                     )
                     await mp_manager.subscribe(symbol)
                 except Exception as exc:

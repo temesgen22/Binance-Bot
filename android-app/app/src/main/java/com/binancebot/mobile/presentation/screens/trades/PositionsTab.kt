@@ -200,6 +200,9 @@ fun BinanceStylePositionRow(
                 PositionParamRow("Size", String.format("%.4f", position.positionSize))
                 PositionParamRow("Entry Price", FormatUtils.formatPrice(position.entryPrice))
                 PositionParamRow("Mark Price", FormatUtils.formatPrice(position.currentPrice))
+                position.maxUnrealizedPnL?.let { peak ->
+                    PositionParamRow("Max unrealized PnL", FormatUtils.formatCurrency(peak))
+                }
                 PositionParamRow("Leverage", "${position.leverage}x")
                 // Liquidation Price – show value or "—"
                 PositionParamRow(
