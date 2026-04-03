@@ -142,8 +142,8 @@ class ReverseScalpingStrategy(Strategy):
         self.sl_trigger_mode = _sl_mode if _sl_mode in ("live_price", "candle_close") else "live_price"
 
         _em = p.get("entry_mode", "cross_only")
-        self.entry_mode: Literal["cross_only", "cross_or_trend"] = (
-            _em if _em in ("cross_only", "cross_or_trend") else "cross_only"
+        self.entry_mode: Literal["cross_only", "cross_or_trend", "ema_alignment"] = (
+            _em if _em in ("cross_only", "cross_or_trend", "ema_alignment") else "cross_only"
         )
         self.trend_entry_max_candles_after_cross = max(0, self.param_int(p, "trend_entry_max_candles_after_cross", 0))
         self.trend_entry_unlimited_after_cross = self.parse_bool_param(
@@ -1079,6 +1079,108 @@ class ReverseScalpingStrategy(Strategy):
                         confidence=0.1,
                         price=live_price
                     )
+
+                # --- EMA alignment (reverse): fast>slow -> SHORT; fast<slow -> LONG; no prev_* required ---
+                if self.entry_mode == "ema_alignment" and self.position is None:
+                    if self.enable_short and fast_ema > slow_ema:
+                        if ema_separation_pct < self.min_ema_separation:
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price,
+                            )
+                        if self._passes_entry_filters(
+                            "SHORT", closed_klines, closing_prices, last_closed_time
+                        ) and not await self._htf_bias_blocks_short_entry_reverse(live_price):
+                            log_level = (
+                                logger.debug if self.context.id == "backtest" else logger.info
+                            )
+                            log_level(
+                                f"[{self.context.id}] [ENTRY_EMA_ALIGNMENT] SHORT (reverse) | "
+                                f"time={last_closed_time} fast={fast_ema:.8f} slow={slow_ema:.8f}"
+                            )
+                            logger.warning(
+                                f"[{self.context.id}] SIGNAL => SELL (SHORT ema_alignment reverse) at {candle_price:.8f} "
+                                f"candle_time={last_closed_time}"
+                            )
+                            self._clear_trend_regime()
+                            self._opened_entry_via_trend = False
+                            self.position = "SHORT"
+                            self.entry_price = candle_price
+                            self.entry_candle_time = last_closed_time
+                            self._reset_giveback_state()
+                            if self.trailing_stop_enabled:
+                                activation_pct = self.param_float(
+                                    self.context.params, "trailing_stop_activation_pct", 0.0
+                                )
+                                self.trailing_stop = TrailingStopManager(
+                                    entry_price=candle_price,
+                                    take_profit_pct=self.take_profit_pct,
+                                    stop_loss_pct=self.stop_loss_pct,
+                                    position_type="SHORT",
+                                    enabled=True,
+                                    activation_pct=activation_pct,
+                                    trail_step_pct=activation_pct,
+                                )
+                            return StrategySignal(
+                                action="SELL",
+                                symbol=self.context.symbol,
+                                confidence=0.72,
+                                price=candle_price,
+                                exit_reason=None,
+                                position_side="SHORT",
+                            )
+                    elif fast_ema < slow_ema:
+                        if ema_separation_pct < self.min_ema_separation:
+                            return StrategySignal(
+                                action="HOLD",
+                                symbol=self.context.symbol,
+                                confidence=0.1,
+                                price=live_price,
+                            )
+                        if self._passes_entry_filters(
+                            "LONG", closed_klines, closing_prices, last_closed_time
+                        ):
+                            if not await self._htf_bias_blocks_long_entry_reverse(live_price):
+                                log_level = (
+                                    logger.debug if self.context.id == "backtest" else logger.info
+                                )
+                                log_level(
+                                    f"[{self.context.id}] [ENTRY_EMA_ALIGNMENT] LONG (reverse) | "
+                                    f"time={last_closed_time} fast={fast_ema:.8f} slow={slow_ema:.8f}"
+                                )
+                                logger.warning(
+                                    f"[{self.context.id}] SIGNAL => BUY (LONG ema_alignment reverse) at {candle_price:.8f} "
+                                    f"candle_time={last_closed_time}"
+                                )
+                                self._clear_trend_regime()
+                                self._opened_entry_via_trend = False
+                                self.position = "LONG"
+                                self.entry_price = candle_price
+                                self.entry_candle_time = last_closed_time
+                                self._reset_giveback_state()
+                                if self.trailing_stop_enabled:
+                                    activation_pct = self.param_float(
+                                        self.context.params, "trailing_stop_activation_pct", 0.0
+                                    )
+                                    self.trailing_stop = TrailingStopManager(
+                                        entry_price=candle_price,
+                                        take_profit_pct=self.take_profit_pct,
+                                        stop_loss_pct=self.stop_loss_pct,
+                                        position_type="LONG",
+                                        enabled=True,
+                                        activation_pct=activation_pct,
+                                        trail_step_pct=activation_pct,
+                                    )
+                                return StrategySignal(
+                                    action="BUY",
+                                    symbol=self.context.symbol,
+                                    confidence=0.72,
+                                    price=candle_price,
+                                    exit_reason=None,
+                                    position_side="LONG",
+                                )
                 
                 # --- Crossover detection on closed candles ---
                 # CRITICAL: Use local prev_fast/prev_slow (from previous candle), not self.prev_*
@@ -1087,7 +1189,7 @@ class ReverseScalpingStrategy(Strategy):
                 if prev_fast is not None and prev_slow is not None:
                     golden_cross = (prev_fast <= prev_slow) and (fast_ema > slow_ema)
                     death_cross = (prev_fast >= prev_slow) and (fast_ema < slow_ema)
-                    if self.position is None:
+                    if self.position is None and self.entry_mode != "ema_alignment":
                         self._arm_reverse_regime_on_cross_flat(
                             golden_cross, death_cross, last_closed_time
                         )
@@ -1107,7 +1209,11 @@ class ReverseScalpingStrategy(Strategy):
                     # ===== TRULY OPPOSITE LOGIC: LONG Entry on Death Cross (when flat) =====
                     # TRULY OPPOSITE: When Scalping enters SHORT on Death Cross, we enter LONG on Death Cross (same signal, opposite position)
                     # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
-                    if death_cross and self.position is None:
+                    if (
+                        death_cross
+                        and self.position is None
+                        and self.entry_mode in ("cross_only", "cross_or_trend")
+                    ):
                         if ema_separation_pct < self.min_ema_separation:
                             return StrategySignal(
                                 action="HOLD",
@@ -1219,7 +1325,12 @@ class ReverseScalpingStrategy(Strategy):
                     # ===== TRULY OPPOSITE LOGIC: SHORT Entry on Golden Cross (when flat and short enabled) =====
                     # TRULY OPPOSITE: When Scalping enters LONG on Golden Cross, we enter SHORT on Golden Cross (same signal, opposite position)
                     # This ensures we enter at the SAME time with OPPOSITE positions, resulting in opposite win rates/profits
-                    if golden_cross and self.position is None and self.enable_short:
+                    if (
+                        golden_cross
+                        and self.position is None
+                        and self.enable_short
+                        and self.entry_mode in ("cross_only", "cross_or_trend")
+                    ):
                         if ema_separation_pct < self.min_ema_separation:
                             return StrategySignal(
                                 action="HOLD",

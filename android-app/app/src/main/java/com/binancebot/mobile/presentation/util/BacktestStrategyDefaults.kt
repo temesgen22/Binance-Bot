@@ -66,7 +66,7 @@ object BacktestStrategyDefaults {
             ParamDef.Number("min_ema_separation", "Min EMA Separation", 0.0002, 0.0, 0.01, 0.0001),
             ParamDef.Checkbox("enable_htf_bias", "Enable HTF Bias", true),
             ParamDef.Int("cooldown_candles", "Cooldown Candles", 2, 0, 10),
-            ParamDef.Select("entry_mode", "Entry mode", "cross_only", listOf("cross_only", "cross_or_trend")),
+            ParamDef.Select("entry_mode", "Entry mode", "cross_only", listOf("cross_only", "cross_or_trend", "ema_alignment")),
             ParamDef.Int("trend_entry_max_candles_after_cross", "Trend: max candles after cross", 0, 0, 500),
             ParamDef.Checkbox("trend_entry_unlimited_after_cross", "Trend: unlimited window after cross", false),
             ParamDef.Int("trend_entry_max_per_regime", "Trend: max entries per regime", 1, 1, 20),

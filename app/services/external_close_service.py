@@ -6,7 +6,8 @@ detect the closing order(s), save as Trade with exit_reason=EXTERNAL_CLOSE, and 
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, List, Any
+from collections import defaultdict
+from typing import Optional, List, Any, Tuple
 from uuid import UUID
 
 from loguru import logger
@@ -19,6 +20,17 @@ from app.models.order import OrderResponse
 QTY_TOLERANCE = 1e-6
 
 
+def _qty_match(position_size: float, total_qty: float) -> bool:
+    """True if summed fill qty matches last known position size."""
+    if position_size <= 0:
+        return False
+    if abs(total_qty - position_size) <= QTY_TOLERANCE:
+        return True
+    # Relative tolerance for small/high-precision contracts (exact float noise)
+    rel = max(QTY_TOLERANCE, position_size * 1e-9)
+    return abs(total_qty - position_size) <= rel
+
+
 def find_closing_order_ids(
     client: Any,
     symbol: str,
@@ -27,20 +39,24 @@ def find_closing_order_ids(
 ) -> List[int]:
     """
     Find Binance order IDs that closed this position (by side and quantity).
-    LONG close = SELL orders; SHORT close = BUY. Returns most recent first.
+    LONG close = SELL orders; SHORT close = BUY. Returns most recent matching order.
+
+    IMPORTANT: futures_account_trades returns one row per *fill*. A single TP/SL order
+    may split into multiple rows with the same orderId. We sum qty per orderId before
+    comparing to position_size; matching only per-row used to miss native TP/SL closes.
     """
     if position_side.upper() not in ("LONG", "SHORT"):
         return []
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     try:
-        trades = client.get_account_trades(symbol=symbol, limit=100)
+        trades = client.get_account_trades(symbol=symbol, limit=500)
     except Exception as e:
         logger.debug(f"get_account_trades failed for {symbol}: {e}")
         return []
     if not trades:
         return []
-    # Filter by closing side and match quantity (qty or executedQty)
-    matching = []
+    # order_id -> list of (qty, time_ms)
+    per_order: dict[int, List[Tuple[float, int]]] = defaultdict(list)
     for t in trades:
         if str(t.get("side", "")).upper() != close_side:
             continue
@@ -51,16 +67,32 @@ def find_closing_order_ids(
             q = float(qty)
         except (TypeError, ValueError):
             continue
-        if abs(q - position_size) <= QTY_TOLERANCE:
-            order_id = t.get("orderId")
-            if order_id is not None:
-                ts = t.get("time") or t.get("time") or 0
-                matching.append((order_id, ts))
-    if not matching:
+        raw_oid = t.get("orderId")
+        if raw_oid is None:
+            continue
+        try:
+            oid = int(raw_oid)
+        except (TypeError, ValueError):
+            continue
+        ts_raw = t.get("time")
+        try:
+            ts = int(ts_raw) if ts_raw is not None else 0
+        except (TypeError, ValueError):
+            ts = 0
+        per_order[oid].append((q, ts))
+
+    candidates: List[Tuple[int, int]] = []
+    for oid, rows in per_order.items():
+        total_qty = sum(r[0] for r in rows)
+        if not _qty_match(position_size, total_qty):
+            continue
+        max_ts = max(r[1] for r in rows)
+        candidates.append((oid, max_ts))
+
+    if not candidates:
         return []
-    # Sort by time descending (most recent first); return only the most recent order ID when multiple match
-    matching.sort(key=lambda x: x[1], reverse=True)
-    return [matching[0][0]]
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return [candidates[0][0]]
 
 
 def build_order_response_for_external_close(

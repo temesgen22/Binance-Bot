@@ -93,6 +93,82 @@
             gap: 15px;
         }
 
+        /* Backtest "Strategy Parameters" only: stable columns + full width (auto-fit + long help was collapsing layout) */
+        .strategy-params#strategyParams #paramsContainer {
+            width: 100%;
+        }
+        .strategy-params#strategyParams #paramsContainer > .params-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 14px 18px;
+            align-items: start;
+            width: 100%;
+        }
+        .strategy-params#strategyParams #paramsContainer .form-group {
+            min-width: 0;
+        }
+        .strategy-params#strategyParams #paramsContainer .form-group-checkbox .checkbox-row {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: nowrap;
+        }
+        .strategy-params#strategyParams #paramsContainer .form-group-checkbox .checkbox-row input[type="checkbox"] {
+            width: auto;
+            min-width: 18px;
+            height: 18px;
+            margin: 0;
+            flex-shrink: 0;
+        }
+        .strategy-params#strategyParams #paramsContainer .form-group-checkbox .checkbox-row label {
+            margin-bottom: 0;
+            font-weight: 600;
+            cursor: pointer;
+            line-height: 1.3;
+        }
+        .strategy-params#strategyParams #paramsContainer .param-help {
+            display: block;
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-top: 6px;
+            line-height: 1.35;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+        @media (max-width: 1400px) {
+            .strategy-params#strategyParams #paramsContainer > .params-grid {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 1000px) {
+            .strategy-params#strategyParams #paramsContainer > .params-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 720px) {
+            .strategy-params#strategyParams #paramsContainer > .params-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 480px) {
+            .strategy-params#strategyParams #paramsContainer > .params-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        .strategy-params#strategyParams .strategy-params-section-title {
+            grid-column: 1 / -1;
+            font-size: 0.92em;
+            font-weight: 700;
+            color: #5a67d8;
+            margin: 12px 0 2px 0;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .strategy-params#strategyParams .strategy-params-section-title:first-child {
+            margin-top: 0;
+        }
+
         .btn {
             padding: 12px 24px;
             border: none;
@@ -901,6 +977,25 @@
             }
         })();
         
+        /** Full-width row titles inside Strategy Parameters grid (inserted before listed key). */
+        const STRATEGY_PARAM_SECTION_BEFORE_KEY = {
+            scalping: {
+                kline_interval: 'Timeframe & EMA',
+                entry_mode: 'Entry mode & trend follow-up',
+                enable_ema_cross_exit: 'Exits & optional filters',
+                trailing_stop_enabled: 'Trailing stop, giveback & SL trigger'
+            },
+            reverse_scalping: {
+                kline_interval: 'Timeframe & EMA',
+                entry_mode: 'Entry mode & trend follow-up',
+                enable_ema_cross_exit: 'Exits & optional filters',
+                trailing_stop_enabled: 'Trailing stop, giveback & SL trigger'
+            },
+            range_mean_reversion: {
+                kline_interval: 'Range mean reversion'
+            }
+        };
+
         // Strategy parameter templates
         const strategyParams = {
             scalping: {
@@ -913,7 +1008,7 @@
                 min_ema_separation: { type: 'number', label: 'Min EMA Separation', value: 0.0002, min: 0, max: 0.01, step: 0.0001 },
                 enable_htf_bias: { type: 'checkbox', label: 'Enable HTF Bias', value: true },
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
-                entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend'], help: 'Cross only = entries on closed-bar EMA crosses. Cross or trend = optional follow-up entries when EMAs stay aligned after a cross arms the regime (not equivalent to cross-only backtests).' },
+                entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend', 'ema_alignment'], help: 'Cross only = EMA cross entries. Cross or trend = follow-up after cross arms regime. EMA alignment = long when fast>slow, short when fast<slow, no cross (trend_* ignored).' },
                 trend_entry_max_candles_after_cross: { type: 'number', label: 'Trend: max candles after cross', value: 0, min: 0, max: 500, help: '0 = no trend follow-up window (unless unlimited below). ≥1 = allow follow-up for at most this many closed candles after the arming cross.' },
                 trend_entry_unlimited_after_cross: { type: 'checkbox', label: 'Trend: unlimited window after cross', value: false, help: 'If checked, ignore max candles (still enforces max per regime and cooldown).' },
                 trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 20 },
@@ -951,7 +1046,7 @@
                 min_ema_separation: { type: 'number', label: 'Min EMA Separation', value: 0.0002, min: 0, max: 0.01, step: 0.0001 },
                 enable_htf_bias: { type: 'checkbox', label: 'Enable HTF Bias', value: true },
                 cooldown_candles: { type: 'number', label: 'Cooldown Candles', value: 2, min: 0, max: 10 },
-                entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend'], help: 'Cross only = entries on closed-bar EMA crosses. Cross or trend = optional follow-up entries when EMAs stay aligned after a cross arms the regime (not equivalent to cross-only backtests).' },
+                entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend', 'ema_alignment'], help: 'Cross only = EMA cross entries. Cross or trend = follow-up after cross arms regime. EMA alignment = long when fast>slow, short when fast<slow, no cross (trend_* ignored).' },
                 trend_entry_max_candles_after_cross: { type: 'number', label: 'Trend: max candles after cross', value: 0, min: 0, max: 500, help: '0 = no trend follow-up window (unless unlimited below). ≥1 = allow follow-up for at most this many closed candles after the arming cross.' },
                 trend_entry_unlimited_after_cross: { type: 'checkbox', label: 'Trend: unlimited window after cross', value: false, help: 'If checked, ignore max candles (still enforces max per regime and cooldown).' },
                 trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 20 },
@@ -1030,39 +1125,51 @@
                 }
 
             let html = '<div class="params-grid">';
-            
+
+            const sectionMap = STRATEGY_PARAM_SECTION_BEFORE_KEY[strategyType] || {};
+
             for (const [key, config] of Object.entries(params)) {
                     if (!config || !config.label) {
                         console.warn('Invalid field definition for:', key);
                         continue;
                     }
-                    
-                html += '<div class="form-group">';
-                html += `<label for="param_${key}">${config.label}</label>`;
-                
-                if (config.type === 'select') {
-                    html += `<select id="param_${key}" name="${key}">`;
-                        if (config.options && Array.isArray(config.options)) {
-                    for (const option of config.options) {
-                        html += `<option value="${option}" ${option === config.value ? 'selected' : ''}>${option}</option>`;
-                            }
-                    }
-                    html += '</select>';
-                } else if (config.type === 'checkbox') {
+
+                const secTitle = sectionMap[key];
+                if (secTitle) {
+                    html += `<div class="strategy-params-section-title">${secTitle}</div>`;
+                }
+
+                const isCheckbox = config.type === 'checkbox';
+                html += `<div class="form-group${isCheckbox ? ' form-group-checkbox' : ''}">`;
+
+                if (isCheckbox) {
+                    html += '<div class="checkbox-row">';
                     html += `<input type="checkbox" id="param_${key}" name="${key}" ${config.value ? 'checked' : ''}>`;
+                    html += `<label for="param_${key}">${config.label}</label>`;
+                    html += '</div>';
                 } else {
-                        html += `<input type="${config.type}" id="param_${key}" name="${key}" value="${config.value || ''}"`;
-                    if (config.min !== undefined) html += ` min="${config.min}"`;
-                    if (config.max !== undefined) html += ` max="${config.max}"`;
-                    if (config.step !== undefined) html += ` step="${config.step}"`;
-                    html += '>';
+                    html += `<label for="param_${key}">${config.label}</label>`;
+                    if (config.type === 'select') {
+                        html += `<select id="param_${key}" name="${key}">`;
+                        if (config.options && Array.isArray(config.options)) {
+                            for (const option of config.options) {
+                                html += `<option value="${option}" ${option === config.value ? 'selected' : ''}>${option}</option>`;
+                            }
+                        }
+                        html += '</select>';
+                    } else {
+                        html += `<input type="${config.type}" id="param_${key}" name="${key}" value="${config.value !== undefined && config.value !== null ? config.value : ''}"`;
+                        if (config.min !== undefined) html += ` min="${config.min}"`;
+                        if (config.max !== undefined) html += ` max="${config.max}"`;
+                        if (config.step !== undefined) html += ` step="${config.step}"`;
+                        html += '>';
+                    }
                 }
-                
-                // Add help text if available
+
                 if (config.help) {
-                    html += `<div style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">${config.help}</div>`;
+                    html += `<small class="param-help">${config.help}</small>`;
                 }
-                
+
                 html += '</div>';
             }
             

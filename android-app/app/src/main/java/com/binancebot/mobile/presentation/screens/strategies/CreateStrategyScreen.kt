@@ -85,6 +85,7 @@ fun CreateStrategyScreen(
     var rsiOverbought by remember { mutableStateOf("60.0") }
     var tpBufferPct by remember { mutableStateOf("0.001") }
     var slBufferPct by remember { mutableStateOf("0.002") }
+    var maxRangeInvalidCandles by remember { mutableStateOf("20") }
     var slTriggerMode by remember { mutableStateOf("live_price") }
     var entryMode by remember { mutableStateOf("cross_only") }
     var trendEntryMaxCandlesAfterCross by remember { mutableStateOf("0") }
@@ -126,6 +127,7 @@ fun CreateStrategyScreen(
                 if (tpBufferPct.isEmpty()) tpBufferPct = "0.001"
                 if (slBufferPct.isEmpty()) slBufferPct = "0.002"
                 if (klineInterval.isEmpty()) klineInterval = "5m"
+                if (maxRangeInvalidCandles.isEmpty()) maxRangeInvalidCandles = "20"
             }
         }
     }
@@ -198,7 +200,7 @@ fun CreateStrategyScreen(
                     structureRightBars = (perf.params["structure_right_bars"] as? Number)?.toString() ?: "2"
                     structureConfirmOnClose = (perf.params["structure_confirm_on_close"] as? Boolean) ?: true
                     slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
-                    entryMode = (perf.params["entry_mode"] as? String)?.takeIf { it in listOf("cross_only", "cross_or_trend") } ?: "cross_only"
+                    entryMode = (perf.params["entry_mode"] as? String)?.takeIf { it in listOf("cross_only", "cross_or_trend", "ema_alignment") } ?: "cross_only"
                     trendEntryMaxCandlesAfterCross =
                         (perf.params["trend_entry_max_candles_after_cross"] as? Number)?.toString() ?: "0"
                     trendEntryUnlimitedAfterCross =
@@ -221,6 +223,8 @@ fun CreateStrategyScreen(
                     rsiOverbought = (perf.params["rsi_overbought"] as? Number)?.toString() ?: "60.0"
                     tpBufferPct = (perf.params["tp_buffer_pct"] as? Number)?.toString() ?: "0.001"
                     slBufferPct = (perf.params["sl_buffer_pct"] as? Number)?.toString() ?: "0.002"
+                    maxRangeInvalidCandles =
+                        (perf.params["max_range_invalid_candles"] as? Number)?.toString() ?: "20"
                     slTriggerMode = (perf.params["sl_trigger_mode"] as? String)?.takeIf { it in listOf("live_price", "candle_close") } ?: "live_price"
                 }
                 else -> {}
@@ -369,6 +373,7 @@ fun CreateStrategyScreen(
                                         klineInterval = "5m"
                                         enableShort = true
                                         cooldownCandles = "2"
+                                        maxRangeInvalidCandles = "20"
                                         slTriggerMode = "live_price"
                                     }
                                 }
@@ -540,7 +545,7 @@ fun CreateStrategyScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        listOf("cross_only" to "Cross only", "cross_or_trend" to "Cross or trend").forEach { (value, label) ->
+                        listOf("cross_only" to "Cross only", "cross_or_trend" to "Cross or trend", "ema_alignment" to "EMA alignment").forEach { (value, label) ->
                             Row(
                                 modifier = Modifier.padding(end = Spacing.Medium),
                                 verticalAlignment = Alignment.CenterVertically
@@ -859,6 +864,19 @@ fun CreateStrategyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
+                    OutlinedTextField(
+                        value = maxRangeInvalidCandles,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) maxRangeInvalidCandles = it },
+                        label = { Text("Max Range Invalid Candles (5–100)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                "Consecutive invalid range bars before clearing range state",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
                     Spacer(modifier = Modifier.height(Spacing.Small))
                     Text("SL Trigger", style = MaterialTheme.typography.labelMedium)
                     Row(modifier = Modifier.fillMaxWidth()) {
@@ -961,6 +979,7 @@ fun CreateStrategyScreen(
                             rsiOverbought = rsiOverbought,
                             tpBufferPct = tpBufferPct,
                             slBufferPct = slBufferPct,
+                            maxRangeInvalidCandles = maxRangeInvalidCandles,
                             slTriggerMode = slTriggerMode
                         )
                         strategiesViewModel.createStrategy(
@@ -1044,6 +1063,7 @@ fun buildParamsMap(
     rsiOverbought: String = "60.0",
     tpBufferPct: String = "0.001",
     slBufferPct: String = "0.002",
+    maxRangeInvalidCandles: String = "20",
     slTriggerMode: String = "live_price"
 ): Map<String, Any> {
     return when (strategyType) {
@@ -1077,11 +1097,11 @@ fun buildParamsMap(
                 "volume_ma_period" to (volumeMaPeriod.toIntOrNull() ?: 20),
                 "volume_multiplier_min" to (volumeMultiplierMin.toDoubleOrNull() ?: 1.0),
                 "use_structure_filter" to useStructureFilter,
-                "structure_left_bars" to (structureLeftBars.toIntOrNull() ?: 2),
-                "structure_right_bars" to (structureRightBars.toIntOrNull() ?: 2),
+                "structure_left_bars" to (structureLeftBars.toIntOrNull() ?: 2).coerceIn(1, 20),
+                "structure_right_bars" to (structureRightBars.toIntOrNull() ?: 2).coerceIn(1, 20),
                 "structure_confirm_on_close" to structureConfirmOnClose,
                 "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price"),
-                "entry_mode" to (if (entryMode in listOf("cross_only", "cross_or_trend")) entryMode else "cross_only"),
+                "entry_mode" to (if (entryMode in listOf("cross_only", "cross_or_trend", "ema_alignment")) entryMode else "cross_only"),
                 "trend_entry_max_candles_after_cross" to (trendEntryMaxCandlesAfterCross.toIntOrNull() ?: 0).coerceAtLeast(0),
                 "trend_entry_unlimited_after_cross" to trendEntryUnlimitedAfterCross,
                 "trend_entry_max_per_regime" to maxOf(1, trendEntryMaxPerRegime.toIntOrNull() ?: 1),
@@ -1105,6 +1125,7 @@ fun buildParamsMap(
                 "kline_interval" to klineInterval,
                 "enable_short" to enableShort,
                 "cooldown_candles" to (cooldownCandles.toIntOrNull() ?: 2),
+                "max_range_invalid_candles" to (maxRangeInvalidCandles.toIntOrNull() ?: 20).coerceIn(5, 100),
                 "sl_trigger_mode" to (if (slTriggerMode in listOf("live_price", "candle_close")) slTriggerMode else "live_price")
             )
         }

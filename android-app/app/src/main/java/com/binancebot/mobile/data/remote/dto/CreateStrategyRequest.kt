@@ -1,5 +1,7 @@
 package com.binancebot.mobile.data.remote.dto
 
+import com.binancebot.mobile.data.remote.gson.StrategyParamsMapJsonSerializer
+import com.google.gson.annotations.JsonAdapter
 import com.google.gson.annotations.SerializedName
 
 data class CreateStrategyRequest(
@@ -16,6 +18,7 @@ data class CreateStrategyRequest(
     @SerializedName("fixed_amount")
     val fixedAmount: Double? = null,
     @SerializedName("params")
+    @field:JsonAdapter(StrategyParamsMapJsonSerializer::class)
     val params: Map<String, Any>? = null,
     @SerializedName("account_id")
     val accountId: String

@@ -98,7 +98,8 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")
         else "live_price",
         "entry_mode": str(params.get("entry_mode", "cross_only"))
-        if str(params.get("entry_mode", "cross_only")) in ("cross_only", "cross_or_trend")
+        if str(params.get("entry_mode", "cross_only"))
+        in ("cross_only", "cross_or_trend", "ema_alignment")
         else "cross_only",
         "trend_entry_max_candles_after_cross": _num(params.get("trend_entry_max_candles_after_cross"), 0, int),
         "trend_entry_unlimited_after_cross": _bool_param(params.get("trend_entry_unlimited_after_cross"), False),

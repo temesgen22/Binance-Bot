@@ -52,9 +52,12 @@ class StrategyParams(BaseModel):
     )
     enable_ema_cross_exit: bool = Field(default=True, description="Enable EMA cross exits (death cross for LONG, golden cross for SHORT). If disabled, positions only exit via TP/SL/trailing stop")
     # EMA scalping / reverse scalping: optional entry after cross while trend-aligned (see docs/EMA_SCALPING_TREND_ENTRY_AFTER_CROSS_PLAN.md)
-    entry_mode: Literal["cross_only", "cross_or_trend"] = Field(
+    entry_mode: Literal["cross_only", "cross_or_trend", "ema_alignment"] = Field(
         default="cross_only",
-        description="cross_only: enter only on golden/death cross. cross_or_trend: also allow entries on later candles while regime is armed and fast/slow stay aligned (filters apply).",
+        description=(
+            "cross_only: enter only on golden/death cross. cross_or_trend: also allow trend follow-up after a cross arms regime. "
+            "ema_alignment: enter when flat and fast>slow (LONG) or fast<slow (SHORT) with filters; no cross required (trend_* params ignored)."
+        ),
     )
     trend_entry_max_candles_after_cross: int = Field(
         default=0,
@@ -114,6 +117,12 @@ class StrategyParams(BaseModel):
     rsi_overbought: float = Field(default=60, ge=50, le=100, description="RSI overbought threshold for short entries")
     tp_buffer_pct: float = Field(default=0.001, ge=0, le=0.05, description="Take profit buffer percentage from range boundary (0.001 = 0.1%)")
     sl_buffer_pct: float = Field(default=0.002, ge=0, le=0.05, description="Stop loss buffer percentage beyond range boundary (0.002 = 0.2%)")
+    max_range_invalid_candles: int = Field(
+        default=20,
+        ge=5,
+        le=100,
+        description="Range MR: consecutive invalid range detections before clearing range state",
+    )
 
     # Shared: SL trigger mode (Scalping, Reverse Scalping, Range Mean Reversion)
     sl_trigger_mode: Literal["live_price", "candle_close"] = Field(

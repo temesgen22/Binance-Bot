@@ -43,7 +43,7 @@ class TestFindClosingOrderIds:
         client.get_account_trades.assert_called_once()
         call_kw = client.get_account_trades.call_args[1]
         assert call_kw["symbol"] == "BTCUSDT"
-        assert call_kw["limit"] == 100
+        assert call_kw["limit"] == 500
 
     def test_short_position_returns_buy_order_matching_quantity(self):
         """Closing SHORT = BUY; single order with qty matching position_size."""
@@ -97,6 +97,16 @@ class TestFindClosingOrderIds:
         client.get_account_trades.return_value = []
         result = find_closing_order_ids(client, "BTCUSDT", "LONG", 1.0)
         assert result == []
+
+    def test_multi_fill_same_order_id_sums_qty(self):
+        """Native TP/SL can appear as multiple user trades with same orderId (partial fills)."""
+        client = MagicMock()
+        client.get_account_trades.return_value = [
+            {"orderId": 9001, "side": "SELL", "qty": 0.004, "time": 1700000001000},
+            {"orderId": 9001, "side": "SELL", "qty": 0.006, "time": 1700000002000},
+        ]
+        result = find_closing_order_ids(client, "BTCUSDT", "LONG", 0.01)
+        assert result == [9001]
 
     def test_empty_when_client_raises(self):
         """Return [] when get_account_trades raises."""

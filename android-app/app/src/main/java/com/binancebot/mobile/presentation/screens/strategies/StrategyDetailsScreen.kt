@@ -583,6 +583,7 @@ fun StrategyParametersSection(performance: StrategyPerformanceDto) {
                     } else if (key == "entry_mode") {
                         when (value as? String) {
                             "cross_or_trend" -> "Cross or trend"
+                            "ema_alignment" -> "EMA alignment"
                             else -> "Cross only"
                         }
                     } else if (key == "trend_entry_unlimited_after_cross" || key == "trend_entry_require_ema_separation") {
@@ -777,6 +778,7 @@ fun getRelevantParams(strategyType: String, params: Map<String, Any>): Map<Strin
         "ema_fast_period", "ema_slow_period", "max_ema_spread_pct",
         "max_atr_multiplier", "rsi_period", "rsi_oversold",
         "rsi_overbought", "tp_buffer_pct", "sl_buffer_pct", "kline_interval",
+        "cooldown_candles", "max_range_invalid_candles", "enable_short",
         "sl_trigger_mode"
     )
     
