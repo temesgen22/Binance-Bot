@@ -52,6 +52,12 @@ def extract_range_mean_reversion_params(params: Dict[str, Any]) -> Dict[str, Any
         "rsi_oversold": _num(params.get("rsi_oversold"), 40),
         "rsi_overbought": _num(params.get("rsi_overbought"), 60),
         "max_ema_spread_pct": _num(params.get("max_ema_spread_pct"), 0.005),
+        "max_atr_multiplier": _num(params.get("max_atr_multiplier"), 2.0),
+        "kline_interval": str(params.get("kline_interval", "5m")),
+        "interval_seconds": _num(params.get("interval_seconds"), 10, int),
+        "enable_short": _bool_param(params.get("enable_short"), True),
+        "cooldown_candles": _num(params.get("cooldown_candles"), 2, int),
+        "max_range_invalid_candles": _num(params.get("max_range_invalid_candles"), 20, int),
         "sl_trigger_mode": str(params.get("sl_trigger_mode", "live_price")).lower()
         if str(params.get("sl_trigger_mode", "live_price")).lower() in ("live_price", "candle_close")
         else "live_price",
@@ -73,6 +79,13 @@ def extract_scalping_params(params: Dict[str, Any]) -> Dict[str, Any]:
         "ema_slow": _num(params.get("ema_slow"), 21, int),
         "take_profit_pct": _num(params.get("take_profit_pct"), 0.004),
         "stop_loss_pct": _num(params.get("stop_loss_pct"), 0.002),
+        "interval_seconds": _num(params.get("interval_seconds"), 10, int),
+        "kline_interval": str(params.get("kline_interval", "1m")),
+        "enable_short": _bool_param(params.get("enable_short"), True),
+        "min_ema_separation": _num(params.get("min_ema_separation"), 0.0002),
+        "enable_htf_bias": _bool_param(params.get("enable_htf_bias"), True),
+        "cooldown_candles": _num(params.get("cooldown_candles"), 2, int),
+        "enable_ema_cross_exit": _bool_param(params.get("enable_ema_cross_exit"), True),
         # Use same semantics as Strategy.parse_bool_param (bool("false") must be False, not True)
         "use_rsi_filter": _bool_param(params.get("use_rsi_filter"), False),
         "rsi_period": _num(params.get("rsi_period"), 14, int),

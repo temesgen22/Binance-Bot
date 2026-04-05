@@ -110,7 +110,8 @@ def build_order_response_for_external_close(
     if not raw:
         return None
     if hasattr(client, "_parse_order_response"):
-        order = client._parse_order_response(raw)
+        sym = raw.get("symbol") or symbol
+        order = client._parse_order_response(raw, sym)
     else:
         # Minimal construction if no parser
         order = OrderResponse(
@@ -199,11 +200,34 @@ async def handle_external_position_close(
     if _has_exit_trade_for_position(strategy_uuid, position_instance_id, exit_side):
         return
 
+    # Match closing order total qty to *open* size. Last ACCOUNT_UPDATE before FLAT can be a partial
+    # chunk (e.g. 91 -> ... -> 11 -> 0) while one market order's executedQty sums to 91 — matching
+    # only the last snapshot (11) finds no order. Prefer WS size first (true partial closes); if
+    # empty and snapshot looks like a tail vs DB entry size, retry with entry_quantity.
     order_ids = find_closing_order_ids(account_client, symbol, position_side, position_size)
+    if not order_ids and entry_quantity is not None:
+        try:
+            eq = float(entry_quantity)
+        except (TypeError, ValueError):
+            eq = 0.0
+        tail_vs_entry = eq > 0 and position_size > 0 and position_size <= eq * 0.25 + QTY_TOLERANCE
+        if eq > 0 and tail_vs_entry and abs(eq - position_size) > QTY_TOLERANCE:
+            order_ids = find_closing_order_ids(account_client, symbol, position_side, eq)
+            if order_ids:
+                logger.info(
+                    f"[{strategy_id_str}] External close: matched using entry_quantity={eq} "
+                    f"(last WS size={position_size}; chunked close vs single order total)."
+                )
     if not order_ids:
-        logger.debug(f"No closing orders found for {symbol} {position_side} size={position_size}")
+        logger.warning(
+            f"[{strategy_id_str}] No closing orders found for {symbol} {position_side} "
+            f"ws_size={position_size}"
+            f"{f', entry_qty={entry_quantity}' if entry_quantity is not None else ''} "
+            f"(check get_account_trades / partial-fill snapshot)."
+        )
         return
 
+    ingested = False
     for order_id in order_ids:
         # Skip if strategy path already saved this order (e.g. TP/SL)
         existing = trade_service.get_trade_by_order_id(strategy_uuid, order_id)
@@ -232,6 +256,7 @@ async def handle_external_position_close(
 
         from app.services.completed_trade_helper import create_completed_trades_on_position_close
 
+        ingested = True
         create_completed_trades_on_position_close(
             user_id=user_id,
             strategy_id=strategy_id_str,
@@ -245,3 +270,9 @@ async def handle_external_position_close(
         )
         # Only create for first matching order (one exit per position)
         break
+
+    if order_ids and not ingested:
+        logger.warning(
+            f"[{strategy_id_str}] External close: matched order id(s) {order_ids} but did not ingest "
+            f"(skipped as TP/SL, build_order failed, or save_trade returned non-external exit_reason)."
+        )

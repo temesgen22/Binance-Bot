@@ -1281,6 +1281,10 @@ class StrategyOrderManager:
     async def place_tp_sl_orders(self, summary: StrategySummary, entry_order: OrderResponse) -> None:
         """Place Binance native TP/SL orders when opening a position.
         
+        When ``sl_trigger_mode`` is ``candle_close`` (and trailing is off), only **TP** is sent to
+        Binance. Native **STOP_MARKET** is omitted so SL is not triggered intrabar on mark price;
+        the strategy closes on SL using candle close via ``_check_tp_sl`` instead.
+
         Args:
             summary: Strategy summary with position info
             entry_order: The entry order that opened the position
@@ -1294,11 +1298,17 @@ class StrategyOrderManager:
             take_profit_pct = summary.params.take_profit_pct
             stop_loss_pct = summary.params.stop_loss_pct
             trailing_stop_enabled = summary.params.trailing_stop_enabled
+            _sl_raw = getattr(summary.params, "sl_trigger_mode", "live_price")
         else:
             # params is a dict
             take_profit_pct = summary.params.get("take_profit_pct", 0.005)  # Default 0.5%
             stop_loss_pct = summary.params.get("stop_loss_pct", 0.003)  # Default 0.3%
             trailing_stop_enabled = summary.params.get("trailing_stop_enabled", False)
+            _sl_raw = summary.params.get("sl_trigger_mode", "live_price")
+        _sl_norm = str(_sl_raw).lower()
+        sl_trigger_mode = _sl_norm if _sl_norm in ("live_price", "candle_close") else "live_price"
+        # Binance STOP_MARKET uses mark price intrabar — conflicts with strategy SL on candle close only
+        skip_native_sl = sl_trigger_mode == "candle_close"
         
         # Calculate TP/SL prices
         if summary.position_side == "LONG":
@@ -1373,10 +1383,17 @@ class StrategyOrderManager:
                 f"Proceeding to place new TP/SL orders anyway."
             )
         
-        logger.info(
-            f"[{summary.id}] Placing Binance native TP/SL orders: "
-            f"TP={tp_price:.8f} ({tp_side}), SL={sl_price:.8f} ({sl_side})"
-        )
+        if skip_native_sl:
+            logger.info(
+                f"[{summary.id}] Placing Binance native TP only (sl_trigger_mode=candle_close): "
+                f"TP={tp_price:.8f} ({tp_side}). "
+                f"Native SL skipped — strategy exits on SL using candle close only."
+            )
+        else:
+            logger.info(
+                f"[{summary.id}] Placing Binance native TP/SL orders: "
+                f"TP={tp_price:.8f} ({tp_side}), SL={sl_price:.8f} ({sl_side})"
+            )
         
         tp_order_id = None
         sl_order_id = None
@@ -1417,40 +1434,41 @@ class StrategyOrderManager:
                 exc_info=True
             )
         
-        try:
-            # Place stop loss order using new Algo Order API (required since Dec 2025)
-            if hasattr(account_client, 'place_algo_stop_loss'):
-                sl_response = await asyncio.to_thread(
-                    partial(
-                        account_client.place_algo_stop_loss,
-                        symbol=summary.symbol,
-                        side=sl_side,
-                        quantity=summary.position_size,
-                        stop_price=sl_price,
-                        close_position=True
+        if not skip_native_sl:
+            try:
+                # Place stop loss order using new Algo Order API (required since Dec 2025)
+                if hasattr(account_client, 'place_algo_stop_loss'):
+                    sl_response = await asyncio.to_thread(
+                        partial(
+                            account_client.place_algo_stop_loss,
+                            symbol=summary.symbol,
+                            side=sl_side,
+                            quantity=summary.position_size,
+                            stop_price=sl_price,
+                            close_position=True
+                        )
                     )
-                )
-            else:
-                # Fallback to legacy API (for paper trading)
-                sl_response = await asyncio.to_thread(
-                    partial(
-                        account_client.place_stop_loss_order,
-                        symbol=summary.symbol,
-                        side=sl_side,
-                        quantity=summary.position_size,
-                        stop_price=sl_price,
-                        close_position=True
+                else:
+                    # Fallback to legacy API (for paper trading)
+                    sl_response = await asyncio.to_thread(
+                        partial(
+                            account_client.place_stop_loss_order,
+                            symbol=summary.symbol,
+                            side=sl_side,
+                            quantity=summary.position_size,
+                            stop_price=sl_price,
+                            close_position=True
+                        )
                     )
+                sl_order_id = sl_response.get("orderId") or sl_response.get("algoId")
+                logger.info(f"[{summary.id}] SL order placed: orderId={sl_order_id}")
+            except Exception as exc:
+                # Extract underlying error details for better debugging
+                error_details = self._extract_error_details(exc, "SL", summary, sl_price)
+                logger.error(
+                    f"[{summary.id}] Failed to place SL order: {error_details}",
+                    exc_info=True
                 )
-            sl_order_id = sl_response.get("orderId") or sl_response.get("algoId")
-            logger.info(f"[{summary.id}] SL order placed: orderId={sl_order_id}")
-        except Exception as exc:
-            # Extract underlying error details for better debugging
-            error_details = self._extract_error_details(exc, "SL", summary, sl_price)
-            logger.error(
-                f"[{summary.id}] Failed to place SL order: {error_details}",
-                exc_info=True
-            )
         
         # Store order IDs in meta for later cancellation
         if "tp_sl_orders" not in summary.meta:
@@ -1460,14 +1478,14 @@ class StrategyOrderManager:
             "sl_order_id": sl_order_id,
         }
         
-        # ✅ FIX: Raise exception if both TP and SL failed to place
-        # This allows the calling code to know that TP/SL placement failed
-        if not tp_order_id and not sl_order_id:
-            # Both orders failed - raise an exception with details
-            error_msg = f"Both TP and SL orders failed to place for {summary.symbol}"
-            # Try to get error details from the last exception if available
-            # (Note: We can't easily access the exception here, so we'll use a generic message)
-            raise RuntimeError(error_msg)
+        # Raise if nothing useful was placed (native SL intentionally omitted when candle_close SL mode)
+        if skip_native_sl:
+            if not tp_order_id:
+                raise RuntimeError(
+                    f"Native TP failed for {summary.symbol} (SL not placed: sl_trigger_mode=candle_close)"
+                )
+        elif not tp_order_id and not sl_order_id:
+            raise RuntimeError(f"Both TP and SL orders failed to place for {summary.symbol}")
     
     async def cancel_tp_sl_orders(self, summary: StrategySummary) -> None:
         """Cancel existing TP/SL orders when position is closed.

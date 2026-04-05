@@ -128,6 +128,7 @@ fun CreateStrategyScreen(
                 if (slBufferPct.isEmpty()) slBufferPct = "0.002"
                 if (klineInterval.isEmpty()) klineInterval = "5m"
                 if (maxRangeInvalidCandles.isEmpty()) maxRangeInvalidCandles = "20"
+                if (intervalSeconds.isEmpty()) intervalSeconds = "10"
             }
         }
     }
@@ -211,6 +212,7 @@ fun CreateStrategyScreen(
                         (perf.params["trend_entry_require_ema_separation"] as? Boolean) ?: true
                 }
                 "range_mean_reversion" -> {
+                    intervalSeconds = (perf.params["interval_seconds"] as? Number)?.toString() ?: "10"
                     lookbackPeriod = (perf.params["lookback_period"] as? Number)?.toString() ?: "150"
                     buyZonePct = (perf.params["buy_zone_pct"] as? Number)?.toString() ?: "0.2"
                     sellZonePct = (perf.params["sell_zone_pct"] as? Number)?.toString() ?: "0.2"
@@ -358,6 +360,7 @@ fun CreateStrategyScreen(
                                         trendEntryRequireEmaSeparation = true
                                     }
                                     "range_mean_reversion" -> {
+                                        intervalSeconds = "10"
                                         lookbackPeriod = "150"
                                         buyZonePct = "0.2"
                                         sellZonePct = "0.2"
@@ -578,7 +581,7 @@ fun CreateStrategyScreen(
                     OutlinedTextField(
                         value = trendEntryMaxPerRegime,
                         onValueChange = { if (it.all { char -> char.isDigit() }) trendEntryMaxPerRegime = it },
-                        label = { Text("Trend: max entries per regime") },
+                        label = { Text("Trend: max entries per regime (1–100)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -832,6 +835,19 @@ fun CreateStrategyScreen(
                         label = { Text("Kline Interval (1m, 5m, 15m, etc.)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = intervalSeconds,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) intervalSeconds = it },
+                        label = { Text("Interval Seconds (live evaluation loop)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                "How often the runner evaluates the strategy (1–3600)",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     )
                     OutlinedTextField(
                         value = tpBufferPct,
@@ -1104,12 +1120,13 @@ fun buildParamsMap(
                 "entry_mode" to (if (entryMode in listOf("cross_only", "cross_or_trend", "ema_alignment")) entryMode else "cross_only"),
                 "trend_entry_max_candles_after_cross" to (trendEntryMaxCandlesAfterCross.toIntOrNull() ?: 0).coerceAtLeast(0),
                 "trend_entry_unlimited_after_cross" to trendEntryUnlimitedAfterCross,
-                "trend_entry_max_per_regime" to maxOf(1, trendEntryMaxPerRegime.toIntOrNull() ?: 1),
+                "trend_entry_max_per_regime" to (trendEntryMaxPerRegime.toIntOrNull() ?: 1).coerceIn(1, 100),
                 "trend_entry_require_ema_separation" to trendEntryRequireEmaSeparation
             )
         }
         "range_mean_reversion" -> {
             mapOf<String, Any>(
+                "interval_seconds" to (intervalSeconds.toIntOrNull() ?: 10).coerceIn(1, 3600),
                 "lookback_period" to (lookbackPeriod.toIntOrNull() ?: 150),
                 "buy_zone_pct" to (buyZonePct.toDoubleOrNull() ?: 0.2),
                 "sell_zone_pct" to (sellZonePct.toDoubleOrNull() ?: 0.2),

@@ -408,6 +408,55 @@ class TestBinanceNativeTPSL:
         assert "tp_sl_orders" in summary.meta
         assert summary.meta["tp_sl_orders"]["tp_order_id"] == 1002
         assert summary.meta["tp_sl_orders"]["sl_order_id"] == 1001
+
+    @pytest.mark.asyncio
+    async def test_place_tp_sl_orders_skips_native_sl_when_sl_trigger_candle_close(self, mock_client):
+        """candle_close SL mode: native TP only; no Binance STOP (SL handled on candle close in strategy)."""
+        summary = StrategySummary(
+            id="test-cc-sl",
+            name="Test",
+            symbol="BTCUSDT",
+            strategy_type=StrategyType.scalping,
+            status=StrategyState.running,
+            leverage=5,
+            risk_per_trade=0.01,
+            params=StrategyParams(
+                take_profit_pct=0.005,
+                stop_loss_pct=0.003,
+                trailing_stop_enabled=False,
+                sl_trigger_mode="candle_close",
+            ),
+            created_at=datetime.now(),
+            last_signal=None,
+            position_side="LONG",
+            position_size=0.001,
+            entry_price=40000.0,
+            meta={},
+        )
+        risk = MagicMock(spec=RiskManager)
+        executor = MagicMock(spec=OrderExecutor)
+        runner = StrategyRunner(
+            client=mock_client,
+            risk=risk,
+            executor=executor,
+            max_concurrent=5,
+        )
+        order_response = OrderResponse(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_id=12345,
+            price=40000.0,
+            avg_price=40000.0,
+            executed_qty=0.001,
+            status="FILLED",
+        )
+        await runner.order_manager.place_tp_sl_orders(summary, order_response)
+
+        mock_client.place_algo_take_profit.assert_called_once()
+        mock_client.place_algo_stop_loss.assert_not_called()
+
+        assert summary.meta["tp_sl_orders"]["tp_order_id"] == 1002
+        assert summary.meta["tp_sl_orders"]["sl_order_id"] is None
     
     @pytest.mark.asyncio
     async def test_place_tp_sl_orders_short_position(self, mock_client):

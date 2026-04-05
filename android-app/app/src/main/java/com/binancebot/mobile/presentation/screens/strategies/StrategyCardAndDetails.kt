@@ -507,7 +507,7 @@ fun getRelevantParamsForStrategy(strategyType: String, params: Map<String, Any>)
     )
     
     val rangeMeanReversionParams = listOf(
-        "lookback_period", "buy_zone_pct", "sell_zone_pct",
+        "interval_seconds", "lookback_period", "buy_zone_pct", "sell_zone_pct",
         "ema_fast_period", "ema_slow_period", "max_ema_spread_pct",
         "max_atr_multiplier", "rsi_period", "rsi_oversold",
         "rsi_overbought", "tp_buffer_pct", "sl_buffer_pct", "kline_interval",

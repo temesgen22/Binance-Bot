@@ -18,7 +18,7 @@ from app.core.my_binance_client import BinanceClient
 
 def create_completed_trades_on_position_close(
     user_id: UUID,
-    strategy_id: str,  # Strategy ID string (not UUID)
+    strategy_id: str,  # StrategySummary.id (= strategies.strategy_id) or str(Strategy.id PK)
     exit_trade_id: UUID,  # Exit trade UUID (just saved)
     exit_order_id: int,  # Exit order ID (Binance order ID)
     exit_quantity: float,  # Quantity closed
@@ -43,7 +43,7 @@ def create_completed_trades_on_position_close(
     
     Args:
         user_id: User UUID
-        strategy_id: Strategy ID string (will be converted to UUID)
+        strategy_id: Public strategy id (strategies.strategy_id) or primary-key UUID string
         exit_trade_id: Exit trade UUID (just saved to database)
         exit_order_id: Exit order ID (Binance order ID)
         exit_quantity: Quantity closed in this exit trade
@@ -76,33 +76,33 @@ def create_completed_trades_on_position_close(
         should_close_db = True
     
     try:
-        # Get strategy UUID from database
-        # Note: strategy_id can be either UUID string or strategy_id string
-        # Try UUID first, then strategy_id string
+        # Resolve Strategy row: StrategySummary.id is strategies.strategy_id (often UUID-shaped),
+        # not Strategy.id (PK). If we parsed as UUID and only queried PK, we'd miss the row.
         db_strategy = None
-        try:
-            strategy_uuid_obj = UUIDType(str(strategy_id))
-            db_strategy = db.query(Strategy).filter(
-                Strategy.id == strategy_uuid_obj,
-                Strategy.user_id == user_id
-            ).first()
-            if db_strategy:
-                logger.debug(
-                    f"[{strategy_id}] Found strategy by UUID: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
-                )
-        except (ValueError, TypeError) as e:
+        sid = str(strategy_id).strip()
+
+        db_strategy = db.query(Strategy).filter(
+            Strategy.strategy_id == sid,
+            Strategy.user_id == user_id,
+        ).first()
+        if db_strategy:
             logger.debug(
-                f"[{strategy_id}] Not a valid UUID ({e}), trying strategy_id string lookup"
+                f"[{strategy_id}] Found strategy by strategy_id column: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
             )
-            # Not a UUID, try strategy_id string
-            db_strategy = db.query(Strategy).filter(
-                Strategy.strategy_id == strategy_id,
-                Strategy.user_id == user_id
-            ).first()
-            if db_strategy:
-                logger.debug(
-                    f"[{strategy_id}] Found strategy by strategy_id string: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
-                )
+
+        if not db_strategy:
+            try:
+                strategy_uuid_obj = UUIDType(sid)
+                db_strategy = db.query(Strategy).filter(
+                    Strategy.id == strategy_uuid_obj,
+                    Strategy.user_id == user_id,
+                ).first()
+                if db_strategy:
+                    logger.debug(
+                        f"[{strategy_id}] Found strategy by primary key id: id={db_strategy.id}, strategy_id={db_strategy.strategy_id}"
+                    )
+            except (ValueError, TypeError) as e:
+                logger.debug(f"[{strategy_id}] Not a valid UUID for PK lookup ({e})")
         
         if not db_strategy:
             # Log more details to help debug

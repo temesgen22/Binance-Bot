@@ -58,6 +58,7 @@ object BacktestStrategyDefaults {
     fun getParameterDefinitions(strategyType: String): List<ParamDef> = when (strategyType) {
         "scalping", "reverse_scalping" -> listOf(
             ParamDef.Select("kline_interval", "Kline Interval", "1m", KLINE_INTERVAL_OPTIONS),
+            ParamDef.Int("interval_seconds", "Interval Seconds", 10, 1, 3600),
             ParamDef.Int("ema_fast", "Fast EMA Period", 8, 1, 200),
             ParamDef.Int("ema_slow", "Slow EMA Period", 21, 2, 400),
             ParamDef.Number("take_profit_pct", "Take Profit %", 0.004, 0.001, 0.1, 0.001),
@@ -69,7 +70,7 @@ object BacktestStrategyDefaults {
             ParamDef.Select("entry_mode", "Entry mode", "cross_only", listOf("cross_only", "cross_or_trend", "ema_alignment")),
             ParamDef.Int("trend_entry_max_candles_after_cross", "Trend: max candles after cross", 0, 0, 500),
             ParamDef.Checkbox("trend_entry_unlimited_after_cross", "Trend: unlimited window after cross", false),
-            ParamDef.Int("trend_entry_max_per_regime", "Trend: max entries per regime", 1, 1, 20),
+            ParamDef.Int("trend_entry_max_per_regime", "Trend: max entries per regime", 1, 1, 100),
             ParamDef.Checkbox("trend_entry_require_ema_separation", "Trend: require min EMA separation", true),
             ParamDef.Checkbox("enable_ema_cross_exit", "Enable EMA Cross Exits", true),
             ParamDef.Checkbox("use_rsi_filter", "Use RSI Filter", false),
@@ -96,6 +97,7 @@ object BacktestStrategyDefaults {
         )
         "range_mean_reversion" -> listOf(
             ParamDef.Select("kline_interval", "Kline Interval", "5m", KLINE_INTERVAL_OPTIONS),
+            ParamDef.Int("interval_seconds", "Interval Seconds", 10, 1, 3600),
             ParamDef.Int("lookback_period", "Lookback Period", 150, 50, 500),
             ParamDef.Number("buy_zone_pct", "Buy Zone %", 0.2, 0.01, 0.5, 0.01),
             ParamDef.Number("sell_zone_pct", "Sell Zone %", 0.2, 0.01, 0.5, 0.01),
@@ -103,7 +105,7 @@ object BacktestStrategyDefaults {
             ParamDef.Int("ema_slow_period", "Slow EMA Period", 50, 10, 200),
             ParamDef.Number("max_ema_spread_pct", "Max EMA Spread %", 0.005, 0.0, 0.02, 0.001),
             ParamDef.Number("max_atr_multiplier", "Max ATR Multiplier", 2.0, 0.1, 100.0, 0.1),
-            ParamDef.Int("rsi_period", "RSI Period", 14, 5, 50),
+            ParamDef.Int("rsi_period", "RSI Period", 14, 1, 200),
             ParamDef.Int("rsi_oversold", "RSI Oversold", 40, 0, 50),
             ParamDef.Int("rsi_overbought", "RSI Overbought", 60, 50, 100),
             ParamDef.Number("tp_buffer_pct", "TP Buffer %", 0.001, 0.0, 0.05, 0.0001),
@@ -122,6 +124,7 @@ object BacktestStrategyDefaults {
     fun getDefaultParams(strategyType: String): Map<String, Any> = when (strategyType) {
         "scalping", "reverse_scalping" -> mapOf(
             "kline_interval" to "1m",
+            "interval_seconds" to 10,
             "ema_fast" to 8,
             "ema_slow" to 21,
             "take_profit_pct" to 0.004,
@@ -160,6 +163,7 @@ object BacktestStrategyDefaults {
         )
         "range_mean_reversion" -> mapOf(
             "kline_interval" to "5m",
+            "interval_seconds" to 10,
             "lookback_period" to 150,
             "buy_zone_pct" to 0.2,
             "sell_zone_pct" to 0.2,

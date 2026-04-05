@@ -1000,6 +1000,7 @@
         const strategyParams = {
             scalping: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
+                interval_seconds: { type: 'number', label: 'Interval Seconds', value: 10, min: 1, max: 3600, help: 'Live runner evaluation period (stored in strategy params)' },
                 ema_fast: { type: 'number', label: 'Fast EMA Period', value: 8, min: 1, max: 200 },
                 ema_slow: { type: 'number', label: 'Slow EMA Period', value: 21, min: 2, max: 400 },
                 take_profit_pct: { type: 'number', label: 'Take Profit %', value: 0.004, min: 0.001, max: 0.1, step: 0.001 },
@@ -1011,7 +1012,7 @@
                 entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend', 'ema_alignment'], help: 'Cross only = EMA cross entries. Cross or trend = follow-up after cross arms regime. EMA alignment = long when fast>slow, short when fast<slow, no cross (trend_* ignored).' },
                 trend_entry_max_candles_after_cross: { type: 'number', label: 'Trend: max candles after cross', value: 0, min: 0, max: 500, help: '0 = no trend follow-up window (unless unlimited below). ≥1 = allow follow-up for at most this many closed candles after the arming cross.' },
                 trend_entry_unlimited_after_cross: { type: 'checkbox', label: 'Trend: unlimited window after cross', value: false, help: 'If checked, ignore max candles (still enforces max per regime and cooldown).' },
-                trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 20 },
+                trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 100 },
                 trend_entry_require_ema_separation: { type: 'checkbox', label: 'Trend: require min EMA separation', value: true },
                 enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                 use_rsi_filter: { type: 'checkbox', label: 'Use RSI Filter', value: false },
@@ -1038,6 +1039,7 @@
             },
             reverse_scalping: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '1m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
+                interval_seconds: { type: 'number', label: 'Interval Seconds', value: 10, min: 1, max: 3600, help: 'Live runner evaluation period (stored in strategy params)' },
                 ema_fast: { type: 'number', label: 'Fast EMA Period', value: 8, min: 1, max: 200 },
                 ema_slow: { type: 'number', label: 'Slow EMA Period', value: 21, min: 2, max: 400 },
                 take_profit_pct: { type: 'number', label: 'Take Profit %', value: 0.004, min: 0.001, max: 0.1, step: 0.001 },
@@ -1049,7 +1051,7 @@
                 entry_mode: { type: 'select', label: 'Entry mode', value: 'cross_only', options: ['cross_only', 'cross_or_trend', 'ema_alignment'], help: 'Cross only = EMA cross entries. Cross or trend = follow-up after cross arms regime. EMA alignment = long when fast>slow, short when fast<slow, no cross (trend_* ignored).' },
                 trend_entry_max_candles_after_cross: { type: 'number', label: 'Trend: max candles after cross', value: 0, min: 0, max: 500, help: '0 = no trend follow-up window (unless unlimited below). ≥1 = allow follow-up for at most this many closed candles after the arming cross.' },
                 trend_entry_unlimited_after_cross: { type: 'checkbox', label: 'Trend: unlimited window after cross', value: false, help: 'If checked, ignore max candles (still enforces max per regime and cooldown).' },
-                trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 20 },
+                trend_entry_max_per_regime: { type: 'number', label: 'Trend: max entries per regime', value: 1, min: 1, max: 100 },
                 trend_entry_require_ema_separation: { type: 'checkbox', label: 'Trend: require min EMA separation', value: true },
                 enable_ema_cross_exit: { type: 'checkbox', label: 'Enable EMA Cross Exits', value: true, help: 'If disabled, positions only exit via TP/SL/trailing stop (not via death/golden cross)' },
                 use_rsi_filter: { type: 'checkbox', label: 'Use RSI Filter', value: false },
@@ -1076,6 +1078,7 @@
             },
             range_mean_reversion: {
                 kline_interval: { type: 'select', label: 'Kline Interval', value: '5m', options: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'] },
+                interval_seconds: { type: 'number', label: 'Interval Seconds', value: 10, min: 1, max: 3600, help: 'How often the live runner evaluates the strategy (same as register strategy)' },
                 lookback_period: { type: 'number', label: 'Lookback Period', value: 150, min: 50, max: 500 },
                 buy_zone_pct: { type: 'number', label: 'Buy Zone %', value: 0.2, min: 0.01, max: 0.5, step: 0.01 },
                 sell_zone_pct: { type: 'number', label: 'Sell Zone %', value: 0.2, min: 0.01, max: 0.5, step: 0.01 },
@@ -1083,7 +1086,7 @@
                 ema_slow_period: { type: 'number', label: 'Slow EMA Period', value: 50, min: 10, max: 200 },
                 max_ema_spread_pct: { type: 'number', label: 'Max EMA Spread %', value: 0.005, min: 0, max: 0.02, step: 0.001 },
                 max_atr_multiplier: { type: 'number', label: 'Max ATR Multiplier', value: 2.0, min: 0.1, max: 100, step: 0.1 },
-                rsi_period: { type: 'number', label: 'RSI Period', value: 14, min: 5, max: 50 },
+                rsi_period: { type: 'number', label: 'RSI Period', value: 14, min: 1, max: 200 },
                 rsi_oversold: { type: 'number', label: 'RSI Oversold', value: 40, min: 0, max: 50 },
                 rsi_overbought: { type: 'number', label: 'RSI Overbought', value: 60, min: 50, max: 100 },
                 tp_buffer_pct: { type: 'number', label: 'TP Buffer %', value: 0.001, min: 0, max: 0.05, step: 0.0001 },
