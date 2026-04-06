@@ -381,6 +381,18 @@ class RangeMeanReversionStrategy(Strategy):
                     self.client.get_price,
                     self.context.symbol
                 )
+                if self.position is not None and self.entry_price is not None:
+                    logger.warning(
+                        f"[{self.context.id}] Insufficient klines ({len(klines or [])} < {self.lookback_period + 10}) "
+                        f"while in position ({self.position}); attempting TP/SL (live price; range must still be valid)."
+                    )
+                    exit_signal = self._check_tp_sl(
+                        current_price,
+                        allow_tp=True,
+                        candle_close_price=None,
+                    )
+                    if exit_signal:
+                        return exit_signal
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,
@@ -399,6 +411,18 @@ class RangeMeanReversionStrategy(Strategy):
             # This prevents processing the same candle multiple times
             closed_klines = klines[:-1]  # Exclude current forming candle
             if not closed_klines:
+                if self.position is not None and self.entry_price is not None:
+                    logger.warning(
+                        f"[{self.context.id}] No closed klines while in position ({self.position}); "
+                        f"attempting TP/SL on live price only."
+                    )
+                    exit_signal = self._check_tp_sl(
+                        live_price,
+                        allow_tp=True,
+                        candle_close_price=None,
+                    )
+                    if exit_signal:
+                        return exit_signal
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,

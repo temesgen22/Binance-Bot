@@ -272,14 +272,19 @@ class EmaScalpingStrategy(Strategy):
         self._trend_entries_used = 0
 
     @staticmethod
-    def _bars_after_regime_arm(closed_klines: list[list], armed_at: Optional[int]) -> int:
-        """Number of closed candles from arming candle to last closed (0 = arming bar is last closed)."""
+    def _bars_after_regime_arm(closed_klines: list[list], armed_at: Optional[int]) -> Optional[int]:
+        """Bars from arming candle to last closed (0 = arming bar is last closed).
+
+        Returns None if ``armed_at`` is not in ``closed_klines`` (history window scrolled past
+        the arming candle). Callers must not treat None like 0 — that confused "on arm bar" with
+        "missing", which silently killed unlimited trend follow-up.
+        """
         if armed_at is None:
-            return 0
+            return None
         for i, k in enumerate(closed_klines):
             if int(k[6]) == armed_at:
                 return len(closed_klines) - 1 - i
-        return 0
+        return None
 
     def _arm_scalping_regime_on_cross_flat(
         self, golden_cross: bool, death_cross: bool, last_closed_time: int
@@ -304,6 +309,11 @@ class EmaScalpingStrategy(Strategy):
         if self._regime_armed_at is None:
             return False
         bars_after = self._bars_after_regime_arm(closed_klines, self._regime_armed_at)
+        if bars_after is None:
+            # Cannot count vs max window without the arming candle; fail closed for capped mode.
+            if not self.trend_entry_unlimited_after_cross:
+                return False
+            bars_after = max(len(closed_klines), 1)
         if bars_after < 1:
             return False
         if self.trend_entry_unlimited_after_cross:
@@ -816,6 +826,33 @@ class EmaScalpingStrategy(Strategy):
                     self.client.get_price,
                     self.context.symbol
                 )
+                # Do not skip risk exits when data is thin (API/WS issues): TP/SL still runs on live price.
+                # candle_close_price omitted — no trustworthy last close in this branch.
+                if self.position is not None and self.entry_price is not None:
+                    logger.warning(
+                        f"[{self.context.id}] Insufficient klines ({len(klines or [])} < {required_candles}) "
+                        f"while in position ({self.position}); running TP/SL on live price only."
+                    )
+                    unrealized_snapshot: Optional[float] = None
+                    if self.pnl_giveback_enabled:
+                        try:
+                            pos = await asyncio.to_thread(
+                                self.client.get_open_position, self.context.symbol
+                            )
+                            if pos:
+                                unrealized_snapshot = float(pos.get("unRealizedProfit") or 0)
+                        except Exception as exc:
+                            logger.debug(
+                                f"[{self.context.id}] get_open_position for PnL giveback: {exc}"
+                            )
+                    tp_sl_signal = self._check_tp_sl(
+                        current_price,
+                        context="insufficient klines",
+                        candle_close_price=None,
+                        unrealized_pnl=unrealized_snapshot,
+                    )
+                    if tp_sl_signal:
+                        return tp_sl_signal
                 return StrategySignal(
                     action="HOLD",
                     symbol=self.context.symbol,
@@ -982,19 +1019,20 @@ class EmaScalpingStrategy(Strategy):
                 if self.cooldown_left > 0:
                     if processed_new_candle:
                         self.cooldown_left -= 1
-                    # Cooldown is normal behavior - use DEBUG for backtests, INFO for live
-                    log_level = logger.debug if self.context.id == "backtest" else logger.info
-                    log_level(
-                        f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
-                        f"Price: {live_price:.8f} | Position: {self.position}"
-                    )
-                    # Early return: state will be updated in finally block
-                    return StrategySignal(
-                        action="HOLD",
-                        symbol=self.context.symbol,
-                        confidence=0.1,
-                        price=live_price
-                    )
+                    # Cooldown blocks *re-entry* after a trade, not risk exits while a position is open.
+                    # Otherwise candle_close SL / TP never run on the first new candle(s) after entry.
+                    if self.position is None:
+                        log_level = logger.debug if self.context.id == "backtest" else logger.info
+                        log_level(
+                            f"[{self.context.id}] HOLD: Cooldown active ({self.cooldown_left} candles remaining) | "
+                            f"Price: {live_price:.8f} | Position: {self.position}"
+                        )
+                        return StrategySignal(
+                            action="HOLD",
+                            symbol=self.context.symbol,
+                            confidence=0.1,
+                            price=live_price
+                        )
                 
                 # --- TP / SL for LONG positions ---
                 # ALWAYS check TP/SL when in position (SL may use candle close when sl_trigger_mode is candle_close)

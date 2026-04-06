@@ -1530,8 +1530,10 @@ class StrategyExecutor:
         # Try to wait for new candle event if kline_manager is available
         if strategy.kline_manager:
             try:
-                # Get kline interval from strategy params
-                kline_interval = strategy.context.params.get("kline_interval", "1m")
+                # Must match evaluate() (uses normalized strategy.interval, not raw params).
+                kline_interval = getattr(strategy, "interval", None) or strategy.context.params.get(
+                    "kline_interval", "1m"
+                )
                 
                 # Wait for new candle event with timeout (interval_seconds)
                 # This ensures strategies evaluate simultaneously when new candle arrives,

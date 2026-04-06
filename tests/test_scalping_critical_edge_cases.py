@@ -751,3 +751,56 @@ class TestIntervalValidationFallback:
                 f"Valid interval '{interval}' should be preserved, got '{strategy.interval}'"
             )
 
+
+class TestCandleCloseCooldownOrdering:
+    """Cooldown after entry must not skip TP/SL on the first new closed candle."""
+
+    @pytest.mark.asyncio
+    async def test_cooldown_does_not_block_candle_close_sl_on_new_candle(self):
+        """Regression: entry cooldown returned HOLD before _check_tp_sl on new-candle path."""
+        closes = [100.0 + i * 0.02 for i in range(14)] + [99.0]
+        start_ct = 2_000_000
+        step_ms = 60_000
+        cts = [start_ct + i * step_ms for i in range(len(closes))]
+        klines = build_klines(closes, start_ct=start_ct, step_ms=step_ms)
+
+        client = MagicMock(spec=BinanceClient)
+        client.get_klines = MagicMock(return_value=klines)
+        # Live below TP but above fixed SL; only candle close triggers SL in candle_close mode
+        client.get_price = MagicMock(return_value=100.2)
+
+        context = StrategyContext(
+            id="backtest",
+            name="Cooldown vs candle_close SL",
+            symbol="BTCUSDT",
+            leverage=5,
+            risk_per_trade=0.01,
+            params={
+                "ema_fast": 5,
+                "ema_slow": 10,
+                "take_profit_pct": 0.005,
+                "stop_loss_pct": 0.003,
+                "kline_interval": "1m",
+                "enable_short": True,
+                "min_ema_separation": 0.0002,
+                "enable_htf_bias": False,
+                "cooldown_candles": 2,
+                "interval_seconds": 10,
+                "sl_trigger_mode": "candle_close",
+                "trailing_stop_enabled": False,
+            },
+            interval_seconds=10,
+        )
+        strategy = EmaScalpingStrategy(context, client)
+        strategy.position = "LONG"
+        strategy.entry_price = 100.0
+        strategy.entry_candle_time = cts[-2]
+        strategy.last_closed_candle_time = cts[-2]
+        strategy.cooldown_left = 2
+
+        sig = await strategy.evaluate()
+
+        assert sig.action == "SELL"
+        assert sig.exit_reason == "SL"
+        assert sig.price == pytest.approx(99.0)
+

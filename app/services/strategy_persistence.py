@@ -510,7 +510,7 @@ class StrategyPersistence:
         )
         
         # Check unrealized PnL thresholds and send alerts if needed
-        if position_size > 0 and unrealized_pnl != 0:
+        if position_size > 0:
             asyncio.create_task(self._check_unrealized_pnl_thresholds(summary, unrealized_pnl))
         
         if self.user_id and self.mark_price_stream_manager:
@@ -809,6 +809,11 @@ class StrategyPersistence:
                         )
                     except Exception as exc:
                         logger.debug(f"[{summary.id}] mark price registry heartbeat refresh failed: {exc}")
+                # Per-strategy unrealized PnL alerts (risk config): must run on REST sync too — not only
+                # on user-data WebSocket updates, or alerts never fire when WS is down / delayed.
+                asyncio.create_task(
+                    self._check_unrealized_pnl_thresholds(summary, new_unrealized_pnl)
+                )
             else:
                 # Flat reality on exchange/paper: ensure mark-price registry cannot keep stale entry alive.
                 if self.mark_price_stream_manager:
@@ -918,6 +923,10 @@ class StrategyPersistence:
                     position_side=summary.position_side,
                     current_price=summary.current_price,
                 )
+                if (summary.position_size or 0) > 0 and summary.unrealized_pnl is not None:
+                    asyncio.create_task(
+                        self._check_unrealized_pnl_thresholds(summary, float(summary.unrealized_pnl))
+                    )
     
     async def reconcile_position_state(self, summary: StrategySummary) -> None:
         """Periodically reconcile position state between Binance, database, and memory.

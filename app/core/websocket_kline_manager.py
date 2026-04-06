@@ -180,22 +180,31 @@ class WebSocketKlineManager:
                 logger.debug(f"Got {len(klines)} klines from WebSocket buffer: {symbol} {interval}")
                 return klines
         
-        # Buffer doesn't have enough data, fetch initial from REST API
-        logger.info(f"Fetching initial {limit} klines from REST API: {symbol} {interval}")
-        try:
-            klines = self._public_client.get_klines(symbol, interval, limit)
-            
-            # Store in buffer
-            if key in self.buffers:
-                for kline in klines:
-                    # Convert to WebSocket format for buffer
-                    ws_format = self._convert_to_websocket_format(kline, symbol, interval)
-                    await self.buffers[key].add_kline(ws_format)
-            
+        # Buffer doesn't have enough data, fetch from REST and seed the buffer.
+        # CRITICAL: If the buffer already has recent WebSocket rows, appending REST klines
+        # (oldest→newest) would place history *after* the newest candle and break ordering.
+        async with self._lock:
+            if key not in self.buffers:
+                return []
+            buffer_size = await self.buffers[key].size()
+            if buffer_size >= limit:
+                klines = await self.buffers[key].get_klines(limit=limit)
+                logger.debug(f"Got {len(klines)} klines from WebSocket buffer (after lock): {symbol} {interval}")
+                return klines
+
+            logger.info(f"Fetching initial {limit} klines from REST API: {symbol} {interval}")
+            try:
+                klines = self._public_client.get_klines(symbol, interval, limit)
+            except Exception as e:
+                logger.error(f"Failed to fetch initial klines from REST API: {e}")
+                raise
+
+            await self.buffers[key].clear()
+            for kline in klines:
+                ws_format = self._convert_to_websocket_format(kline, symbol, interval)
+                await self.buffers[key].add_kline(ws_format)
+
             return klines
-        except Exception as e:
-            logger.error(f"Failed to fetch initial klines from REST API: {e}")
-            raise  # Re-raise to let strategy handle fallback
     
     def _on_kline_update_factory(self, key: str):
         """Factory function to create kline update handler.

@@ -33,6 +33,62 @@ def test_bars_after_regime_arm_counts_from_last_closed():
     assert EmaScalpingStrategy._bars_after_regime_arm(closed, t0) == 2
 
 
+def test_bars_after_regime_arm_none_when_arm_bar_scrolled_out():
+    """Arming close_time absent from buffer must not be confused with bars_after==0."""
+    closed = [_kl(60000, 101.0, 2000), _kl(120000, 102.0, 3000)]
+    assert EmaScalpingStrategy._bars_after_regime_arm(closed, 1000) is None
+
+
+def test_trend_window_unlimited_when_arm_bar_scrolled_out(mock_client):
+    ctx = StrategyContext(
+        id="trend-scroll",
+        name="t",
+        symbol="BTCUSDT",
+        leverage=1,
+        risk_per_trade=0.01,
+        params={
+            "ema_fast": 5,
+            "ema_slow": 10,
+            "kline_interval": "1m",
+            "enable_htf_bias": False,
+            "cooldown_candles": 0,
+            "entry_mode": "cross_or_trend",
+            "trend_entry_max_candles_after_cross": 2,
+            "trend_entry_unlimited_after_cross": True,
+        },
+        interval_seconds=10,
+    )
+    s = EmaScalpingStrategy(ctx, mock_client)
+    s._regime_armed_at = 500  # not in closed_klines
+    closed = [_kl(0, 100.0, 1000), _kl(60000, 101.0, 2000)]
+    assert s._trend_followup_window_ok_scalping(closed)
+
+
+def test_trend_window_finite_off_when_arm_bar_scrolled_out(mock_client):
+    ctx = StrategyContext(
+        id="trend-scroll-finite",
+        name="t",
+        symbol="BTCUSDT",
+        leverage=1,
+        risk_per_trade=0.01,
+        params={
+            "ema_fast": 5,
+            "ema_slow": 10,
+            "kline_interval": "1m",
+            "enable_htf_bias": False,
+            "cooldown_candles": 0,
+            "entry_mode": "cross_or_trend",
+            "trend_entry_max_candles_after_cross": 50,
+            "trend_entry_unlimited_after_cross": False,
+        },
+        interval_seconds=10,
+    )
+    s = EmaScalpingStrategy(ctx, mock_client)
+    s._regime_armed_at = 500
+    closed = [_kl(0, 100.0, 1000), _kl(60000, 101.0, 2000)]
+    assert not s._trend_followup_window_ok_scalping(closed)
+
+
 @pytest.fixture
 def mock_client():
     c = MagicMock(spec=BinanceClient)
