@@ -39,7 +39,11 @@ class PositionUpdateStore @Inject constructor() {
             liquidationPrice = update.liquidationPrice,
             initialMargin = update.initialMargin,
             marginType = update.marginType,
-            maxUnrealizedPnl = update.maxUnrealizedPnl
+            maxUnrealizedPnl = update.maxUnrealizedPnl,
+            lastFundingRate = update.lastFundingRate,
+            nextFundingTimeMs = update.nextFundingTimeMs,
+            fundingIntervalHours = update.fundingIntervalHours,
+            openedAt = update.openedAt,
         )
         if (update.positionSize <= 0) {
             // Flat: clear side/entry/PnL so UI does not keep showing an open position.
@@ -80,5 +84,9 @@ data class PositionUpdateData(
     val liquidationPrice: Double? = null,
     val initialMargin: Double? = null,
     val marginType: String? = null,
-    val maxUnrealizedPnl: Double? = null
+    val maxUnrealizedPnl: Double? = null,
+    val lastFundingRate: Double? = null,
+    val nextFundingTimeMs: Long? = null,
+    val fundingIntervalHours: Int? = null,
+    val openedAt: String? = null,
 )

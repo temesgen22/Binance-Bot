@@ -791,8 +791,10 @@ class EmaScalpingStrategy(Strategy):
         Only processes new closed candles to avoid duplicate signals.
         """
         try:
-            # Get enough klines to compute EMAs
-            limit = max(self.slow_period + 10, 50)
+            # Closed-candle history for EMAs/filters excludes the still-forming bar (see closed_klines below).
+            required_closed = self._required_filter_candles()
+            min_klines = max(required_closed + 1, self.slow_period + 1)
+            limit = max(self.slow_period + 10, 50, min_klines)
             
             # Try WebSocket first, fallback to REST API
             if self.kline_manager:
@@ -819,8 +821,7 @@ class EmaScalpingStrategy(Strategy):
                     limit=limit
                 )
             
-            required_candles = self._required_filter_candles()
-            if not klines or len(klines) < required_candles:
+            if not klines or len(klines) < min_klines:
                 # CRITICAL FIX: Wrap synchronous get_price() in to_thread to prevent blocking event loop
                 current_price = await asyncio.to_thread(
                     self.client.get_price,
@@ -830,7 +831,7 @@ class EmaScalpingStrategy(Strategy):
                 # candle_close_price omitted — no trustworthy last close in this branch.
                 if self.position is not None and self.entry_price is not None:
                     logger.warning(
-                        f"[{self.context.id}] Insufficient klines ({len(klines or [])} < {required_candles}) "
+                        f"[{self.context.id}] Insufficient klines ({len(klines or [])} < {min_klines}) "
                         f"while in position ({self.position}); running TP/SL on live price only."
                     )
                     unrealized_snapshot: Optional[float] = None

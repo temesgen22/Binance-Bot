@@ -27,7 +27,7 @@ from app.models.trade import (
     TradeFilterParams,
 )
 from app.models.order import OrderResponse
-from app.models.db_models import User, ManualPosition, Account
+from app.models.db_models import User, ManualPosition, Account, Trade
 from app.services.strategy_runner import StrategyRunner
 from app.services.trade_service import TradeService
 from app.services.account_service import AccountService
@@ -37,6 +37,7 @@ from app.core.exceptions import StrategyNotFoundError
 from app.core.redis_storage import RedisStorage
 from app.core.config import get_settings
 from app.core.mark_price_stream_manager import MarkPriceStreamManager
+from app.core.funding_market_cache import get_position_funding_for_rest
 
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
@@ -888,6 +889,60 @@ def get_symbol_pnl(
                 max_peak: Optional[float] = None
                 if mark_price_manager and out_strategy_id:
                     max_peak = mark_price_manager.get_max_unrealized_pnl(symbol, out_strategy_id)
+                fund_rate: Optional[float] = None
+                fund_next_ms: Optional[int] = None
+                fund_interval_h: Optional[int] = None
+                try:
+                    _settings = get_settings()
+                    fund_rate, fund_next_ms, fund_interval_h = get_position_funding_for_rest(
+                        symbol, bool(_settings.binance_testnet)
+                    )
+                except Exception as fund_exc:
+                    logger.debug(f"Funding snapshot for {symbol}: {fund_exc}")
+
+                def _opened_at_from_update_time_ms(raw: object) -> Optional[datetime]:
+                    if raw is None:
+                        return None
+                    try:
+                        ms = int(float(raw))
+                        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+                    except (TypeError, ValueError, OSError):
+                        return None
+
+                opened_at: Optional[datetime] = _opened_at_from_update_time_ms(position_data.get("updateTime"))
+                if manual_attribution is not None and getattr(manual_attribution, "created_at", None):
+                    ca = manual_attribution.created_at
+                    opened_at = ca if ca.tzinfo else ca.replace(tzinfo=timezone.utc)
+                elif (
+                    strategy_match
+                    and db_service
+                    and current_user
+                    and getattr(strategy_match, "position_instance_id", None)
+                    and hasattr(db_service, "db")
+                ):
+                    try:
+                        db_strat = db_service.get_strategy(current_user.id, strategy_match.id)
+                        if db_strat and db_strat.id:
+                            entry_side = "BUY" if position_side == "LONG" else "SELL"
+                            first_entry = (
+                                db_service.db.query(Trade)
+                                .filter(
+                                    Trade.strategy_id == db_strat.id,
+                                    Trade.symbol == symbol,
+                                    Trade.position_side == position_side,
+                                    Trade.side == entry_side,
+                                    Trade.status.in_(["FILLED", "PARTIALLY_FILLED"]),
+                                    Trade.position_instance_id == strategy_match.position_instance_id,
+                                )
+                                .order_by(Trade.timestamp.asc())
+                                .first()
+                            )
+                            if first_entry and first_entry.timestamp:
+                                ts = first_entry.timestamp
+                                opened_at = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+                    except Exception as oa_exc:
+                        logger.debug(f"opened_at from trades for {symbol}: {oa_exc}")
+
                 open_positions.append(PositionSummary(
                     symbol=symbol,
                     position_size=binance_position_size,
@@ -903,6 +958,10 @@ def get_symbol_pnl(
                     liquidation_price=position_data.get("liquidationPrice"),
                     initial_margin=initial_margin_val,
                     margin_type=_normalize_margin_type(position_data.get("marginType")),
+                    last_funding_rate=fund_rate,
+                    next_funding_time_ms=fund_next_ms,
+                    funding_interval_hours=fund_interval_h,
+                    opened_at=opened_at,
                 ))
                 total_unrealized_pnl = position_data["unRealizedProfit"]
             

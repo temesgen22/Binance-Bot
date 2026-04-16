@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import time as time_module
 from datetime import datetime, timezone
-from typing import Optional, List
+from decimal import Decimal
+from typing import List, Optional
 from uuid import UUID, UUID as UUIDType
 
 from sqlalchemy import func
@@ -14,6 +15,62 @@ from app.models.db_models import Trade, CompletedTradeOrder, CompletedTrade, Str
 from app.services.completed_trade_service import CompletedTradeService
 from app.core.database import get_session_factory
 from app.core.my_binance_client import BinanceClient
+
+
+def _backfill_missing_commissions_from_exchange(
+    client: Optional[BinanceClient],
+    exit_trade: Trade,
+    entry_trade_infos: List[dict],
+    strategy_id_log: str,
+) -> None:
+    """Set Trade.commission from Binance user trades when the row still has NULL.
+
+    Entry orders often persist without commission (order API omits it); exit may be
+    filled via external close with commission present. Completed-trade fee_paid must
+    include both legs to match Binance history.
+    """
+    if client is None:
+        return
+    seen: set = set()
+    rows: List[Trade] = [exit_trade]
+    for info in entry_trade_infos:
+        rows.append(info["trade"])
+    for trade in rows:
+        tid = getattr(trade, "id", None)
+        if tid is not None:
+            if tid in seen:
+                continue
+            seen.add(tid)
+        if getattr(trade, "paper_trading", False):
+            continue
+        if trade.commission is not None:
+            continue
+        oid, sym = trade.order_id, trade.symbol
+        if oid is None or not sym:
+            continue
+        try:
+            oid_int = int(oid)
+        except (TypeError, ValueError):
+            continue
+        try:
+            comm, asset = client._get_commission_from_user_trades(
+                str(sym).strip(),
+                oid_int,
+                order_time=trade.timestamp,
+            )
+        except Exception as exc:
+            logger.debug(
+                f"[{strategy_id_log}] Commission backfill failed for order {oid}: {exc}"
+            )
+            continue
+        if comm is not None and comm > 0:
+            trade.commission = Decimal(str(comm))
+            if asset:
+                trade.commission_asset = asset
+            logger.info(
+                f"[{strategy_id_log}] Backfilled commission {comm} {asset or ''} "
+                f"for order {oid} from user trades"
+            )
 
 
 def create_completed_trades_on_position_close(
@@ -461,6 +518,12 @@ def create_completed_trades_on_position_close(
                         api_key=account_config.api_key,
                         api_secret=account_config.api_secret,
                         testnet=account_config.testnet
+                    )
+                    _backfill_missing_commissions_from_exchange(
+                        binance_client,
+                        exit_trade,
+                        entry_trades_with_allocation,
+                        str(strategy_id),
                     )
                     
                     # ✅ FIX: Use earliest entry time from ALL potential matches (before skipping)

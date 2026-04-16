@@ -15,7 +15,15 @@ data class Position(
     val accountId: String? = null,
     val liquidationPrice: Double? = null,
     val initialMargin: Double? = null,
-    val marginType: String? = null // "CROSSED" or "ISOLATED"
+    val marginType: String? = null, // "CROSSED" or "ISOLATED"
+    /** Last funding rate (decimal, e.g. 0.0001) from Binance mark / premiumIndex */
+    val lastFundingRate: Double? = null,
+    /** Next funding settlement (Unix ms) */
+    val nextFundingTimeMs: Long? = null,
+    /** Funding interval in hours from fundingInfo */
+    val fundingIntervalHours: Int? = null,
+    /** ISO-8601 when the position was opened (from API) */
+    val openedAt: String? = null,
 ) {
     val isLong: Boolean
         get() = positionSide.uppercase() == "LONG"

@@ -41,6 +41,7 @@ class VirtualPosition:
     leverage: int
     unrealized_pnl: float = 0.0
     position_instance_id: Optional[str] = None
+    opened_at: Optional[datetime] = None  # UTC; set when position is first opened
 
 
 @dataclass
@@ -150,13 +151,15 @@ class PaperBinanceClient:
             for strategy in open_strategies:
                 try:
                     # Restore position
+                    restored_opened = strategy.last_trade_at or strategy.updated_at
                     self.positions[strategy.symbol] = VirtualPosition(
                         symbol=strategy.symbol,
                         side=strategy.position_side or "LONG",
                         size=float(strategy.position_size),
                         entry_price=float(strategy.entry_price) if strategy.entry_price else 0.0,
                         leverage=strategy.leverage or 1,
-                        position_instance_id=str(strategy.position_instance_id)  # Match with strategy
+                        position_instance_id=str(strategy.position_instance_id),  # Match with strategy
+                        opened_at=restored_opened,
                     )
                     
                     # Restore leverage setting
@@ -457,7 +460,7 @@ class PaperBinanceClient:
         
         position.unrealized_pnl = unrealized_pnl
         
-        return {
+        out = {
             "symbol": symbol,
             "positionAmt": str(position.size) if position.side == "LONG" else f"-{position.size}",
             "entryPrice": str(position.entry_price),
@@ -465,6 +468,12 @@ class PaperBinanceClient:
             "markPrice": str(current_price),
             "leverage": position.leverage,
         }
+        if position.opened_at is not None:
+            try:
+                out["updateTime"] = int(position.opened_at.timestamp() * 1000)
+            except (OSError, ValueError, TypeError):
+                pass
+        return out
     
     def futures_position_information(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all virtual positions (for compatibility with BinanceClient).
@@ -651,6 +660,7 @@ class PaperBinanceClient:
                         entry_price=price,
                         leverage=leverage,
                         position_instance_id=position_instance_id,  # Store position_instance_id
+                        opened_at=datetime.now(timezone.utc),
                     )
                     logger.debug(
                         f"Opened LONG position for {symbol}: {quantity} @ ${price:.8f} "
@@ -689,6 +699,7 @@ class PaperBinanceClient:
                         entry_price=price,
                         leverage=leverage,
                         position_instance_id=position_instance_id,  # Store position_instance_id
+                        opened_at=datetime.now(timezone.utc),
                     )
                     logger.debug(
                         f"Opened SHORT position for {symbol}: {quantity} @ ${price:.8f} "

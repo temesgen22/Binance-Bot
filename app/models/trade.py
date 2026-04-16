@@ -90,6 +90,24 @@ class PositionSummary(BaseModel):
         default=False,
         description="Whether trailing stop is active"
     )
+    # Perpetual funding (public Binance futures APIs; optional)
+    last_funding_rate: Optional[float] = Field(
+        default=None,
+        description="Last funding rate (decimal, e.g. 0.0001 for 0.01%)",
+    )
+    next_funding_time_ms: Optional[int] = Field(
+        default=None,
+        description="Next funding settlement time (Unix epoch milliseconds)",
+    )
+    funding_interval_hours: Optional[int] = Field(
+        default=None,
+        description="Funding interval in hours (e.g. 8) from fundingInfo",
+    )
+    opened_at: Optional[datetime] = Field(
+        default=None,
+        description="When the position was opened (UTC): manual created_at, strategy first entry trade, "
+        "Binance position updateTime, or paper virtual open time",
+    )
 
 
 class TradeSummary(BaseModel):

@@ -342,6 +342,29 @@ class TestMarkPriceOnTickBroadcast:
         assert -0.5 in pnls
 
     @pytest.mark.asyncio
+    async def test_tick_passes_funding_fields_to_broadcast(self):
+        """Mark payload with r/T and interval from cache → broadcast includes funding kwargs."""
+        mock_broadcast = AsyncMock()
+        manager = MarkPriceStreamManager(mock_broadcast, testnet=True)
+        user_id = uuid4()
+        sid = str(uuid4())
+        manager.register_position("BTCUSDT", sid, user_id, 50000.0, 0.01, "LONG", "default")
+        handler = manager._on_mark_price_factory("BTCUSDT")
+        with patch(
+            "app.core.mark_price_stream_manager.get_funding_interval_hours",
+            return_value=8,
+        ):
+            await handler(
+                "BTCUSDT",
+                {"mark_price": 50100.0, "r": "0.0001", "T": 2000000000000},
+            )
+        mock_broadcast.broadcast_position_update.assert_awaited_once()
+        kw = mock_broadcast.broadcast_position_update.call_args.kwargs
+        assert kw.get("last_funding_rate") == pytest.approx(0.0001)
+        assert kw.get("next_funding_time_ms") == 2000000000000
+        assert kw.get("funding_interval_hours") == 8
+
+    @pytest.mark.asyncio
     async def test_tick_with_empty_registry_does_not_broadcast(self):
         """Tick for symbol with no positions in registry does not call broadcast (no crash)."""
         mock_broadcast = AsyncMock()
@@ -411,4 +434,5 @@ class TestMarkPriceStopAll:
         assert len(manager._connections) == 0
         assert len(manager._subscription_counts) == 0
         assert len(manager._rest_fallback_tasks) == 0
+        assert len(manager._mark_handlers) == 0
         mock_mark_price_connection.disconnect.assert_called_once()

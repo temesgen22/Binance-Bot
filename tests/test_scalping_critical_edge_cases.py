@@ -183,12 +183,12 @@ class TestNoEMADriftOnDuplicateOlderCandles:
         """Create a mock client that returns different klines on each call."""
         client = MagicMock(spec=BinanceClient)
         
-        # New candle
-        kl_new, last_ct_new = build_klines([100, 101, 102, 103, 104, 105], start_ct=2_000_000), 2_000_000 + 5 * 60_000
+        # New candle (enough klines for required_closed + forming bar)
+        kl_new = build_klines([100, 101, 102, 103, 104, 105, 106], start_ct=2_000_000)
         # Duplicate candle (same last closed time)
         kl_dup = kl_new
         # Older candle (smaller last closed time)
-        kl_old, _ = build_klines([100, 101, 102, 103, 104], start_ct=1_000_000), None
+        kl_old = build_klines([100, 101, 102, 103, 104, 105, 106], start_ct=1_000_000)
         
         call_count = [0]
         
@@ -386,10 +386,9 @@ class TestOlderCandleTPSLStillWorks:
         last_closed_time_new = 2_300_000
         
         # Now we get an older candle (time goes backwards)
-        # Need at least slow_period + 2 = 5 + 2 = 7 klines (6 closed + 1 forming)
-        # Last closed candle time = 1_000_000 + 5*60_000 = 1_300_000 (smaller than 2_300_000)
-        klines_old = build_klines([100, 101, 102, 103, 104, 105], start_ct=1_000_000)
-        last_closed_time_old = int(klines_old[-2][6])  # 1_300_000
+        # Need len(klines) >= required_closed + 1 (here slow+2 closed => 7 closed + 1 forming = 8 klines)
+        klines_old = build_klines([100, 101, 102, 103, 104, 105, 106], start_ct=1_000_000)
+        last_closed_time_old = int(klines_old[-2][6])
         
         # Verify older candle is actually older
         assert last_closed_time_old < last_closed_time_new, (

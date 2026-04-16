@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 import sys
 import os
@@ -1002,7 +1002,11 @@ class BinanceClient:
             # If not in order response, fetch from user trades endpoint
             if commission is None and order_id:
                 try:
-                    commission, commission_asset = self._get_commission_from_user_trades(symbol, order_id)
+                    commission, commission_asset = self._get_commission_from_user_trades(
+                        symbol,
+                        int(order_id),
+                        order_time=update_time or timestamp,
+                    )
                     if commission:
                         logger.debug(f"Fetched commission {commission} {commission_asset} from user trades for order {order_id}")
                 except Exception as exc:
@@ -1975,6 +1979,7 @@ class BinanceClient:
         self,
         symbol: str,
         order_id: int,
+        order_time: Optional[datetime] = None,
     ) -> tuple[Optional[float], Optional[str]]:
         """Get commission from Binance user trades endpoint.
         
@@ -1984,6 +1989,8 @@ class BinanceClient:
         Args:
             symbol: Trading symbol
             order_id: Binance order ID
+            order_time: Optional order/fill time — used to query a tight time window so
+                older fills are not missed when they fall outside the latest N trades.
             
         Returns:
             Tuple of (commission, commission_asset) or (None, None) if not found
@@ -1993,9 +2000,17 @@ class BinanceClient:
             return None, None
         
         try:
-            # Fetch user trades for this symbol, limit to recent trades
-            # We'll search for trades matching this order_id
-            user_trades = rest.futures_account_trades(symbol=symbol, limit=100)
+            user_trades: List[Dict[str, Any]] = []
+            if order_time is not None:
+                ot = order_time if order_time.tzinfo else order_time.replace(tzinfo=timezone.utc)
+                user_trades = self.get_account_trades(
+                    symbol=symbol,
+                    start_time=ot - timedelta(days=1),
+                    end_time=ot + timedelta(days=1),
+                    limit=1000,
+                )
+            if not user_trades:
+                user_trades = rest.futures_account_trades(symbol=symbol, limit=1000)
             
             if not user_trades:
                 return None, None
@@ -2003,10 +2018,15 @@ class BinanceClient:
             # Find trades matching this order_id and sum commission
             total_commission = 0.0
             commission_asset = None
+            oid = int(order_id)
             
             for trade in user_trades:
                 trade_order_id = trade.get("orderId")
-                if trade_order_id == order_id:
+                try:
+                    tid = int(trade_order_id) if trade_order_id is not None else None
+                except (TypeError, ValueError):
+                    tid = None
+                if tid == oid:
                     # Commission is in the trade record
                     commission_str = trade.get("commission")
                     if commission_str:
@@ -2119,6 +2139,12 @@ class BinanceClient:
                     out["marginType"] = mt_upper
                 elif mt_upper == "CROSS":  # Binance may return "cross"
                     out["marginType"] = "CROSSED"
+            ut = pos.get("updateTime")
+            if ut is not None and str(ut).strip():
+                try:
+                    out["updateTime"] = int(float(ut))
+                except (TypeError, ValueError):
+                    pass
             return out
 
         rest = self._ensure()

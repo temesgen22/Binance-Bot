@@ -147,7 +147,11 @@ class TradesViewModel @Inject constructor(
                     base.copy(
                         currentPrice = ws.currentPrice,
                         unrealizedPnL = ws.unrealizedPnL,
-                        maxUnrealizedPnL = ws.maxUnrealizedPnL ?: base.maxUnrealizedPnL
+                        maxUnrealizedPnL = ws.maxUnrealizedPnL ?: base.maxUnrealizedPnL,
+                        lastFundingRate = ws.lastFundingRate ?: base.lastFundingRate,
+                        nextFundingTimeMs = ws.nextFundingTimeMs ?: base.nextFundingTimeMs,
+                        fundingIntervalHours = ws.fundingIntervalHours ?: base.fundingIntervalHours,
+                        openedAt = ws.openedAt ?: base.openedAt,
                     )
                 } else {
                     base
@@ -448,7 +452,11 @@ private fun PositionUpdateData.toPosition(): Position = Position(
     accountId = accountId.takeIf { it.isNotBlank() } ?: "default",
     liquidationPrice = liquidationPrice,
     initialMargin = initialMargin,
-    marginType = marginType
+    marginType = marginType,
+    lastFundingRate = lastFundingRate,
+    nextFundingTimeMs = nextFundingTimeMs,
+    fundingIntervalHours = fundingIntervalHours,
+    openedAt = openedAt,
 )
 
 data class OverallStats(

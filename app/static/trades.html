@@ -1008,6 +1008,18 @@
                     // Only set when WS includes a number; omitting avoids wiping REST peak on merge ({...existing,...pos})
                     ...(typeof data.max_unrealized_pnl === 'number' && !Number.isNaN(data.max_unrealized_pnl)
                         ? { max_unrealized_pnl: data.max_unrealized_pnl }
+                        : {}),
+                    ...(typeof data.last_funding_rate === 'number' && !Number.isNaN(data.last_funding_rate)
+                        ? { last_funding_rate: data.last_funding_rate }
+                        : {}),
+                    ...(typeof data.next_funding_time_ms === 'number' && !Number.isNaN(data.next_funding_time_ms)
+                        ? { next_funding_time_ms: data.next_funding_time_ms }
+                        : {}),
+                    ...(typeof data.funding_interval_hours === 'number' && !Number.isNaN(data.funding_interval_hours)
+                        ? { funding_interval_hours: data.funding_interval_hours }
+                        : {}),
+                    ...(typeof data.opened_at === 'string' && data.opened_at.trim() !== ''
+                        ? { opened_at: data.opened_at }
                         : {})
                 };
                 if (data.position_size > 0 && pos.symbol) {
@@ -1271,6 +1283,23 @@
                 html += `<div class="position-detail-item"><span>Margin (USDT):</span><span>${marginUsdt}</span></div>`;
                 if (pos.margin_type) {
                     html += `<div class="position-detail-item"><span>Margin Type:</span><span>${pos.margin_type}</span></div>`;
+                }
+                if (pos.last_funding_rate != null && !Number.isNaN(Number(pos.last_funding_rate))) {
+                    const fp = (Number(pos.last_funding_rate) * 100).toFixed(4);
+                    html += `<div class="position-detail-item"><span>Funding rate:</span><span>${fp}%</span></div>`;
+                }
+                if (pos.next_funding_time_ms != null && Number.isFinite(Number(pos.next_funding_time_ms))) {
+                    const nd = new Date(Number(pos.next_funding_time_ms));
+                    html += `<div class="position-detail-item"><span>Next funding:</span><span>${nd.toLocaleString()}</span></div>`;
+                }
+                if (pos.funding_interval_hours != null && Number.isFinite(Number(pos.funding_interval_hours))) {
+                    html += `<div class="position-detail-item"><span>Funding interval:</span><span>Every ${pos.funding_interval_hours}h</span></div>`;
+                }
+                if (pos.opened_at != null && String(pos.opened_at).trim() !== '') {
+                    const odt = new Date(pos.opened_at);
+                    if (!Number.isNaN(odt.getTime())) {
+                        html += `<div class="position-detail-item"><span>Opened:</span><span>${odt.toLocaleString()}</span></div>`;
+                    }
                 }
                 // Owner: derive consistently from strategy_id and strategy_name for reliability
                 const sid = pos.strategy_id != null ? String(pos.strategy_id).trim() : '';

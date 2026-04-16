@@ -40,6 +40,14 @@ data class PositionSummaryDto(
     @SerializedName("sl_order_id")
     val slOrderId: Long? = null,
     @SerializedName("trailing_stop_enabled")
-    val trailingStopEnabled: Boolean = false
+    val trailingStopEnabled: Boolean = false,
+    @SerializedName("last_funding_rate")
+    val lastFundingRate: Double? = null,
+    @SerializedName("next_funding_time_ms")
+    val nextFundingTimeMs: Long? = null,
+    @SerializedName("funding_interval_hours")
+    val fundingIntervalHours: Int? = null,
+    @SerializedName("opened_at")
+    val openedAt: String? = null,
 )
 

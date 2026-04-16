@@ -115,6 +115,14 @@ class WebSocketManager @Inject constructor(
                                 val initialMargin = try { jsonObject.get("initial_margin")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
                                 val marginType = try { jsonObject.get("margin_type")?.takeIf { !it.isJsonNull }?.getAsString() } catch (_: Exception) { null }
                                 val maxUnrealizedPnl = try { jsonObject.get("max_unrealized_pnl")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val lastFundingRate = try { jsonObject.get("last_funding_rate")?.takeIf { !it.isJsonNull }?.getAsDouble() } catch (_: Exception) { null }
+                                val nextFundingTimeMs = try {
+                                    jsonObject.get("next_funding_time_ms")?.takeIf { !it.isJsonNull }?.asJsonPrimitive?.asLong
+                                } catch (_: Exception) { null }
+                                val fundingIntervalHours = try {
+                                    jsonObject.get("funding_interval_hours")?.takeIf { !it.isJsonNull }?.asJsonPrimitive?.asInt
+                                } catch (_: Exception) { null }
+                                val openedAt = try { jsonObject.get("opened_at")?.takeIf { !it.isJsonNull }?.asString } catch (_: Exception) { null }
                                 UpdateMessage.PositionUpdate(
                                     strategyId = strategyId,
                                     strategyName = strategyName,
@@ -129,7 +137,11 @@ class WebSocketManager @Inject constructor(
                                     liquidationPrice = liquidationPrice,
                                     initialMargin = initialMargin,
                                     marginType = marginType,
-                                    maxUnrealizedPnl = maxUnrealizedPnl
+                                    maxUnrealizedPnl = maxUnrealizedPnl,
+                                    lastFundingRate = lastFundingRate,
+                                    nextFundingTimeMs = nextFundingTimeMs,
+                                    fundingIntervalHours = fundingIntervalHours,
+                                    openedAt = openedAt,
                                 )
                             }
                             "strategy_update" -> {
@@ -278,7 +290,11 @@ sealed class UpdateMessage {
         val liquidationPrice: Double? = null,
         val initialMargin: Double? = null,
         val marginType: String? = null,
-        val maxUnrealizedPnl: Double? = null
+        val maxUnrealizedPnl: Double? = null,
+        val lastFundingRate: Double? = null,
+        val nextFundingTimeMs: Long? = null,
+        val fundingIntervalHours: Int? = null,
+        val openedAt: String? = null,
     ) : UpdateMessage()
     data class Error(val message: String) : UpdateMessage()
 }

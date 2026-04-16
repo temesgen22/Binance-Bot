@@ -219,6 +219,26 @@ fun BinanceStylePositionRow(
                     "Margin Type",
                     position.marginType?.takeIf { it.isNotBlank() } ?: "—"
                 )
+                position.lastFundingRate?.let { fr ->
+                    PositionParamRow("Funding rate", String.format("%.4f%%", fr * 100.0))
+                }
+                position.nextFundingTimeMs?.let { ms ->
+                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+                    PositionParamRow("Next funding", sdf.format(java.util.Date(ms)))
+                }
+                position.fundingIntervalHours?.let { h ->
+                    PositionParamRow("Funding interval", "Every ${h}h")
+                }
+                position.openedAt?.takeIf { it.isNotBlank() }?.let { iso ->
+                    val label = try {
+                        val inst = java.time.Instant.parse(iso)
+                        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+                            .format(java.util.Date.from(inst))
+                    } catch (_: Exception) {
+                        iso
+                    }
+                    PositionParamRow("Opened", label)
+                }
                 // Owner label: same as web app — Manual Trade, External, strategy name, "Strategy" (id but no name), or External (no id)
                 val ownerLabel = when {
                     isManualPosition -> "Manual Trade"

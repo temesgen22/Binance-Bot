@@ -274,7 +274,11 @@ private fun com.binancebot.mobile.data.remote.dto.PositionSummaryDto.toDomain():
         accountId = accountId,
         liquidationPrice = liquidationPrice,
         initialMargin = initialMargin,
-        marginType = marginType
+        marginType = marginType,
+        lastFundingRate = lastFundingRate,
+        nextFundingTimeMs = nextFundingTimeMs,
+        fundingIntervalHours = fundingIntervalHours,
+        openedAt = openedAt,
     )
 }
 

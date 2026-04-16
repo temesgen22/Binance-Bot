@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from uuid import UUID
 
 import httpx
 from loguru import logger
 
+from app.core.funding_from_mark import parse_funding_from_payload
+from app.core.funding_market_cache import get_funding_interval_hours
 from app.core.mark_price_connection import MarkPriceConnection
 from app.core.position_broadcast import PositionBroadcastService
 from app.strategies.pnl_giveback import update_peak_unrealized
@@ -48,6 +50,10 @@ class MarkPriceStreamManager:
         self._rest_fallback_tasks: Dict[str, asyncio.Task] = {}
         self._rest_fallback_interval = 15
         self._rest_fallback_logged: set = set()  # keys we've logged "using REST fallback" for
+        # One handler per symbol (WS + REST fallback); avoids new closure every REST poll
+        self._mark_handlers: Dict[str, Callable[[str, Dict[str, Any]], Awaitable[None]]] = {}
+        self._http_client: Optional[httpx.AsyncClient] = None
+        self._http_client_lock = asyncio.Lock()
 
     def register_position(
         self,
@@ -119,6 +125,12 @@ class MarkPriceStreamManager:
         if not self._registry[key]:
             del self._registry[key]
 
+    async def _ensure_http_client(self) -> httpx.AsyncClient:
+        async with self._http_client_lock:
+            if self._http_client is None:
+                self._http_client = httpx.AsyncClient(timeout=10.0)
+            return self._http_client
+
     async def _rest_fallback_loop(self, key: str) -> None:
         """Poll mark price via REST every N seconds and broadcast; used when WebSocket fails."""
         base = "https://testnet.binancefuture.com" if self._testnet else "https://fapi.binance.com"
@@ -128,10 +140,10 @@ class MarkPriceStreamManager:
                 await asyncio.sleep(self._rest_fallback_interval)
                 if key not in self._registry or not self._registry[key]:
                     continue
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    r = await client.get(url, params={"symbol": key})
-                    r.raise_for_status()
-                    data = r.json()
+                client = await self._ensure_http_client()
+                r = await client.get(url, params={"symbol": key})
+                r.raise_for_status()
+                data = r.json()
                 mark_price_str = data.get("markPrice")
                 if mark_price_str is None:
                     continue
@@ -142,7 +154,10 @@ class MarkPriceStreamManager:
                         f"[MarkPrice] {key} using REST fallback (every {self._rest_fallback_interval}s); "
                         "PnL will still update in the app."
                     )
-                callback = self._on_mark_price_factory(key)
+                callback = self._mark_handlers.get(key)
+                if callback is None:
+                    callback = self._on_mark_price_factory(key)
+                    self._mark_handlers[key] = callback
                 await callback(key, {"mark_price": mark_price, **data})
             except asyncio.CancelledError:
                 break
@@ -163,6 +178,15 @@ class MarkPriceStreamManager:
                     "Position may not be registered yet or was unregistered. Enable mark price after position opens."
                 )
                 return
+            last_rate, next_ms = parse_funding_from_payload(data)
+            interval_h: Optional[int] = None
+            if last_rate is not None or next_ms is not None:
+                try:
+                    interval_h = await asyncio.to_thread(
+                        get_funding_interval_hours, symbol_key, self._testnet
+                    )
+                except Exception as exc:
+                    logger.debug(f"[MarkPrice] funding interval {symbol_key}: {exc}")
             _tick_count[0] += 1
             log_every_ticks = 30  # log every ~30s when stream is 1s
             for entry in entries:
@@ -193,6 +217,9 @@ class MarkPriceStreamManager:
                         initial_margin=entry.get("initial_margin"),
                         strategy_name=entry.get("strategy_name"),
                         max_unrealized_pnl=max_u,
+                        last_funding_rate=last_rate,
+                        next_funding_time_ms=next_ms,
+                        funding_interval_hours=interval_h,
                     )
                 except Exception as e:
                     logger.warning(
@@ -213,10 +240,12 @@ class MarkPriceStreamManager:
                 logger.debug(f"[MarkPrice] Reusing existing connection for {key} (no duplicate WebSocket)")
                 return
             self._subscription_counts[key] = 1
+            handler = self._on_mark_price_factory(key)
+            self._mark_handlers[key] = handler
             conn = MarkPriceConnection(
                 symbol=key,
                 testnet=self._testnet,
-                on_mark_price=self._on_mark_price_factory(key),
+                on_mark_price=handler,
             )
             self._connections[key] = conn
         # Stagger connection so it's not in same burst as User Data / other streams (reduces 502 on same machine)
@@ -238,6 +267,7 @@ class MarkPriceStreamManager:
                     del self._subscription_counts[key]
                 if key in self._connections:
                     del self._connections[key]
+                self._mark_handlers.pop(key, None)
             return
         logger.info(f"[MarkPrice] Subscribed to {key} (position opened; real-time PnL updates enabled)")
         # Start REST fallback so PnL still updates when WebSocket fails (502/timeout)
@@ -258,6 +288,7 @@ class MarkPriceStreamManager:
             conn = self._connections.pop(key, None)
             if key in self._subscription_counts:
                 del self._subscription_counts[key]
+            self._mark_handlers.pop(key, None)
             fallback_task = self._rest_fallback_tasks.pop(key, None)
         if fallback_task:
             fallback_task.cancel()
@@ -281,6 +312,7 @@ class MarkPriceStreamManager:
             conns = list(self._connections.values())
             self._connections.clear()
             self._subscription_counts.clear()
+            self._mark_handlers.clear()
             fallback_tasks = list(self._rest_fallback_tasks.values())
             self._rest_fallback_tasks.clear()
         for t in fallback_tasks:
@@ -294,3 +326,10 @@ class MarkPriceStreamManager:
                 await c.disconnect()
             except Exception as e:
                 logger.debug(f"[MarkPrice] stop_all disconnect: {e}")
+        async with self._http_client_lock:
+            if self._http_client is not None:
+                try:
+                    await self._http_client.aclose()
+                except Exception as e:
+                    logger.debug(f"[MarkPrice] stop_all httpx close: {e}")
+                self._http_client = None

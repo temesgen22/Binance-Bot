@@ -155,7 +155,8 @@ class TestConfigurationMapping:
         strategy.position = None
         strategy.last_closed_candle_time = None
 
-        mock_client.get_klines.return_value = build_dummy_klines(strategy.slow_period + 2, start_price=100.0)
+        # Need len(klines) >= required_closed + 1 (forming bar excluded from closed_klines)
+        mock_client.get_klines.return_value = build_dummy_klines(strategy.slow_period + 3, start_price=100.0)
 
         with patch.object(EmaScalpingStrategy, "_ema", side_effect=[1.2, 1.0]):
             with patch("app.strategies.scalping.TrailingStopManager") as mock_manager:
